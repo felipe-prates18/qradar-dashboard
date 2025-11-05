@@ -26,6 +26,7 @@ th.icon-col,td.icon-cell{text-align:center;width:44px}
 td.cell-danger{color:var(--danger);font-weight:600}
 td.cell-warn{color:var(--warn);font-weight:600}
 .warning-icon{color:var(--warn);font-size:18px;display:inline-flex;align-items:center;justify-content:center}
+.danger-icon{color:var(--danger);font-size:18px;display:inline-flex;align-items:center;justify-content:center}
 input,select,textarea{border:1px solid var(--line);background:var(--card);color:var(--text);
   padding:10px 12px;border-radius:10px;font-size:15px;outline:none}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
