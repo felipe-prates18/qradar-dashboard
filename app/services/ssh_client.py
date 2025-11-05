@@ -36,43 +36,130 @@ class SSHClient:
         except Exception:
             return raw
 
+    def _expiration_sort_key(self, value):
+        if isinstance(value, str):
+            m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", value)
+            if m:
+                day, month, year = m.groups()
+                try:
+                    return (int(year), int(month), int(day))
+                except Exception:
+                    pass
+        return (9999, value or "")
+
     def read_license(self, env):
         host = env.get("host")
         user = env.get("ssh_user")
         key_path = env.get("ssh_key")
 
-        eps = "Erro"
-        exp = "Erro"
+        eps_total = 0
+        exp_primary = "Erro"
+        license_parts = []
+        pending_expirations = []
+        has_eps_limit = False
 
-        cmd_license = (
-            r"""/opt/qradar/bin/license.sh all 2>/dev/null | """
-            r"""awk -F'[=:]' 'tolower($1)~/(nonconsoleeventlimit)/{gsub(/^ +| +$/,"",$2); o=$2} """
-            r"""tolower($1)~/(licenseexpiration)/{gsub(/^ +| +$/,"",$2); x=$2} """
-            r"""END{if(o!="")print o; if(x!="")print x}'"""
-        )
+        cmd_license = r"/opt/qradar/bin/license.sh all 2>/dev/null"
 
         try:
             c = self._connect(host, user, key_path)
             code, out, _ = self._exec(c, f"bash -lc {shlex.quote(cmd_license)}")
             c.close()
 
-            lines = [x.strip() for x in (out or "").splitlines() if x.strip()]
-            if len(lines) >= 1:
-                eps = lines[0]
-            if len(lines) >= 2:
-                exp = self._format_date(lines[1])
+            token_pairs = []
+            for raw in re.findall(r"[^\s]+=[^\s]+", out or ""):
+                if "=" not in raw:
+                    continue
+                k, v = raw.split("=", 1)
+                token_pairs.append((k.strip(), v.strip()))
 
-            if not eps:
-                eps = "Erro"
-            if not exp:
-                exp = "Erro"
+            def _attach_expiration(formatted):
+                for part in reversed(license_parts):
+                    if not part.get("expires"):
+                        part["expires"] = formatted
+                        return True
+                return False
 
-            logger.info(f"Licença coletada host={host} eps={eps} exp={exp}")
-            return {"license_eps": eps, "license_expiration": exp}
+            limit_keys = {
+                "EPS_LIMIT": True,
+                "nonConsoleEventLimit": True,
+                # consoleEventLimit is informational for breakdown, but we don't add it to the EPS sum
+                "consoleEventLimit": False,
+            }
+
+            for key, value in token_pairs:
+                if key in limit_keys:
+                    limit_int = None
+                    try:
+                        limit_int = int(value)
+                    except Exception:
+                        limit_int = None
+
+                    if limit_int is not None and limit_keys[key]:
+                        eps_total += limit_int
+                        has_eps_limit = True
+
+                    part = {
+                        "kind": key,
+                        "limit": str(limit_int if limit_int is not None else value),
+                        "expires": None,
+                    }
+                    if pending_expirations:
+                        part["expires"] = pending_expirations.pop(0)
+                    license_parts.append(part)
+                    continue
+
+                if key == "licenseExpiration":
+                    formatted = self._format_date(value)
+                    if not _attach_expiration(formatted):
+                        pending_expirations.append(formatted)
+                    continue
+
+            # Attach any expirations that arrived without a matching license block
+            for exp in pending_expirations:
+                license_parts.append({
+                    "kind": "licenseExpiration",
+                    "limit": "—",
+                    "expires": exp,
+                })
+
+            exp_list = [p.get("expires") for p in license_parts if p.get("expires")]
+            if exp_list:
+                # Remove duplicates before sorting the expirations chronologically
+                seen = set()
+                unique = []
+                for item in exp_list:
+                    if item not in seen:
+                        unique.append(item)
+                        seen.add(item)
+                exp_list = sorted(unique, key=self._expiration_sort_key)
+                exp_primary = exp_list[0]
+
+            eps_display = "Erro"
+            if has_eps_limit:
+                eps_display = str(eps_total)
+
+            logger.info(
+                "Licença coletada host=%s eps_total=%s expiracoes=%s",
+                host,
+                eps_display,
+                ",".join(exp_list) if exp_list else "nenhuma",
+            )
+
+            return {
+                "license_eps": eps_display,
+                "license_expiration": exp_primary,
+                "license_expiration_list": exp_list,
+                "license_breakdown": license_parts,
+            }
 
         except Exception as e:
             logger.error(f"Falha na coleta de licença em {host}: {e}")
-            return {"license_eps": "Erro", "license_expiration": "Erro"}
+            return {
+                "license_eps": "Erro",
+                "license_expiration": "Erro",
+                "license_expiration_list": [],
+                "license_breakdown": [],
+            }
 
     def _jmx_parse_cmd(self, bean, port):
         return (
