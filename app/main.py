@@ -7,7 +7,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from .auth import auth_router, verify_user_required_page, verify_user_required_api, is_admin
+from .auth import (
+    auth_router,
+    verify_user_required_page,
+    verify_user_required_api,
+    is_admin,
+    hash_password,
+    AuthenticationError,
+)
 from .services.zabbix_client import ZabbixClient
 from .services.ssh_client import SSHClient
 
@@ -91,17 +98,23 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
         })
     return JSONResponse({"updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"), "rows": data})
 
+@app.exception_handler(AuthenticationError)
+def handle_authentication_error(request: Request, exc: AuthenticationError):
+    return templates.TemplateResponse(
+        "error.html",
+        {"request": request, "message": exc.message},
+        status_code=401,
+    )
+
+
 @app.get("/admin/users", response_class=HTMLResponse)
 def admin_users_page(request: Request, user: str = Depends(verify_user_required_page)):
     if not is_admin(user):
-        html = f"""<!doctype html><html lang="pt-br"><head><meta charset="utf-8">
-        <title>Acesso restrito</title><link rel="stylesheet" href="/static/style.css"></head>
-        <body><div class="wrap"><header><div class="brand">
-        <img src="/static/logo-asper.png"><div class="title"><h1>Acesso restrito</h1><div class="sub">Área administrativa</div></div></div>
-        <div class="row"><span class="small">Usuário: {user}</span><a class="btn secondary" href="/">Voltar</a></div></header>
-        <section class="card"><div class="alert warn">Você não tem permissão para acessar esta área.</div></section></div></body></html>"""
-        return HTMLResponse(content=html, status_code=403)
-
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Você não tem permissão para acessar esta área."},
+            status_code=403,
+        )
     con = _con()
     cur = con.cursor()
     cur.execute("PRAGMA table_info(users)")
@@ -113,56 +126,36 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
     users = cur.fetchall()
     con.close()
 
-    body_rows = "".join([
-        f"""<tr>
-          <td>{u['username']}</td>
-          <td>{"Sim" if int(u["is_active"])==1 else "Não"}</td>
-          <td>{"Sim" if int(u["is_admin"])==1 else "Não"}</td>
-          <td class="row">
-            <form method="post" action="/admin/users/toggle" style="display:inline">
-              <input type="hidden" name="user_id" value="{u['id']}">
-              <input type="hidden" name="field" value="is_active">
-              <button class="btn small secondary">Toggle Ativo</button>
-            </form>
-            <form method="post" action="/admin/users/toggle" style="display:inline; margin-left:6px">
-              <input type="hidden" name="user_id" value="{u['id']}">
-              <input type="hidden" name="field" value="is_admin">
-              <button class="btn small secondary">Toggle Admin</button>
-            </form>
-          </td>
-        </tr>"""
+    mapped = [
+        {
+            "id": u["id"],
+            "username": u["username"],
+            "is_active": int(u["is_active"]) == 1,
+            "is_admin": int(u["is_admin"]) == 1,
+        }
         for u in users
-    ])
+    ]
 
-    html = f"""
-    <!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Admin • Usuários</title>
-    <link rel="stylesheet" href="/static/style.css"></head><body><div class="wrap"><header><div class="brand">
-    <img src="/static/logo-asper.png" alt="ASPER"><div class="title"><h1>Administração</h1><div class="sub">Gerenciar usuários</div></div></div>
-    <div class="row"><a class="btn secondary" href="/">Voltar</a><a class="btn secondary" href="/logout">Sair</a></div></header>
-    <section class="card"><h3>Cadastrar novo usuário</h3>
-    <form method="post" action="/admin/users/create" class="row">
-      <input type="text" name="username" placeholder="username" required>
-      <input type="password" name="password" placeholder="senha" required>
-      <label class="small" style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="is_admin"> Admin</label>
-      <button class="btn">Criar</button>
-    </form></section>
-    <section class="card" style="margin-top:14px"><h3>Usuários</h3>
-    <table><thead><tr><th>Usuário</th><th>Ativo</th><th>Admin</th><th>Ações</th></tr></thead><tbody>{body_rows}</tbody></table>
-    </section></div></body></html>
-    """
-    return HTMLResponse(content=html)
+    return templates.TemplateResponse(
+        "admin_users.html",
+        {"request": request, "users": mapped, "user": user},
+    )
 
 @app.post("/admin/users/create")
 def admin_create_user(request: Request, username: str = Form(...), password: str = Form(...), is_admin_flag: str = Form(None), user: str = Depends(verify_user_required_page)):
     if not is_admin(user):
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Somente administradores podem criar usuários."},
+            status_code=403,
+        )
     is_admin_val = 1 if (is_admin_flag in ("on", "true", "1", "yes")) else 0
     con = _con()
     cur = con.cursor()
     try:
         cur.execute(
             "INSERT INTO users (username, password_hash, is_active, is_admin) VALUES (?,?,1,?)",
-            (username, __import__("hashlib").sha256(password.encode()).hexdigest(), is_admin_val)
+            (username, hash_password(password), is_admin_val)
         )
         con.commit()
     except sqlite3.IntegrityError:
@@ -174,7 +167,11 @@ def admin_create_user(request: Request, username: str = Form(...), password: str
 @app.post("/admin/users/toggle")
 def admin_toggle_user(request: Request, user_id: int = Form(...), field: str = Form(...), user: str = Depends(verify_user_required_page)):
     if not is_admin(user):
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Somente administradores podem alterar usuários."},
+            status_code=403,
+        )
     if field not in ("is_active", "is_admin"):
         return RedirectResponse(url="/admin/users", status_code=302)
     con = _con()
