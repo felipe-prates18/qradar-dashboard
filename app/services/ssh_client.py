@@ -36,6 +36,17 @@ class SSHClient:
         except Exception:
             return raw
 
+    def _expiration_sort_key(self, value):
+        if isinstance(value, str):
+            m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", value)
+            if m:
+                day, month, year = m.groups()
+                try:
+                    return (int(year), int(month), int(day))
+                except Exception:
+                    pass
+        return (9999, value or "")
+
     def read_license(self, env):
         host = env.get("host")
         user = env.get("ssh_user")
@@ -113,14 +124,14 @@ class SSHClient:
 
             exp_list = [p.get("expires") for p in license_parts if p.get("expires")]
             if exp_list:
-                # Remove duplicates while preserving order for display purposes
+                # Remove duplicates before sorting the expirations chronologically
                 seen = set()
-                ordered = []
+                unique = []
                 for item in exp_list:
                     if item not in seen:
-                        ordered.append(item)
+                        unique.append(item)
                         seen.add(item)
-                exp_list = ordered
+                exp_list = sorted(unique, key=self._expiration_sort_key)
                 exp_primary = exp_list[0]
 
             eps_display = "Erro"
