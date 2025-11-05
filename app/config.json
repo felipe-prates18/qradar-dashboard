@@ -1,0 +1,50 @@
+{
+  "server": { "host": "127.0.0.1", "port": 8000 },
+  "zabbix": {
+    "url": "http://172.31.1.17/zabbix/api_jsonrpc.php",
+    "api_token": "d69493dcf9e4b4792f03a1e70480c2cc4d189c630ffe910d7795e7a42083d14d",
+    "verify_tls": false,
+    "enabled": true
+  },
+  "items": {
+    "cpu_item_name": "Linux: CPU utilization",
+    "cpu_key_fallback": "system.cpu.util[snmp,0]",
+    "mem_item_name": "Linux: Memory utilization",
+    "mem_key_fallback": "vm.memory.util[snmp]",
+    "store_item_name": "/store: Space utilization",
+    "store_key_fallback": "vfs.fs.pused[storageUsedPercentage.66]"
+  },
+  "qradar_envs": [
+    {
+      "name": "QRADAR TAURUS CONSOLE",
+      "host": "172.31.1.4",
+      "collector": "host",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/TAURUS.pem",
+      "scripts_remote_dir": "/opt/scripts",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor"
+    },
+    {
+      "name": "QRADAR ECAD CONSOLE",
+      "host": "172.31.1.18",
+      "collector": "10.10.15.140",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/ECAD.pem",
+      "scripts_remote_dir": "/opt/scripts",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor"
+    },
+    {
+      "name": "QRADAR ASPER CONSOLE",
+      "host": "172.31.1.8",
+      "collector": "host",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/ASPER.pem",
+      "scripts_remote_dir": "/opt/scripts",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor"
+    }
+  ]
+}
+
