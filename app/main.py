@@ -55,11 +55,14 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
         metrics = zbx.get_metrics(hostname=name, items=items_conf, zabbix_host_override=env.get("zabbix_host_override"))
 
         lic_eps, lic_exp = "Erro", "Erro"
+        lic_exp_list, lic_breakdown = [], []
         try:
             lic = ssh.read_license(env)
             if isinstance(lic, dict):
                 lic_eps = str(lic.get("license_eps", "Erro"))
                 lic_exp = lic.get("license_expiration", "Erro")
+                lic_exp_list = lic.get("license_expiration_list") or []
+                lic_breakdown = lic.get("license_breakdown") or []
         except Exception:
             pass
 
@@ -83,6 +86,8 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
             "eps_max": eps_max,
             "license_eps": lic_eps,
             "license_exp": lic_exp,
+            "license_exp_list": lic_exp_list,
+            "license_breakdown": lic_breakdown,
         })
     return JSONResponse({"updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"), "rows": data})
 
