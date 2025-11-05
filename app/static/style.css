@@ -23,8 +23,8 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px}
 table{width:100%;border-collapse:collapse}
 th,td{border:1px solid var(--line);padding:10px;text-align:left}
 th.icon-col,td.icon-cell{text-align:center;width:44px}
-td.cell-danger{color:var(--danger);font-weight:600}
-td.cell-warn{color:var(--warn);font-weight:600}
+td.cell-danger,td.cell-danger *{color:var(--danger)!important;font-weight:600}
+td.cell-warn,td.cell-warn *{color:var(--warn)!important;font-weight:600}
 .warning-icon{color:var(--warn);font-size:18px;display:inline-flex;align-items:center;justify-content:center}
 .danger-icon{color:var(--danger);font-size:18px;display:inline-flex;align-items:center;justify-content:center}
 input,select,textarea{border:1px solid var(--line);background:var(--card);color:var(--text);

@@ -72,29 +72,52 @@ function parseNumberValue(raw) {
   if (raw === null || raw === undefined) return null;
   const trimmed = String(raw).trim();
   if (!trimmed) return null;
-  let sanitized = trimmed
-    .replace(/\s+/g, '')
-    .replace(/[^0-9,.-]/g, '');
-  if (!sanitized || /^-+$/.test(sanitized)) return null;
 
-  const hasComma = sanitized.includes(',');
-  const hasDot = sanitized.includes('.');
+  const tokenMatches = trimmed.replace(/\u00A0/g, ' ').match(/[-+]?\d[\d.,\s]*/g);
+  if (!tokenMatches) return null;
 
-  if (hasComma && hasDot) {
-    sanitized = sanitized.replace(/\./g, '').replace(',', '.');
-  } else if (hasComma) {
-    sanitized = sanitized.replace(/\./g, '').replace(',', '.');
-  } else if (hasDot) {
-    const thousandsPattern = /^-?\d{1,3}(\.\d{3})+$/;
-    if (thousandsPattern.test(sanitized)) {
-      sanitized = sanitized.replace(/\./g, '');
+  for (const token of tokenMatches) {
+    let sanitized = token
+      .replace(/\s+/g, '')
+      .replace(/[^0-9,.+-]/g, '');
+    if (!sanitized || /^[-+]+$/.test(sanitized)) continue;
+
+    const isNegative = sanitized.startsWith('-');
+    const isPositive = sanitized.startsWith('+');
+    if (isNegative || isPositive) {
+      sanitized = sanitized.slice(1);
+    }
+
+    const hasComma = sanitized.includes(',');
+    const hasDot = sanitized.includes('.');
+
+    if (hasComma && hasDot) {
+      if (sanitized.lastIndexOf('.') > sanitized.lastIndexOf(',')) {
+        sanitized = sanitized.replace(/,/g, '');
+      } else {
+        sanitized = sanitized.replace(/\./g, '').replace(',', '.');
+      }
+    } else if (hasComma) {
+      const thousandsCommaPattern = /^\d{1,3}(,\d{3})+$/;
+      if (thousandsCommaPattern.test(sanitized)) {
+        sanitized = sanitized.replace(/,/g, '');
+      } else {
+        sanitized = sanitized.replace(/,/g, '.');
+      }
+    } else if (hasDot) {
+      const thousandsDotPattern = /^\d{1,3}(\.\d{3})+$/;
+      if (thousandsDotPattern.test(sanitized)) {
+        sanitized = sanitized.replace(/\./g, '');
+      }
+    }
+
+    const numeric = Number(sanitized);
+    if (Number.isFinite(numeric)) {
+      return isNegative ? -numeric : numeric;
     }
   }
 
-  sanitized = sanitized.replace(/(?!^)-/g, '');
-
-  const num = Number(sanitized);
-  return Number.isFinite(num) ? num : null;
+  return null;
 }
 
 function parseDateValue(raw) {
@@ -114,8 +137,8 @@ function getExpirationClass(expirations) {
   const now = new Date();
   const soonest = expirations.reduce((min, current) => (current < min ? current : min));
   const diffDays = (soonest - now) / DAY_MS;
-  if (diffDays <= 15) return 'cell-danger';
-  if (diffDays <= 30) return 'cell-warn';
+  if (diffDays < 15) return 'cell-danger';
+  if (diffDays < 30) return 'cell-warn';
   return '';
 }
 
