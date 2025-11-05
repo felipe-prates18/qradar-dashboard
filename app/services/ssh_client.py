@@ -45,19 +45,21 @@ class SSHClient:
         exp_primary = "Erro"
         license_parts = []
         pending_expirations = []
+        has_eps_limit = False
 
-        cmd_license = (
-            r"""/opt/qradar/bin/license.sh all 2>/dev/null | """
-            r"""tr ' ' '\n' | """
-            r"""grep -E '^(EPS_LIMIT|nonConsoleEventLimit|licenseExpiration)='"""
-        )
+        cmd_license = r"/opt/qradar/bin/license.sh all 2>/dev/null"
 
         try:
             c = self._connect(host, user, key_path)
             code, out, _ = self._exec(c, f"bash -lc {shlex.quote(cmd_license)}")
             c.close()
 
-            lines = [x.strip() for x in (out or "").splitlines() if "=" in x]
+            token_pairs = []
+            for raw in re.findall(r"[^\s]+=[^\s]+", out or ""):
+                if "=" not in raw:
+                    continue
+                k, v = raw.split("=", 1)
+                token_pairs.append((k.strip(), v.strip()))
 
             def _attach_expiration(formatted):
                 for part in reversed(license_parts):
@@ -66,20 +68,24 @@ class SSHClient:
                         return True
                 return False
 
-            for token in lines:
-                key, value = token.split("=", 1)
-                key = key.strip()
-                value = value.strip()
+            limit_keys = {
+                "EPS_LIMIT": True,
+                "nonConsoleEventLimit": True,
+                # consoleEventLimit is informational for breakdown, but we don't add it to the EPS sum
+                "consoleEventLimit": False,
+            }
 
-                if key in ("EPS_LIMIT", "nonConsoleEventLimit"):
+            for key, value in token_pairs:
+                if key in limit_keys:
                     limit_int = None
                     try:
                         limit_int = int(value)
                     except Exception:
                         limit_int = None
 
-                    if limit_int is not None:
+                    if limit_int is not None and limit_keys[key]:
                         eps_total += limit_int
+                        has_eps_limit = True
 
                     part = {
                         "kind": key,
@@ -89,10 +95,13 @@ class SSHClient:
                     if pending_expirations:
                         part["expires"] = pending_expirations.pop(0)
                     license_parts.append(part)
-                elif key == "licenseExpiration":
+                    continue
+
+                if key == "licenseExpiration":
                     formatted = self._format_date(value)
                     if not _attach_expiration(formatted):
                         pending_expirations.append(formatted)
+                    continue
 
             # Attach any expirations that arrived without a matching license block
             for exp in pending_expirations:
@@ -115,11 +124,14 @@ class SSHClient:
                 exp_primary = exp_list[0]
 
             eps_display = "Erro"
-            if license_parts:
+            if has_eps_limit:
                 eps_display = str(eps_total)
 
             logger.info(
-                f"Licença coletada host={host} eps_total={eps_display} expiracoes={','.join(exp_list) if exp_list else 'nenhuma'}"
+                "Licença coletada host=%s eps_total=%s expiracoes=%s",
+                host,
+                eps_display,
+                ",".join(exp_list) if exp_list else "nenhuma",
             )
 
             return {
