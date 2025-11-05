@@ -41,14 +41,14 @@ class SSHClient:
         user = env.get("ssh_user")
         key_path = env.get("ssh_key")
 
-        eps = "Erro"
-        exp = "Erro"
+        eps_total = 0
+        exp_primary = "Erro"
+        license_parts = []
 
         cmd_license = (
             r"""/opt/qradar/bin/license.sh all 2>/dev/null | """
-            r"""awk -F'[=:]' 'tolower($1)~/(nonconsoleeventlimit)/{gsub(/^ +| +$/,"",$2); o=$2} """
-            r"""tolower($1)~/(licenseexpiration)/{gsub(/^ +| +$/,"",$2); x=$2} """
-            r"""END{if(o!="")print o; if(x!="")print x}'"""
+            r"""tr ' ' '\n' | """
+            r"""grep -E '^(EPS_LIMIT|nonConsoleEventLimit|licenseExpiration)='"""
         )
 
         try:
@@ -56,23 +56,65 @@ class SSHClient:
             code, out, _ = self._exec(c, f"bash -lc {shlex.quote(cmd_license)}")
             c.close()
 
-            lines = [x.strip() for x in (out or "").splitlines() if x.strip()]
-            if len(lines) >= 1:
-                eps = lines[0]
-            if len(lines) >= 2:
-                exp = self._format_date(lines[1])
+            lines = [x.strip() for x in (out or "").splitlines() if "=" in x]
 
-            if not eps:
-                eps = "Erro"
-            if not exp:
-                exp = "Erro"
+            def _attach_expiration(formatted):
+                for part in reversed(license_parts):
+                    if not part.get("expires"):
+                        part["expires"] = formatted
+                        break
 
-            logger.info(f"Licença coletada host={host} eps={eps} exp={exp}")
-            return {"license_eps": eps, "license_expiration": exp}
+            for token in lines:
+                key, value = token.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+
+                if key in ("EPS_LIMIT", "nonConsoleEventLimit"):
+                    limit_int = None
+                    try:
+                        limit_int = int(value)
+                    except Exception:
+                        limit_int = None
+
+                    if limit_int is not None:
+                        eps_total += limit_int
+
+                    license_parts.append({
+                        "kind": key,
+                        "limit": str(limit_int if limit_int is not None else value),
+                        "expires": None,
+                    })
+                elif key == "licenseExpiration":
+                    formatted = self._format_date(value)
+                    _attach_expiration(formatted)
+
+            exp_list = [p.get("expires") for p in license_parts if p.get("expires")]
+            if exp_list:
+                exp_primary = exp_list[0]
+
+            eps_display = "Erro"
+            if license_parts:
+                eps_display = str(eps_total)
+
+            logger.info(
+                f"Licença coletada host={host} eps_total={eps_display} expiracoes={','.join(exp_list) if exp_list else 'nenhuma'}"
+            )
+
+            return {
+                "license_eps": eps_display,
+                "license_expiration": exp_primary,
+                "license_expiration_list": exp_list,
+                "license_breakdown": license_parts,
+            }
 
         except Exception as e:
             logger.error(f"Falha na coleta de licença em {host}: {e}")
-            return {"license_eps": "Erro", "license_expiration": "Erro"}
+            return {
+                "license_eps": "Erro",
+                "license_expiration": "Erro",
+                "license_expiration_list": [],
+                "license_breakdown": [],
+            }
 
     def _jmx_parse_cmd(self, bean, port):
         return (
