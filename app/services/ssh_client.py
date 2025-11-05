@@ -1,0 +1,152 @@
+import re
+import paramiko
+import logging
+import shlex
+
+logger = logging.getLogger(__name__)
+
+class SSHClient:
+    def __init__(self):
+        pass
+
+    def _connect(self, host, user, key_path):
+        key = paramiko.RSAKey.from_private_key_file(key_path)
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(hostname=host, username=user, pkey=key, timeout=20, banner_timeout=20, auth_timeout=20)
+        return client
+
+    def _exec(self, client, cmd):
+        logger.info(f"SSH exec: {cmd}")
+        stdin, stdout, stderr = client.exec_command(cmd, get_pty=True)
+        out = stdout.read().decode(errors="replace").strip()
+        err = stderr.read().decode(errors="replace").strip()
+        code = stdout.channel.recv_exit_status()
+        logger.info(f"SSH exit={code} stdout='{out[:4000]}' stderr='{err[:4000]}'")
+        return code, out, err
+
+    def _format_date(self, raw):
+        try:
+            if len(raw) >= 8:
+                y = raw[0:4]
+                m = raw[4:6]
+                d = raw[6:8]
+                return f"{d}/{m}/{y}"
+            return raw
+        except Exception:
+            return raw
+
+    def read_license(self, env):
+        host = env.get("host")
+        user = env.get("ssh_user")
+        key_path = env.get("ssh_key")
+
+        eps = "Erro"
+        exp = "Erro"
+
+        cmd_license = (
+            r"""/opt/qradar/bin/license.sh all 2>/dev/null | """
+            r"""awk -F'[=:]' 'tolower($1)~/(nonconsoleeventlimit)/{gsub(/^ +| +$/,"",$2); o=$2} """
+            r"""tolower($1)~/(licenseexpiration)/{gsub(/^ +| +$/,"",$2); x=$2} """
+            r"""END{if(o!="")print o; if(x!="")print x}'"""
+        )
+
+        try:
+            c = self._connect(host, user, key_path)
+            code, out, _ = self._exec(c, f"bash -lc {shlex.quote(cmd_license)}")
+            c.close()
+
+            lines = [x.strip() for x in (out or "").splitlines() if x.strip()]
+            if len(lines) >= 1:
+                eps = lines[0]
+            if len(lines) >= 2:
+                exp = self._format_date(lines[1])
+
+            if not eps:
+                eps = "Erro"
+            if not exp:
+                exp = "Erro"
+
+            logger.info(f"Licença coletada host={host} eps={eps} exp={exp}")
+            return {"license_eps": eps, "license_expiration": exp}
+
+        except Exception as e:
+            logger.error(f"Falha na coleta de licença em {host}: {e}")
+            return {"license_eps": "Erro", "license_expiration": "Erro"}
+
+    def _jmx_parse_cmd(self, bean, port):
+        return (
+            f"""/opt/qradar/support/jmx.sh -p {port} -b '{bean}' 2>/dev/null | """
+            """awk -F'[=:]' '"""
+            """/[Ee][Vv][Ee][Nn][Tt][Rr][Aa][Tt][Ee]/{gsub(/^ +| +$/,"",$2); er=$2} """
+            """/EventLongWindowAverage|LongWindowAverage|Event Long Window Average/{gsub(/^ +| +$/,"",$2); mx=$2} """
+            """END{if(er!="")print er; if(mx!="")print mx}'"""
+        )
+
+    def _jmx_discover_bean(self, client, port, hint_name):
+        name_hint = ""
+        if hint_name and "name=" in hint_name:
+            try:
+                name_hint = hint_name.split("name=", 1)[1]
+            except Exception:
+                name_hint = ""
+        grep_pat = name_hint if name_hint else "Source Monitor"
+        cmd_list = f"""/opt/qradar/support/jmx.sh -p {port} -l 2>/dev/null | grep -i {shlex.quote(grep_pat)} | head -n1"""
+        code, out, _ = self._exec(client, f"bash -lc {shlex.quote(cmd_list)}")
+        bean = out.strip()
+        return bean
+
+    def read_eps(self, env):
+        port = str(env.get("jmx_port", 7787))
+        bean = env.get("jmx_bean", "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor")
+        host = env.get("host")
+        collector = env.get("collector")
+        user = env.get("ssh_user")
+        key_path = env.get("ssh_key")
+
+        base_cmd = f"/opt/qradar/support/jmx.sh -p {port} -b '{bean}'"
+        eps_curr, eps_max = None, None
+
+        try:
+            key = paramiko.RSAKey.from_private_key_file(key_path)
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(hostname=host, username=user, pkey=key, timeout=20, banner_timeout=20, auth_timeout=20)
+
+            if collector and collector not in ("host", host):
+                logger.info(f"Coletando EPS com salto SSH host={host} -> collector={collector}")
+                inner = f"bash -lc {shlex.quote(base_cmd)}"
+                remote_cmd = f"ssh -o BatchMode=yes -o StrictHostKeyChecking=no {collector} {shlex.quote(inner)}"
+                stdin, stdout, stderr = client.exec_command(remote_cmd, timeout=40)
+            else:
+                logger.info(f"Coletando EPS diretamente no host={host}")
+                direct = f"bash -lc {shlex.quote(base_cmd)}"
+                stdin, stdout, stderr = client.exec_command(direct, timeout=40)
+
+            out = stdout.read().decode(errors="ignore")
+            stderr.read()
+            client.close()
+
+            for line in out.splitlines():
+                s = line.strip()
+                m1 = re.search(r"EventRate:\s*([0-9.]+)", s, re.I)
+                if m1:
+                    try:
+                        eps_curr = int(round(float(m1.group(1))))
+                    except Exception:
+                        pass
+                    continue
+                m2 = re.search(r"EventLongWindowAverage:\s*([0-9.]+)", s, re.I)
+                if m2:
+                    try:
+                        eps_max = int(round(float(m2.group(1))))
+                    except Exception:
+                        pass
+                    continue
+
+            logger.info(f"EPS coletado host={host} collector={collector} current={eps_curr} max={eps_max}")
+            return {"eps_current": eps_curr, "eps_max": eps_max}
+        except Exception as e:
+            logger.error(f"Falha na coleta EPS host={host} collector={collector}: {e}")
+            return {"eps_current": None, "eps_max": None}
+
