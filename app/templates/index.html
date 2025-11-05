@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <title>QRadar Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/favicon.png">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <img src="/static/logo-asper.png" alt="ASPER">
+        <div class="title">
+          <h1>Monitoramento & Execução</h1>
+          <div class="sub">QRadar • Zabbix • SSH</div>
+        </div>
+      </div>
+      <div class="row">
+        <span class="small">Logado como {{user}}</span>
+        <a class="btn secondary" href="/me/password">Minha conta</a>
+        {% if is_admin %}
+        <a class="btn secondary" href="/admin/users">Admin</a>
+        {% endif %}
+        <a class="btn secondary" href="/logout">Sair</a>
+      </div>
+    </header>
+
+    <div class="tabs-mode">
+      <div class="tab active" data-mode="monitor">Monitoramento</div>
+      <div class="tab" data-mode="scripts">Execução de Scripts</div>
+    </div>
+
+    <section id="mode-monitor" class="card">
+      <div class="row">
+        <button class="btn secondary" id="refresh">Atualizar</button>
+        <span class="small" id="last-ts"></span>
+      </div>
+      <div class="hr"></div>
+      <div class="row small"><span class="badge b-ok">CPU/Mem/Store via Zabbix</span><span class="badge b-warn">Licença via license.sh</span></div>
+      <div style="margin-top:10px; overflow:auto">
+        <table id="tbl">
+          <thead>
+            <tr>
+              <th>Ambiente</th>
+              <th>CPU (%)</th>
+              <th>Memória (%)</th>
+              <th>Storage /store (%)</th>
+              <th>EPS Atual</th>
+              <th>EPS Máx</th>
+              <th>Licença EPS</th>
+              <th>Expiração</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+<script>
+const tabs = Array.from(document.querySelectorAll('.tab'));
+tabs.forEach(t=>t.onclick=()=>{
+  tabs.forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  document.getElementById('mode-monitor').style.display = t.dataset.mode==='monitor' ? 'block':'none';
+});
+
+async function loadMonitor(){
+  const r = await fetch('/api/monitor');
+  if(!r.ok) return;
+  const j = await r.json();
+  const rows = j.rows || [];
+  const tbody = document.querySelector('#tbl tbody');
+  tbody.innerHTML = rows.map(d=>{
+    const expCell = (d.license_exp_list && d.license_exp_list.length > 1)
+      ? `<span title="${(d.license_breakdown||[]).map(p=>`${p.kind}: ${p.limit} (exp: ${p.expires||'—'})`).join('\n')}">${d.license_exp_list.join(' • ')}</span>`
+      : (d.license_exp ?? '—');
+    return `<tr>
+      <td>${d.name}</td>
+      <td>${d.cpu ?? '—'}</td>
+      <td>${d.memory ?? '—'}</td>
+      <td>${d.storage ?? '—'}</td>
+      <td>${d.eps_current ?? '—'}</td>
+      <td>${d.eps_max ?? '—'}</td>
+      <td>${d.license_eps ?? '—'}</td>
+      <td>${expCell}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('last-ts').textContent = 'Atualizado: '+(j.updated_at||new Date().toLocaleString());
+}
+
+document.getElementById('refresh').onclick = loadMonitor;
+loadMonitor();
+setInterval(loadMonitor, 30000);
+</script>
+</body>
+</html>
+

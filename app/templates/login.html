@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <title>Login • QRadar Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <img src="/static/logo-asper.png" alt="ASPER">
+        <div class="title"><h1>QRadar Dashboard</h1><div class="sub">Autenticação</div></div>
+      </div>
+    </header>
+
+    <div class="card">
+      <form method="post" action="/login" class="row">
+        <input type="text" name="username" placeholder="Usuário" required>
+        <input type="password" name="password" placeholder="Senha" required>
+        <button class="btn">Entrar</button>
+      </form>
+      <div class="small" style="margin-top:8px">Defina usuário/senha iniciais em <code>config.json</code>.</div>
+    </div>
+  </div>
+</body>
+</html>

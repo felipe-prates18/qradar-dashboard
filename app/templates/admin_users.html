@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <title>Admin • Usuários</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <img src="/static/logo-asper.png" alt="ASPER">
+      <div class="title">
+        <h1>Administração</h1>
+        <div class="sub">Gerenciar usuários</div>
+      </div>
+    </div>
+    <div class="row">
+      <a class="btn secondary" href="/">Voltar</a>
+      <a class="btn secondary" href="/logout">Sair</a>
+    </div>
+  </header>
+
+  {% if error %}<div class="alert error">{{error}}</div>{% endif %}
+  {% if success %}<div class="alert ok">{{success}}</div>{% endif %}
+
+  <section class="card">
+    <h3>Cadastrar novo usuário</h3>
+    <form method="post" action="/admin/users/create" class="row">
+      <input type="text" name="username" placeholder="username" required>
+      <input type="password" name="password" placeholder="senha" required>
+      <label><input type="checkbox" name="is_admin"> Admin</label>
+      <button class="btn">Criar</button>
+    </form>
+  </section>
+
+  <section class="card" style="margin-top:14px">
+    <h3>Usuários</h3>
+    <table>
+      <thead>
+        <tr><th>Usuário</th><th>Ativo</th><th>Admin</th><th>Ações</th></tr>
+      </thead>
+      <tbody>
+      {% for u in users %}
+        <tr>
+          <td>{{u.username}}</td>
+          <td>{{'Sim' if u.is_active else 'Não'}}</td>
+          <td>{{'Sim' if u.is_admin else 'Não'}}</td>
+          <td class="row">
+            <form method="post" action="/admin/users/toggle" style="display:inline">
+              <input type="hidden" name="user_id" value="{{u.id}}">
+              <input type="hidden" name="field" value="is_active">
+              <button class="btn small secondary">Toggle Ativo</button>
+            </form>
+            <form method="post" action="/admin/users/toggle" style="display:inline; margin-left:6px">
+              <input type="hidden" name="user_id" value="{{u.id}}">
+              <input type="hidden" name="field" value="is_admin">
+              <button class="btn small secondary">Toggle Admin</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+</body>
+</html>
+

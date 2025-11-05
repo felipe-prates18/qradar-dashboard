@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <title>Permissão</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <img src="/static/logo-asper.png" alt="ASPER">
+      <div class="title">
+        <h1>Aviso</h1>
+        <div class="sub">Acesso restrito</div>
+      </div>
+    </div>
+    <div class="row">
+      <a class="btn secondary" href="/">Início</a>
+      <a class="btn secondary" href="/logout">Sair</a>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="alert warn">{{ message or "Ação não permitida." }}</div>
+  </section>
+</div>
+</body>
+</html>
+
