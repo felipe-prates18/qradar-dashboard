@@ -72,9 +72,19 @@ async function loadMonitor(){
   const rows = j.rows || [];
   const tbody = document.querySelector('#tbl tbody');
   tbody.innerHTML = rows.map(d=>{
-    const expCell = (d.license_exp_list && d.license_exp_list.length > 1)
-      ? `<span title="${(d.license_breakdown||[]).map(p=>`${p.kind}: ${p.limit} (exp: ${p.expires||'—'})`).join('\n')}">${d.license_exp_list.join(' • ')}</span>`
-      : (d.license_exp ?? '—');
+    const expList = Array.isArray(d.license_exp_list) ? d.license_exp_list.filter(Boolean) : [];
+    const breakdown = Array.isArray(d.license_breakdown) ? d.license_breakdown : [];
+    const expDisplay = expList.length ? expList.join(' • ') : (d.license_exp ?? '—');
+    const tooltipLines = breakdown.map(p=>{
+      const kind = p.kind ?? '—';
+      const limit = p.limit ?? '—';
+      const exp = p.expires ? ' (exp: ' + p.expires + ')' : '';
+      return `${kind}: ${limit}${exp}`;
+    });
+    const showTooltip = breakdown.length > 1 || expList.length > 1;
+    const expCell = showTooltip
+      ? `<span title="${tooltipLines.join('\n')}">${expDisplay}</span>`
+      : expDisplay;
     return `<tr>
       <td>${d.name}</td>
       <td>${d.cpu ?? '—'}</td>
