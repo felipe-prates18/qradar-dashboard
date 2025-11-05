@@ -42,6 +42,7 @@
         <table id="tbl">
           <thead>
             <tr>
+              <th class="icon-col"></th>
               <th>Ambiente</th>
               <th>CPU (%)</th>
               <th>Memória (%)</th>
@@ -65,6 +66,82 @@ tabs.forEach(t=>t.onclick=()=>{
   document.getElementById('mode-monitor').style.display = t.dataset.mode==='monitor' ? 'block':'none';
 });
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function parseNumberValue(raw) {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+
+  const tokenMatches = trimmed.replace(/\u00A0/g, ' ').match(/[-+]?\d[\d.,\s]*/g);
+  if (!tokenMatches) return null;
+
+  for (const token of tokenMatches) {
+    let sanitized = token
+      .replace(/\s+/g, '')
+      .replace(/[^0-9,.+-]/g, '');
+    if (!sanitized || /^[-+]+$/.test(sanitized)) continue;
+
+    const isNegative = sanitized.startsWith('-');
+    const isPositive = sanitized.startsWith('+');
+    if (isNegative || isPositive) {
+      sanitized = sanitized.slice(1);
+    }
+
+    const hasComma = sanitized.includes(',');
+    const hasDot = sanitized.includes('.');
+
+    if (hasComma && hasDot) {
+      if (sanitized.lastIndexOf('.') > sanitized.lastIndexOf(',')) {
+        sanitized = sanitized.replace(/,/g, '');
+      } else {
+        sanitized = sanitized.replace(/\./g, '').replace(',', '.');
+      }
+    } else if (hasComma) {
+      const thousandsCommaPattern = /^\d{1,3}(,\d{3})+$/;
+      if (thousandsCommaPattern.test(sanitized)) {
+        sanitized = sanitized.replace(/,/g, '');
+      } else {
+        sanitized = sanitized.replace(/,/g, '.');
+      }
+    } else if (hasDot) {
+      const thousandsDotPattern = /^\d{1,3}(\.\d{3})+$/;
+      if (thousandsDotPattern.test(sanitized)) {
+        sanitized = sanitized.replace(/\./g, '');
+      }
+    }
+
+    const numeric = Number(sanitized);
+    if (Number.isFinite(numeric)) {
+      return isNegative ? -numeric : numeric;
+    }
+  }
+
+  return null;
+}
+
+function parseDateValue(raw) {
+  if (typeof raw !== 'string') return null;
+  const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (m) {
+    const [, dd, mm, yyyy] = m;
+    const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getExpirationClass(expirations) {
+  if (!expirations.length) return '';
+  const now = new Date();
+  const soonest = expirations.reduce((min, current) => (current < min ? current : min));
+  const diffDays = (soonest - now) / DAY_MS;
+  if (diffDays < 15) return 'cell-danger';
+  if (diffDays < 30) return 'cell-warn';
+  return '';
+}
+
 async function loadMonitor(){
   const r = await fetch('/api/monitor');
   if(!r.ok) return;
@@ -85,15 +162,32 @@ async function loadMonitor(){
     const expCell = showTooltip
       ? `<span title="${tooltipLines.join('\n')}">${expDisplay}</span>`
       : expDisplay;
+    const epsCurrentVal = parseNumberValue(d.eps_current);
+    const licenseEpsVal = parseNumberValue(d.license_eps);
+    const warnEps = epsCurrentVal !== null && licenseEpsVal !== null && epsCurrentVal > licenseEpsVal;
+    const expirationCandidates = expList.length ? expList : (d.license_exp ? [d.license_exp] : []);
+    const expirationDates = expirationCandidates
+      .map(parseDateValue)
+      .filter(dt => dt instanceof Date && !Number.isNaN(dt.getTime()));
+    const expirationClass = getExpirationClass(expirationDates);
+    let iconHtml = '';
+    if (expirationClass === 'cell-danger') {
+      iconHtml = '<span class="danger-icon" title="Licença expira em menos de 15 dias">⛔</span>';
+    } else if (warnEps) {
+      iconHtml = '<span class="warning-icon" title="EPS atual acima da licença">⚠️</span>';
+    } else if (expirationClass === 'cell-warn') {
+      iconHtml = '<span class="warning-icon" title="Licença expira em menos de 30 dias">⚠️</span>';
+    }
     return `<tr>
+      <td class="icon-cell">${iconHtml}</td>
       <td>${d.name}</td>
       <td>${d.cpu ?? '—'}</td>
       <td>${d.memory ?? '—'}</td>
       <td>${d.storage ?? '—'}</td>
-      <td>${d.eps_current ?? '—'}</td>
-      <td>${d.eps_max ?? '—'}</td>
-      <td>${d.license_eps ?? '—'}</td>
-      <td>${expCell}</td>
+      <td${warnEps ? ' class="cell-danger"' : ''}>${d.eps_current ?? '—'}</td>
+      <td${warnEps ? ' class="cell-danger"' : ''}>${d.eps_max ?? '—'}</td>
+      <td${warnEps ? ' class="cell-danger"' : ''}>${d.license_eps ?? '—'}</td>
+      <td${expirationClass ? ` class="${expirationClass}"` : ''}>${expCell}</td>
     </tr>`;
   }).join('');
   document.getElementById('last-ts').textContent = 'Atualizado: '+(j.updated_at||new Date().toLocaleString());
