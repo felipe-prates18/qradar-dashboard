@@ -72,6 +72,27 @@
       critical: '🔴'
     };
 
+    function RefreshIcon({ className = '' }) {
+      const classes = ['refresh-icon', className].filter(Boolean).join(' ');
+      return (
+        <svg
+          className={classes}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="23 4 23 10 17 10" />
+          <polyline points="1 20 1 14 7 14" />
+          <path d="M3.51 9a9 9 0 0114.13-3.36L23 10" />
+          <path d="M20.49 15a9 9 0 01-14.13 3.36L1 14" />
+        </svg>
+      );
+    }
+
     function parseNumberValue(raw) {
       if (raw === null || raw === undefined) return null;
       const trimmed = String(raw).trim();
@@ -136,6 +157,14 @@
       return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
 
+    function formatExpirationDisplay(raw) {
+      if (raw === null || raw === undefined) return null;
+      const trimmed = String(raw).trim();
+      if (!trimmed) return null;
+      if (trimmed === '01/01/9999' || trimmed.startsWith('01/01/9999 ')) return 'PERPETUAL';
+      return trimmed;
+    }
+
     function getUsageStatus({ cpu, memory, storage }) {
       const values = [cpu, memory, storage]
         .map(parseNumberValue)
@@ -195,11 +224,22 @@
     function SummaryMetric({ label, value, percent, status = 'neutral', tooltip }) {
       const severityClass = status === 'neutral' || status === 'normal' ? '' : `is-${status}`;
       const width = percent !== null && percent !== undefined ? `${clampPercent(percent)}%` : null;
+      const isArrayValue = Array.isArray(value);
+      const hasArrayValues = isArrayValue && value.length > 0;
+      const displayValue = isArrayValue
+        ? hasArrayValues
+          ? value.map((entry, index) => (
+              <span key={index} className="metric-value-line">
+                {entry}
+              </span>
+            ))
+          : '—'
+        : value ?? '—';
 
       return (
         <div className={`summary-metric ${severityClass}`} title={tooltip || ''}>
           <span className="metric-label">{label}</span>
-          <span className="metric-value">{value ?? '—'}</span>
+          <span className={`metric-value${isArrayValue ? ' multiline' : ''}`}>{displayValue}</span>
           {width !== null ? (
             <span className="metric-bar">
               <span className="metric-bar-fill" style={{ width }} />
@@ -255,7 +295,7 @@
     }
 
     function EnvironmentCard({ environment, isOpen, onToggle }) {
-      const licenseExpList = Array.isArray(environment.license_exp_list)
+      const licenseExpRawList = Array.isArray(environment.license_exp_list)
         ? environment.license_exp_list.filter(Boolean)
         : [];
       const licenseBreakdown = Array.isArray(environment.license_breakdown)
@@ -266,17 +306,19 @@
             .map(item => {
               const kind = item.kind ?? '—';
               const limit = item.limit ?? '—';
-              const exp = item.expires ? ` (exp: ${item.expires})` : '';
+              const expLabel = formatExpirationDisplay(item.expires) ?? item.expires;
+              const exp = expLabel ? ` (exp: ${expLabel})` : '';
               return `${kind}: ${limit}${exp}`;
             })
             .join('\n')
         : '';
-      const expirationCandidates = licenseExpList.length
-        ? licenseExpList
+      const expirationCandidatesRaw = licenseExpRawList.length
+        ? licenseExpRawList
         : environment.license_exp
         ? [environment.license_exp]
         : [];
-      const expirationDates = expirationCandidates
+      const expirationDisplayList = expirationCandidatesRaw.map(item => formatExpirationDisplay(item) ?? item);
+      const expirationDates = expirationCandidatesRaw
         .map(parseDateValue)
         .filter(date => date instanceof Date && !Number.isNaN(date.getTime()));
       const expirationStatus = getExpirationStatus(expirationDates);
@@ -344,7 +386,6 @@
 
       const epsStatus = getSeverityByPercent(epsPercent ?? null);
       const epsMaxStatus = getSeverityByPercent(epsMaxPercent ?? null);
-      const overallStatus = combineStatuses([usageStatus, epsDanger ? 'critical' : epsStatus, epsMaxDanger ? 'critical' : epsMaxStatus, expirationStatus]);
 
       const summaryMetrics = [
         {
@@ -383,14 +424,29 @@
           key: 'exp',
           label: 'Exp',
           value:
-            licenseExpList.length
-              ? licenseExpList.join(' • ')
-              : environment.license_exp ?? '—',
+            expirationDisplayList.length
+              ? expirationDisplayList
+              : formatExpirationDisplay(environment.license_exp) ?? '—',
           percent: null,
           status: expirationStatus,
           tooltip: expirationTooltip
         }
       ];
+
+      const consoleStoragePercent = parseNumberValue(environment.storage);
+      const licenseStatuses = [
+        epsDanger ? 'critical' : epsStatus,
+        epsMaxDanger ? 'critical' : epsMaxStatus,
+        expirationStatus
+      ];
+      let overallStatus = combineStatuses([usageStatus, ...licenseStatuses]);
+      const hasLicenseOrExpiryIssue = licenseStatuses.some(
+        status => status === 'warning' || status === 'critical'
+      );
+      if (!hasLicenseOrExpiryIssue && usageStatus !== 'normal') {
+        overallStatus =
+          consoleStoragePercent !== null && consoleStoragePercent >= 88 ? 'critical' : 'warning';
+      }
 
       return (
         <div className={`env-card status-${overallStatus} ${isOpen ? 'open' : ''}`}>
@@ -428,17 +484,22 @@
             aria-hidden={!isOpen}
           >
             <div ref={detailsRef} className="env-details-inner">
-              {licenseBreakdown.length ? (
-                <div className="license-breakdown">
-                  {licenseBreakdown.map((item, idx) => (
-                    <div className="license-item" key={`${environment.name || 'env'}-license-${idx}`}>
-                      <span className="license-kind">{item.kind ?? 'Licença'}</span>
-                      <span className="license-limit">{item.limit ?? '—'}</span>
-                      {item.expires ? <span className="license-exp">Exp: {item.expires}</span> : null}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+                {licenseBreakdown.length ? (
+                  <div className="license-breakdown">
+                    {licenseBreakdown.map((item, idx) => {
+                      const expLabel = item.expires
+                        ? formatExpirationDisplay(item.expires) ?? item.expires
+                        : null;
+                      return (
+                        <div className="license-item" key={`${environment.name || 'env'}-license-${idx}`}>
+                          <span className="license-kind">{item.kind ?? 'Licença'}</span>
+                          <span className="license-limit">{item.limit ?? '—'}</span>
+                          {expLabel ? <span className="license-exp">Exp: {expLabel}</span> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
               {detailItems.length ? (
                 <div className="appliance-grid">
                   {detailItems.map((item, idx) => (
@@ -533,7 +594,7 @@
                 aria-label="Atualizar monitoramento"
                 title="Atualizar monitoramento"
               >
-                <span aria-hidden="true">🔄</span>
+                <RefreshIcon />
               </button>
               <div className="meta-description">
                 <span className="meta-title">Monitoramento em tempo real</span>

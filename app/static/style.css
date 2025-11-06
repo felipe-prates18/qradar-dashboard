@@ -9,6 +9,7 @@
   --green: #1d9d6f;
   --green-strong: #26d98d;
   --yellow: #f0ad4e;
+  --yellow-bright: #ffe3a3;
   --red: #d9534f;
   --border: rgba(38, 99, 77, 0.55);
   --shadow: 0 18px 45px rgba(0, 0, 0, 0.35);
@@ -232,6 +233,11 @@ header {
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease, background 0.25s ease;
 }
 
+.monitor-app .refresh-button .refresh-icon {
+  width: 22px;
+  height: 22px;
+}
+
 .monitor-app .refresh-button:hover {
   transform: translateY(-1px) scale(1.02);
   box-shadow: 0 14px 30px rgba(29, 157, 111, 0.35);
@@ -246,7 +252,7 @@ header {
   box-shadow: none;
 }
 
-.monitor-app .refresh-button.is-spinning span {
+.monitor-app .refresh-button.is-spinning .refresh-icon {
   animation: spin 0.9s linear infinite;
 }
 
@@ -431,6 +437,16 @@ header {
   font-weight: 600;
 }
 
+.summary-metric .metric-value.multiline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.summary-metric .metric-value-line {
+  display: inline-block;
+}
+
 .summary-metric .metric-bar {
   display: block;
   width: 100%;
@@ -452,8 +468,9 @@ header {
   background: rgba(240, 173, 78, 0.12);
 }
 
-.summary-metric.is-warning .metric-value {
-  color: var(--yellow);
+.summary-metric.is-warning .metric-value,
+.summary-metric.is-warning .metric-value-line {
+  color: var(--yellow-bright);
 }
 
 .summary-metric.is-warning .metric-bar-fill {
@@ -628,7 +645,7 @@ header {
 .status-badge.is-warning {
   border-color: rgba(240, 173, 78, 0.4);
   background: rgba(240, 173, 78, 0.12);
-  color: var(--yellow);
+  color: var(--yellow-bright);
 }
 
 .status-badge.is-critical {
@@ -689,9 +706,11 @@ header {
   background: rgba(240, 173, 78, 0.12);
 }
 
-.appliance-metric-pill.is-warning .pill-value,
+.appliance-metric-pill.is-warning .pill-value {
+  color: var(--yellow-bright);
+}
+
 .appliance-metric-pill.is-warning .pill-bar-fill {
-  color: var(--yellow);
   background: var(--yellow);
 }
 
