@@ -348,7 +348,43 @@ class SSHClient:
 
     def check_connectivity(self, env, client=None):
         appliances = env.get("appliances") or []
-        if not appliances:
+        connectivity_overrides = env.get("connectivity_targets") or env.get("connectivity") or []
+
+        entries = []
+
+        def _append_entry(base):
+            if not base:
+                return
+            if isinstance(base, str):
+                entries.append({"name": base, "target": base})
+                return
+            if isinstance(base, dict):
+                merged = dict(base)
+                entries.append(merged)
+                return
+
+        for appliance in appliances:
+            nested_targets = []
+            if isinstance(appliance, dict):
+                nested_targets = appliance.get("connectivity_targets") or appliance.get("connectivity") or []
+            if nested_targets:
+                for nested in nested_targets:
+                    merged = {}
+                    if isinstance(appliance, dict):
+                        merged.update(appliance)
+                    if isinstance(nested, dict):
+                        merged.update(nested)
+                    else:
+                        merged["target"] = nested
+                    _append_entry(merged)
+            else:
+                _append_entry(appliance)
+
+        if connectivity_overrides:
+            for item in connectivity_overrides:
+                _append_entry(item)
+
+        if not entries:
             return []
 
         close_client = False
@@ -373,9 +409,21 @@ class SSHClient:
 
         try:
             results = []
-            for appliance in appliances:
+            seen = set()
+            for appliance in entries:
                 target = self._resolve_appliance_target(appliance)
-                name = appliance.get("name") or target or "Appliance"
+                name = None
+                if isinstance(appliance, dict):
+                    name = appliance.get("name") or appliance.get("label")
+                if not name and isinstance(appliance, str):
+                    name = appliance
+                name = name or target or "Appliance"
+
+                dedupe_key = (name.lower() if isinstance(name, str) else name, target)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+
                 if not target:
                     results.append(
                         {
@@ -452,7 +500,25 @@ class SSHClient:
     def _resolve_appliance_target(self, appliance):
         if not appliance:
             return None
-        for key in ("host", "hostname", "ip", "address", "management_ip"):
+        if isinstance(appliance, str):
+            return appliance
+        for key in (
+            "host",
+            "hostname",
+            "ip",
+            "address",
+            "management_ip",
+            "ip_address",
+            "mgmt_ip",
+            "connectivity_ip",
+            "ping_ip",
+            "target",
+            "destination",
+        ):
+            value = appliance.get(key)
+            if value:
+                return value
+        for key in ("zabbix_host", "zabbix_host_override"):
             value = appliance.get(key)
             if value:
                 return value
