@@ -2,6 +2,7 @@
 <html lang="pt-br">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRadar Dashboard</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="icon" href="/static/favicon.png">
@@ -12,8 +13,8 @@
       <div class="brand">
         <img src="/static/logo-asper.png" alt="ASPER">
         <div class="title">
-          <h1>Monitoramento & Execução</h1>
-          <div class="sub">QRadar • Zabbix • SSH</div>
+          <h1>Monitoramento &amp; Execução</h1>
+          <div class="sub" id="dashboard-subtitle">Carregando status do monitoramento…</div>
         </div>
       </div>
       <div class="row">
@@ -32,171 +33,611 @@
     </div>
 
     <section id="mode-monitor" class="card">
-      <div class="row">
-        <button class="btn secondary" id="refresh">Atualizar</button>
-        <span class="small" id="last-ts"></span>
-      </div>
-      <div class="hr"></div>
-      <div class="row small"><span class="badge b-ok">CPU/Mem/Store via Zabbix</span><span class="badge b-warn">Licença via license.sh</span></div>
-      <div style="margin-top:10px; overflow:auto">
-        <table id="tbl">
-          <thead>
-            <tr>
-              <th class="icon-col"></th>
-              <th>Ambiente</th>
-              <th>CPU (%)</th>
-              <th>Memória (%)</th>
-              <th>Storage /store (%)</th>
-              <th>EPS Atual</th>
-              <th>EPS Máx</th>
-              <th>Licença EPS</th>
-              <th>Expiração</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
+      <div id="monitor-app-root"></div>
     </section>
 
-<script>
-const tabs = Array.from(document.querySelectorAll('.tab'));
-tabs.forEach(t=>t.onclick=()=>{
-  tabs.forEach(x=>x.classList.remove('active'));
-  t.classList.add('active');
-  document.getElementById('mode-monitor').style.display = t.dataset.mode==='monitor' ? 'block':'none';
-});
+    <section id="mode-scripts" class="card" style="display:none">
+      <div class="empty-state">Selecione um script ao lado para executar.</div>
+    </section>
+  </div>
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function parseNumberValue(raw) {
-  if (raw === null || raw === undefined) return null;
-  const trimmed = String(raw).trim();
-  if (!trimmed) return null;
-
-  const tokenMatches = trimmed.replace(/\u00A0/g, ' ').match(/[-+]?\d[\d.,\s]*/g);
-  if (!tokenMatches) return null;
-
-  for (const token of tokenMatches) {
-    let sanitized = token
-      .replace(/\s+/g, '')
-      .replace(/[^0-9,.+-]/g, '');
-    if (!sanitized || /^[-+]+$/.test(sanitized)) continue;
-
-    const isNegative = sanitized.startsWith('-');
-    const isPositive = sanitized.startsWith('+');
-    if (isNegative || isPositive) {
-      sanitized = sanitized.slice(1);
-    }
-
-    const hasComma = sanitized.includes(',');
-    const hasDot = sanitized.includes('.');
-
-    if (hasComma && hasDot) {
-      if (sanitized.lastIndexOf('.') > sanitized.lastIndexOf(',')) {
-        sanitized = sanitized.replace(/,/g, '');
-      } else {
-        sanitized = sanitized.replace(/\./g, '').replace(',', '.');
-      }
-    } else if (hasComma) {
-      const thousandsCommaPattern = /^\d{1,3}(,\d{3})+$/;
-      if (thousandsCommaPattern.test(sanitized)) {
-        sanitized = sanitized.replace(/,/g, '');
-      } else {
-        sanitized = sanitized.replace(/,/g, '.');
-      }
-    } else if (hasDot) {
-      const thousandsDotPattern = /^\d{1,3}(\.\d{3})+$/;
-      if (thousandsDotPattern.test(sanitized)) {
-        sanitized = sanitized.replace(/\./g, '');
-      }
-    }
-
-    const numeric = Number(sanitized);
-    if (Number.isFinite(numeric)) {
-      return isNegative ? -numeric : numeric;
-    }
-  }
-
-  return null;
-}
-
-function parseDateValue(raw) {
-  if (typeof raw !== 'string') return null;
-  const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (m) {
-    const [, dd, mm, yyyy] = m;
-    const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function getExpirationClass(expirations) {
-  if (!expirations.length) return '';
-  const now = new Date();
-  const soonest = expirations.reduce((min, current) => (current < min ? current : min));
-  const diffDays = (soonest - now) / DAY_MS;
-  if (diffDays < 15) return 'cell-danger';
-  if (diffDays < 30) return 'cell-warn';
-  return '';
-}
-
-async function loadMonitor(){
-  const r = await fetch('/api/monitor');
-  if(!r.ok) return;
-  const j = await r.json();
-  const rows = j.rows || [];
-  const tbody = document.querySelector('#tbl tbody');
-  tbody.innerHTML = rows.map(d=>{
-    const expList = Array.isArray(d.license_exp_list) ? d.license_exp_list.filter(Boolean) : [];
-    const breakdown = Array.isArray(d.license_breakdown) ? d.license_breakdown : [];
-    const expDisplay = expList.length ? expList.join(' • ') : (d.license_exp ?? '—');
-    const tooltipLines = breakdown.map(p=>{
-      const kind = p.kind ?? '—';
-      const limit = p.limit ?? '—';
-      const exp = p.expires ? ' (exp: ' + p.expires + ')' : '';
-      return `${kind}: ${limit}${exp}`;
+  <script>
+    const tabs = Array.from(document.querySelectorAll('.tab'));
+    const sections = {
+      monitor: document.getElementById('mode-monitor'),
+      scripts: document.getElementById('mode-scripts')
+    };
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        Object.entries(sections).forEach(([mode, el]) => {
+          if (!el) return;
+          el.style.display = mode === tab.dataset.mode ? 'block' : 'none';
+        });
+      });
     });
-    const showTooltip = breakdown.length > 1 || expList.length > 1;
-    const expCell = showTooltip
-      ? `<span title="${tooltipLines.join('\n')}">${expDisplay}</span>`
-      : expDisplay;
-    const epsCurrentVal = parseNumberValue(d.eps_current);
-    const licenseEpsVal = parseNumberValue(d.license_eps);
-    const warnEps = epsCurrentVal !== null && licenseEpsVal !== null && epsCurrentVal > licenseEpsVal;
-    const expirationCandidates = expList.length ? expList : (d.license_exp ? [d.license_exp] : []);
-    const expirationDates = expirationCandidates
-      .map(parseDateValue)
-      .filter(dt => dt instanceof Date && !Number.isNaN(dt.getTime()));
-    const expirationClass = getExpirationClass(expirationDates);
-    let iconHtml = '';
-    if (expirationClass === 'cell-danger') {
-      iconHtml = '<span class="danger-icon" title="Licença expira em menos de 15 dias">⛔</span>';
-    } else if (warnEps) {
-      iconHtml = '<span class="warning-icon" title="EPS atual acima da licença">⚠️</span>';
-    } else if (expirationClass === 'cell-warn') {
-      iconHtml = '<span class="warning-icon" title="Licença expira em menos de 30 dias">⚠️</span>';
-    }
-    return `<tr>
-      <td class="icon-cell">${iconHtml}</td>
-      <td>${d.name}</td>
-      <td>${d.cpu ?? '—'}</td>
-      <td>${d.memory ?? '—'}</td>
-      <td>${d.storage ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.eps_current ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.eps_max ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.license_eps ?? '—'}</td>
-      <td${expirationClass ? ` class="${expirationClass}"` : ''}>${expCell}</td>
-    </tr>`;
-  }).join('');
-  document.getElementById('last-ts').textContent = 'Atualizado: '+(j.updated_at||new Date().toLocaleString());
-}
+  </script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+    {% raw %}
+    const { useState, useEffect, useCallback, useRef } = React;
 
-document.getElementById('refresh').onclick = loadMonitor;
-loadMonitor();
-setInterval(loadMonitor, 30000);
-</script>
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const STATUS_ICON = {
+      normal: '🟢',
+      warning: '🟡',
+      critical: '🔴'
+    };
+
+    function RefreshIcon({ className = '' }) {
+      const classes = ['refresh-icon', className].filter(Boolean).join(' ');
+      return (
+        <svg
+          className={classes}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="23 4 23 10 17 10" />
+          <polyline points="1 20 1 14 7 14" />
+          <path d="M3.51 9a9 9 0 0114.13-3.36L23 10" />
+          <path d="M20.49 15a9 9 0 01-14.13 3.36L1 14" />
+        </svg>
+      );
+    }
+
+    function parseNumberValue(raw) {
+      if (raw === null || raw === undefined) return null;
+      const trimmed = String(raw).trim();
+      if (!trimmed) return null;
+
+      const tokenMatches = trimmed.replace(/\u00A0/g, ' ').match(/[-+]?\d[\d.,\s]*/g);
+      if (!tokenMatches) return null;
+
+      for (const token of tokenMatches) {
+        let sanitized = token
+          .replace(/\s+/g, '')
+          .replace(/[^0-9,.+-]/g, '');
+        if (!sanitized || /^[-+]+$/.test(sanitized)) continue;
+
+        const isNegative = sanitized.startsWith('-');
+        const isPositive = sanitized.startsWith('+');
+        if (isNegative || isPositive) {
+          sanitized = sanitized.slice(1);
+        }
+
+        const hasComma = sanitized.includes(',');
+        const hasDot = sanitized.includes('.');
+
+        if (hasComma && hasDot) {
+          if (sanitized.lastIndexOf('.') > sanitized.lastIndexOf(',')) {
+            sanitized = sanitized.replace(/,/g, '');
+          } else {
+            sanitized = sanitized.replace(/\./g, '').replace(',', '.');
+          }
+        } else if (hasComma) {
+          const thousandsCommaPattern = /^\d{1,3}(,\d{3})+$/;
+          if (thousandsCommaPattern.test(sanitized)) {
+            sanitized = sanitized.replace(/,/g, '');
+          } else {
+            sanitized = sanitized.replace(/,/g, '.');
+          }
+        } else if (hasDot) {
+          const thousandsDotPattern = /^\d{1,3}(\.\d{3})+$/;
+          if (thousandsDotPattern.test(sanitized)) {
+            sanitized = sanitized.replace(/\./g, '');
+          }
+        }
+
+        const numeric = Number(sanitized);
+        if (Number.isFinite(numeric)) {
+          return isNegative ? -numeric : numeric;
+        }
+      }
+
+      return null;
+    }
+
+    function parseDateValue(raw) {
+      if (typeof raw !== 'string') return null;
+      const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (m) {
+        const [, dd, mm, yyyy] = m;
+        const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    function formatExpirationDisplay(raw) {
+      if (raw === null || raw === undefined) return null;
+      const trimmed = String(raw).trim();
+      if (!trimmed) return null;
+      if (trimmed === '01/01/9999' || trimmed.startsWith('01/01/9999 ')) return 'PERPETUAL';
+      return trimmed;
+    }
+
+    function getUsageStatus({ cpu, memory, storage }) {
+      const values = [cpu, memory, storage]
+        .map(parseNumberValue)
+        .filter(v => typeof v === 'number');
+      if (!values.length) return 'normal';
+      const max = Math.max(...values);
+      if (max >= 85) return 'critical';
+      if (max >= 70) return 'warning';
+      return 'normal';
+    }
+
+    function getExpirationStatus(expirations) {
+      if (!expirations.length) return 'normal';
+      const now = new Date();
+      const soonest = expirations.reduce((min, current) => (current < min ? current : min));
+      const diffDays = (soonest - now) / DAY_MS;
+      if (diffDays < 15) return 'critical';
+      if (diffDays < 30) return 'warning';
+      return 'normal';
+    }
+
+    function formatCompact(value) {
+      const numeric = parseNumberValue(value);
+      if (numeric === null) return '—';
+      if (numeric >= 1000000) return (numeric / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (numeric >= 1000) return Math.round(numeric / 100) / 10 + 'k';
+      return String(numeric);
+    }
+
+    const STATUS_RANK = { normal: 0, warning: 1, critical: 2 };
+    const STATUS_LABEL = {
+      normal: 'OK',
+      warning: 'At Risk',
+      critical: 'Overload'
+    };
+
+    function clampPercent(value) {
+      if (value === null || value === undefined || Number.isNaN(value)) return null;
+      return Math.max(0, Math.min(100, value));
+    }
+
+    function getSeverityByPercent(percent) {
+      if (percent === null || Number.isNaN(percent)) return 'neutral';
+      if (percent >= 90) return 'critical';
+      if (percent >= 75) return 'warning';
+      return 'normal';
+    }
+
+    function combineStatuses(statuses) {
+      return statuses.reduce((worst, current) => {
+        if (!current) return worst;
+        if (!(current in STATUS_RANK)) return worst;
+        return STATUS_RANK[current] > STATUS_RANK[worst] ? current : worst;
+      }, 'normal');
+    }
+
+    function SummaryMetric({ label, value, percent, status = 'neutral', tooltip }) {
+      const severityClass = status === 'neutral' || status === 'normal' ? '' : `is-${status}`;
+      const width = percent !== null && percent !== undefined ? `${clampPercent(percent)}%` : null;
+      const isArrayValue = Array.isArray(value);
+      const hasArrayValues = isArrayValue && value.length > 0;
+      const displayValue = isArrayValue
+        ? hasArrayValues
+          ? value.map((entry, index) => (
+              <span key={index} className="metric-value-line">
+                {entry}
+              </span>
+            ))
+          : '—'
+        : value ?? '—';
+
+      return (
+        <div className={`summary-metric ${severityClass}`} title={tooltip || ''}>
+          <span className="metric-label">{label}</span>
+          <span className={`metric-value${isArrayValue ? ' multiline' : ''}`}>{displayValue}</span>
+          {width !== null ? (
+            <span className="metric-bar">
+              <span className="metric-bar-fill" style={{ width }} />
+            </span>
+          ) : null}
+        </div>
+      );
+    }
+
+    function ApplianceMetric({ label, value }) {
+      const numeric = clampPercent(parseNumberValue(value));
+      const status = getSeverityByPercent(numeric);
+      const display = value ?? '—';
+
+      return (
+        <div
+          className={`appliance-metric-pill ${
+            status === 'neutral' || status === 'normal' ? '' : `is-${status}`
+          }`}
+        >
+          <span className="pill-label">{label}</span>
+          <span className="pill-value">{display}</span>
+          {numeric !== null ? (
+            <span className="pill-bar">
+              <span className="pill-bar-fill" style={{ width: `${numeric}%` }} />
+            </span>
+          ) : null}
+        </div>
+      );
+    }
+
+    function ApplianceCard({ name, metrics, isConsole }) {
+      const usageStatus = getUsageStatus(metrics);
+      const badgeLabel = STATUS_LABEL[usageStatus] || 'OK';
+
+      return (
+        <div className={`appliance-card status-${usageStatus}`}>
+          <div className="appliance-card-header">
+            <div className="appliance-card-title">
+              <span className="status-icon">{STATUS_ICON[usageStatus]}</span>
+              <span className="appliance-label">{name}</span>
+              {isConsole ? <span className="appliance-tag">Console</span> : null}
+            </div>
+            <span className={`status-badge is-${usageStatus}`}>{badgeLabel}</span>
+          </div>
+          <div className="appliance-metric-grid">
+            <ApplianceMetric label="CPU" value={metrics.cpu} />
+            <ApplianceMetric label="Mem" value={metrics.memory} />
+            <ApplianceMetric label="Storage" value={metrics.storage} />
+          </div>
+        </div>
+      );
+    }
+
+    function EnvironmentCard({ environment, isOpen, onToggle }) {
+      const licenseExpRawList = Array.isArray(environment.license_exp_list)
+        ? environment.license_exp_list.filter(Boolean)
+        : [];
+      const licenseBreakdown = Array.isArray(environment.license_breakdown)
+        ? environment.license_breakdown
+        : [];
+      const expirationTooltip = licenseBreakdown.length
+        ? licenseBreakdown
+            .map(item => {
+              const kind = item.kind ?? '—';
+              const limit = item.limit ?? '—';
+              const expLabel = formatExpirationDisplay(item.expires) ?? item.expires;
+              const exp = expLabel ? ` (exp: ${expLabel})` : '';
+              return `${kind}: ${limit}${exp}`;
+            })
+            .join('\n')
+        : '';
+      const expirationCandidatesRaw = licenseExpRawList.length
+        ? licenseExpRawList
+        : environment.license_exp
+        ? [environment.license_exp]
+        : [];
+      const expirationDisplayList = expirationCandidatesRaw.map(item => formatExpirationDisplay(item) ?? item);
+      const expirationDates = expirationCandidatesRaw
+        .map(parseDateValue)
+        .filter(date => date instanceof Date && !Number.isNaN(date.getTime()));
+      const expirationStatus = getExpirationStatus(expirationDates);
+      const epsCurrent = parseNumberValue(environment.eps_current);
+      const epsMax = parseNumberValue(environment.eps_max);
+      const licenseEps = parseNumberValue(environment.license_eps);
+      const epsPercent =
+        licenseEps !== null && licenseEps > 0 && epsCurrent !== null
+          ? (epsCurrent / licenseEps) * 100
+          : null;
+      const epsMaxPercent =
+        licenseEps !== null && licenseEps > 0 && epsMax !== null
+          ? (epsMax / licenseEps) * 100
+          : null;
+      const epsDanger = epsPercent !== null && epsPercent > 100;
+      const epsMaxDanger = epsMaxPercent !== null && epsMaxPercent > 100;
+      const epsCurrentDisplay = formatCompact(environment.eps_current);
+      const epsMaxDisplay = formatCompact(environment.eps_max);
+      const licenseEpsDisplay = formatCompact(environment.license_eps);
+      const epsSummaryDisplay =
+        epsCurrentDisplay !== '—' && licenseEpsDisplay !== '—'
+          ? `${epsCurrentDisplay} / ${licenseEpsDisplay}`
+          : environment.eps_current ?? '—';
+
+      const consoleMetrics = {
+        cpu: environment.cpu,
+        memory: environment.memory,
+        storage: environment.storage
+      };
+      const usageStatus = getUsageStatus(consoleMetrics);
+
+      const appliances = Array.isArray(environment.appliances) ? environment.appliances : [];
+
+      const detailsRef = useRef(null);
+      const [detailsHeight, setDetailsHeight] = useState(0);
+
+      useEffect(() => {
+        const el = detailsRef.current;
+        if (!el) return;
+        if (isOpen) {
+          const frame = requestAnimationFrame(() => {
+            setDetailsHeight(el.scrollHeight);
+          });
+          return () => cancelAnimationFrame(frame);
+        }
+        setDetailsHeight(0);
+      }, [isOpen, appliances, environment.cpu, environment.memory, environment.storage]);
+
+      const detailItems = [
+        {
+          name: 'Console',
+          metrics: consoleMetrics,
+          isConsole: true
+        },
+        ...appliances.map(appliance => ({
+          name: appliance.name ?? appliance.zabbix_host ?? 'Appliance',
+          metrics: {
+            cpu: appliance.cpu,
+            memory: appliance.memory,
+            storage: appliance.storage
+          },
+          isConsole: false
+        }))
+      ];
+
+      const epsStatus = getSeverityByPercent(epsPercent ?? null);
+      const epsMaxStatus = getSeverityByPercent(epsMaxPercent ?? null);
+
+      const summaryMetrics = [
+        {
+          key: 'cpu',
+          label: 'CPU',
+          value: environment.cpu ?? '—',
+          percent: parseNumberValue(environment.cpu),
+          status: getSeverityByPercent(parseNumberValue(environment.cpu))
+        },
+        {
+          key: 'mem',
+          label: 'Mem',
+          value: environment.memory ?? '—',
+          percent: parseNumberValue(environment.memory),
+          status: getSeverityByPercent(parseNumberValue(environment.memory))
+        },
+        {
+          key: 'storage',
+          label: 'Storage',
+          value: environment.storage ?? '—',
+          percent: parseNumberValue(environment.storage),
+          status: getSeverityByPercent(parseNumberValue(environment.storage))
+        },
+        {
+          key: 'eps',
+          label: 'EPS',
+          value:
+            epsCurrentDisplay !== '—' && licenseEpsDisplay !== '—'
+              ? `${epsCurrentDisplay} / ${licenseEpsDisplay}`
+              : epsCurrentDisplay,
+          percent: epsPercent,
+          status: epsDanger ? 'critical' : epsStatus,
+          tooltip: epsMaxDisplay !== '—' ? `EPS Máx: ${epsMaxDisplay}` : ''
+        },
+        {
+          key: 'exp',
+          label: 'Exp',
+          value:
+            expirationDisplayList.length
+              ? expirationDisplayList
+              : formatExpirationDisplay(environment.license_exp) ?? '—',
+          percent: null,
+          status: expirationStatus,
+          tooltip: expirationTooltip
+        }
+      ];
+
+      const consoleStoragePercent = parseNumberValue(environment.storage);
+      const licenseStatuses = [
+        epsDanger ? 'critical' : epsStatus,
+        epsMaxDanger ? 'critical' : epsMaxStatus,
+        expirationStatus
+      ];
+      let overallStatus = combineStatuses([usageStatus, ...licenseStatuses]);
+      const hasLicenseOrExpiryIssue = licenseStatuses.some(
+        status => status === 'warning' || status === 'critical'
+      );
+      if (!hasLicenseOrExpiryIssue && usageStatus !== 'normal') {
+        overallStatus =
+          consoleStoragePercent !== null && consoleStoragePercent >= 88 ? 'critical' : 'warning';
+      }
+
+      return (
+        <div className={`env-card status-${overallStatus} ${isOpen ? 'open' : ''}`}>
+          <button
+            type="button"
+            className="env-card-header"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+          >
+            <div className="env-header-main">
+              <div className="env-title">
+                <span className="status-icon">{STATUS_ICON[overallStatus]}</span>
+                <span className="env-name-text">{environment.name ?? '—'}</span>
+              </div>
+              <div className="env-summary-line">
+                {summaryMetrics.map(metric => (
+                  <SummaryMetric
+                    key={metric.key}
+                    label={metric.label}
+                    value={metric.value}
+                    percent={metric.percent}
+                    status={metric.status}
+                    tooltip={metric.tooltip}
+                  />
+                ))}
+              </div>
+            </div>
+            <span className={`env-toggle-icon ${isOpen ? 'open' : ''}`} aria-hidden="true">
+              ▼
+            </span>
+          </button>
+          <div
+            className="env-details"
+            style={{ maxHeight: `${detailsHeight}px` }}
+            aria-hidden={!isOpen}
+          >
+            <div ref={detailsRef} className="env-details-inner">
+                {licenseBreakdown.length ? (
+                  <div className="license-breakdown">
+                    {licenseBreakdown.map((item, idx) => {
+                      const expLabel = item.expires
+                        ? formatExpirationDisplay(item.expires) ?? item.expires
+                        : null;
+                      return (
+                        <div className="license-item" key={`${environment.name || 'env'}-license-${idx}`}>
+                          <span className="license-kind">{item.kind ?? 'Licença'}</span>
+                          <span className="license-limit">{item.limit ?? '—'}</span>
+                          {expLabel ? <span className="license-exp">Exp: {expLabel}</span> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              {detailItems.length ? (
+                <div className="appliance-grid">
+                  {detailItems.map((item, idx) => (
+                    <ApplianceCard
+                      key={`${environment.name || 'env'}-appliance-${idx}`}
+                      name={item.name}
+                      metrics={item.metrics}
+                      isConsole={item.isConsole}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-appliances">Nenhum appliance adicional configurado.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function MonitorApp() {
+      const [rows, setRows] = useState([]);
+      const [updatedAt, setUpdatedAt] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [openItems, setOpenItems] = useState(new Set());
+
+      const loadData = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const response = await fetch('/api/monitor');
+          if (!response.ok) {
+            throw new Error('Não foi possível carregar os dados do monitoramento.');
+          }
+          const payload = await response.json();
+          const environments = Array.isArray(payload.rows) ? payload.rows : [];
+          setRows(environments);
+          if (payload.updated_at) {
+            setUpdatedAt(payload.updated_at);
+          } else {
+            setUpdatedAt(new Date().toLocaleString());
+          }
+          setLoading(false);
+        } catch (err) {
+          console.error(err);
+          setError(err.message || 'Erro inesperado ao carregar o monitoramento.');
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        loadData();
+        const id = setInterval(loadData, 30000);
+        return () => clearInterval(id);
+      }, [loadData]);
+
+      const toggleItem = useCallback((key) => {
+        setOpenItems(prev => {
+          const next = new Set(prev);
+          if (next.has(key)) {
+            next.delete(key);
+          } else {
+            next.add(key);
+          }
+          return next;
+        });
+      }, []);
+
+      useEffect(() => {
+        const subtitleEl = document.getElementById('dashboard-subtitle');
+        if (!subtitleEl) return;
+        const count = rows.length;
+        const countLabel = `${count} ambiente${count === 1 ? '' : 's'} monitorado${count === 1 ? '' : 's'}`;
+        const statusText = loading
+          ? 'sincronizando…'
+          : updatedAt
+          ? `última atualização: ${updatedAt}`
+          : 'aguardando dados…';
+        subtitleEl.textContent = `${countLabel} – ${statusText}`;
+      }, [rows.length, updatedAt, loading]);
+
+      return (
+        <div className="monitor-app">
+          <div className="meta-row">
+            <div className="meta-left">
+              <button
+                className={`refresh-button${loading ? ' is-spinning' : ''}`}
+                type="button"
+                onClick={loadData}
+                disabled={loading}
+                aria-label="Atualizar monitoramento"
+                title="Atualizar monitoramento"
+              >
+                <RefreshIcon />
+              </button>
+              <div className="meta-description">
+                <span className="meta-title">Monitoramento em tempo real</span>
+                <span className="meta-subtitle">
+                  {loading ? 'Atualizando dados…' : 'Clique para sincronizar manualmente'}
+                </span>
+              </div>
+            </div>
+            <div className="meta-right">
+              {updatedAt ? <span className="meta-updated">Atualizado: {updatedAt}</span> : null}
+            </div>
+          </div>
+          <div className="monitor-tags">
+            <span className="badge">CPU/Mem/Storage via Zabbix</span>
+            <span className="badge warn">Licença via license.sh</span>
+          </div>
+          {error ? <div className="error-message">{error}</div> : null}
+          {rows.length === 0 && !loading ? (
+            <div className="empty-state">Nenhum ambiente configurado ainda.</div>
+          ) : null}
+          <div className="env-list">
+            {rows.map((environment, index) => {
+              const key = environment.name || `env-${index}`;
+              return (
+                <EnvironmentCard
+                  key={key}
+                  environment={environment}
+                  isOpen={openItems.has(key)}
+                  onToggle={() => toggleItem(key)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    const rootEl = document.getElementById('monitor-app-root');
+    if (rootEl) {
+      const root = ReactDOM.createRoot(rootEl);
+      root.render(<MonitorApp />);
+    }
+    {% endraw %}
+  </script>
 </body>
 </html>
-
