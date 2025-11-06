@@ -2,6 +2,7 @@
 <html lang="pt-br">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QRadar Dashboard</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="icon" href="/static/favicon.png">
@@ -12,7 +13,7 @@
       <div class="brand">
         <img src="/static/logo-asper.png" alt="ASPER">
         <div class="title">
-          <h1>Monitoramento & Execução</h1>
+          <h1>Monitoramento &amp; Execução</h1>
           <div class="sub">QRadar • Zabbix • SSH</div>
         </div>
       </div>
@@ -32,171 +33,365 @@
     </div>
 
     <section id="mode-monitor" class="card">
-      <div class="row">
-        <button class="btn secondary" id="refresh">Atualizar</button>
-        <span class="small" id="last-ts"></span>
-      </div>
-      <div class="hr"></div>
-      <div class="row small"><span class="badge b-ok">CPU/Mem/Store via Zabbix</span><span class="badge b-warn">Licença via license.sh</span></div>
-      <div style="margin-top:10px; overflow:auto">
-        <table id="tbl">
-          <thead>
-            <tr>
-              <th class="icon-col"></th>
-              <th>Ambiente</th>
-              <th>CPU (%)</th>
-              <th>Memória (%)</th>
-              <th>Storage /store (%)</th>
-              <th>EPS Atual</th>
-              <th>EPS Máx</th>
-              <th>Licença EPS</th>
-              <th>Expiração</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
+      <div id="monitor-app-root"></div>
     </section>
 
-<script>
-const tabs = Array.from(document.querySelectorAll('.tab'));
-tabs.forEach(t=>t.onclick=()=>{
-  tabs.forEach(x=>x.classList.remove('active'));
-  t.classList.add('active');
-  document.getElementById('mode-monitor').style.display = t.dataset.mode==='monitor' ? 'block':'none';
-});
+    <section id="mode-scripts" class="card" style="display:none">
+      <div class="empty-state">Selecione um script ao lado para executar.</div>
+    </section>
+  </div>
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function parseNumberValue(raw) {
-  if (raw === null || raw === undefined) return null;
-  const trimmed = String(raw).trim();
-  if (!trimmed) return null;
-
-  const tokenMatches = trimmed.replace(/\u00A0/g, ' ').match(/[-+]?\d[\d.,\s]*/g);
-  if (!tokenMatches) return null;
-
-  for (const token of tokenMatches) {
-    let sanitized = token
-      .replace(/\s+/g, '')
-      .replace(/[^0-9,.+-]/g, '');
-    if (!sanitized || /^[-+]+$/.test(sanitized)) continue;
-
-    const isNegative = sanitized.startsWith('-');
-    const isPositive = sanitized.startsWith('+');
-    if (isNegative || isPositive) {
-      sanitized = sanitized.slice(1);
-    }
-
-    const hasComma = sanitized.includes(',');
-    const hasDot = sanitized.includes('.');
-
-    if (hasComma && hasDot) {
-      if (sanitized.lastIndexOf('.') > sanitized.lastIndexOf(',')) {
-        sanitized = sanitized.replace(/,/g, '');
-      } else {
-        sanitized = sanitized.replace(/\./g, '').replace(',', '.');
-      }
-    } else if (hasComma) {
-      const thousandsCommaPattern = /^\d{1,3}(,\d{3})+$/;
-      if (thousandsCommaPattern.test(sanitized)) {
-        sanitized = sanitized.replace(/,/g, '');
-      } else {
-        sanitized = sanitized.replace(/,/g, '.');
-      }
-    } else if (hasDot) {
-      const thousandsDotPattern = /^\d{1,3}(\.\d{3})+$/;
-      if (thousandsDotPattern.test(sanitized)) {
-        sanitized = sanitized.replace(/\./g, '');
-      }
-    }
-
-    const numeric = Number(sanitized);
-    if (Number.isFinite(numeric)) {
-      return isNegative ? -numeric : numeric;
-    }
-  }
-
-  return null;
-}
-
-function parseDateValue(raw) {
-  if (typeof raw !== 'string') return null;
-  const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (m) {
-    const [, dd, mm, yyyy] = m;
-    const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function getExpirationClass(expirations) {
-  if (!expirations.length) return '';
-  const now = new Date();
-  const soonest = expirations.reduce((min, current) => (current < min ? current : min));
-  const diffDays = (soonest - now) / DAY_MS;
-  if (diffDays < 15) return 'cell-danger';
-  if (diffDays < 30) return 'cell-warn';
-  return '';
-}
-
-async function loadMonitor(){
-  const r = await fetch('/api/monitor');
-  if(!r.ok) return;
-  const j = await r.json();
-  const rows = j.rows || [];
-  const tbody = document.querySelector('#tbl tbody');
-  tbody.innerHTML = rows.map(d=>{
-    const expList = Array.isArray(d.license_exp_list) ? d.license_exp_list.filter(Boolean) : [];
-    const breakdown = Array.isArray(d.license_breakdown) ? d.license_breakdown : [];
-    const expDisplay = expList.length ? expList.join(' • ') : (d.license_exp ?? '—');
-    const tooltipLines = breakdown.map(p=>{
-      const kind = p.kind ?? '—';
-      const limit = p.limit ?? '—';
-      const exp = p.expires ? ' (exp: ' + p.expires + ')' : '';
-      return `${kind}: ${limit}${exp}`;
+  <script>
+    const tabs = Array.from(document.querySelectorAll('.tab'));
+    const sections = {
+      monitor: document.getElementById('mode-monitor'),
+      scripts: document.getElementById('mode-scripts')
+    };
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        Object.entries(sections).forEach(([mode, el]) => {
+          if (!el) return;
+          el.style.display = mode === tab.dataset.mode ? 'block' : 'none';
+        });
+      });
     });
-    const showTooltip = breakdown.length > 1 || expList.length > 1;
-    const expCell = showTooltip
-      ? `<span title="${tooltipLines.join('\n')}">${expDisplay}</span>`
-      : expDisplay;
-    const epsCurrentVal = parseNumberValue(d.eps_current);
-    const licenseEpsVal = parseNumberValue(d.license_eps);
-    const warnEps = epsCurrentVal !== null && licenseEpsVal !== null && epsCurrentVal > licenseEpsVal;
-    const expirationCandidates = expList.length ? expList : (d.license_exp ? [d.license_exp] : []);
-    const expirationDates = expirationCandidates
-      .map(parseDateValue)
-      .filter(dt => dt instanceof Date && !Number.isNaN(dt.getTime()));
-    const expirationClass = getExpirationClass(expirationDates);
-    let iconHtml = '';
-    if (expirationClass === 'cell-danger') {
-      iconHtml = '<span class="danger-icon" title="Licença expira em menos de 15 dias">⛔</span>';
-    } else if (warnEps) {
-      iconHtml = '<span class="warning-icon" title="EPS atual acima da licença">⚠️</span>';
-    } else if (expirationClass === 'cell-warn') {
-      iconHtml = '<span class="warning-icon" title="Licença expira em menos de 30 dias">⚠️</span>';
-    }
-    return `<tr>
-      <td class="icon-cell">${iconHtml}</td>
-      <td>${d.name}</td>
-      <td>${d.cpu ?? '—'}</td>
-      <td>${d.memory ?? '—'}</td>
-      <td>${d.storage ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.eps_current ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.eps_max ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.license_eps ?? '—'}</td>
-      <td${expirationClass ? ` class="${expirationClass}"` : ''}>${expCell}</td>
-    </tr>`;
-  }).join('');
-  document.getElementById('last-ts').textContent = 'Atualizado: '+(j.updated_at||new Date().toLocaleString());
-}
+  </script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
 
-document.getElementById('refresh').onclick = loadMonitor;
-loadMonitor();
-setInterval(loadMonitor, 30000);
-</script>
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const STATUS_ICON = {
+      normal: '🟢',
+      warning: '🟡',
+      critical: '🔴'
+    };
+
+    function parseNumberValue(raw) {
+      if (raw === null || raw === undefined) return null;
+      const trimmed = String(raw).trim();
+      if (!trimmed) return null;
+
+      const tokenMatches = trimmed.replace(/\u00A0/g, ' ').match(/[-+]?\d[\d.,\s]*/g);
+      if (!tokenMatches) return null;
+
+      for (const token of tokenMatches) {
+        let sanitized = token
+          .replace(/\s+/g, '')
+          .replace(/[^0-9,.+-]/g, '');
+        if (!sanitized || /^[-+]+$/.test(sanitized)) continue;
+
+        const isNegative = sanitized.startsWith('-');
+        const isPositive = sanitized.startsWith('+');
+        if (isNegative || isPositive) {
+          sanitized = sanitized.slice(1);
+        }
+
+        const hasComma = sanitized.includes(',');
+        const hasDot = sanitized.includes('.');
+
+        if (hasComma && hasDot) {
+          if (sanitized.lastIndexOf('.') > sanitized.lastIndexOf(',')) {
+            sanitized = sanitized.replace(/,/g, '');
+          } else {
+            sanitized = sanitized.replace(/\./g, '').replace(',', '.');
+          }
+        } else if (hasComma) {
+          const thousandsCommaPattern = /^\d{1,3}(,\d{3})+$/;
+          if (thousandsCommaPattern.test(sanitized)) {
+            sanitized = sanitized.replace(/,/g, '');
+          } else {
+            sanitized = sanitized.replace(/,/g, '.');
+          }
+        } else if (hasDot) {
+          const thousandsDotPattern = /^\d{1,3}(\.\d{3})+$/;
+          if (thousandsDotPattern.test(sanitized)) {
+            sanitized = sanitized.replace(/\./g, '');
+          }
+        }
+
+        const numeric = Number(sanitized);
+        if (Number.isFinite(numeric)) {
+          return isNegative ? -numeric : numeric;
+        }
+      }
+
+      return null;
+    }
+
+    function parseDateValue(raw) {
+      if (typeof raw !== 'string') return null;
+      const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (m) {
+        const [, dd, mm, yyyy] = m;
+        const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    function getUsageStatus({ cpu, memory, storage }) {
+      const values = [cpu, memory, storage]
+        .map(parseNumberValue)
+        .filter(v => typeof v === 'number');
+      if (!values.length) return 'normal';
+      const max = Math.max(...values);
+      if (max >= 85) return 'critical';
+      if (max >= 70) return 'warning';
+      return 'normal';
+    }
+
+    function getExpirationStatus(expirations) {
+      if (!expirations.length) return 'normal';
+      const now = new Date();
+      const soonest = expirations.reduce((min, current) => (current < min ? current : min));
+      const diffDays = (soonest - now) / DAY_MS;
+      if (diffDays < 15) return 'critical';
+      if (diffDays < 30) return 'warning';
+      return 'normal';
+    }
+
+    function formatCompact(value) {
+      const numeric = parseNumberValue(value);
+      if (numeric === null) return '—';
+      if (numeric >= 1000000) return (numeric / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (numeric >= 1000) return Math.round(numeric / 100) / 10 + 'k';
+      return String(numeric);
+    }
+
+    function MetricPill({ label, value, status, tooltip }) {
+      const classes = ['env-summary-metric'];
+      if (status === 'critical') {
+        classes.push('danger');
+      } else if (status === 'warning') {
+        classes.push('attention');
+      }
+      return (
+        <div className={classes.join(' ')} title={tooltip || ''}>
+          <strong>{label}</strong>
+          <span>{value ?? '—'}</span>
+        </div>
+      );
+    }
+
+    function ApplianceRow({ name, metrics, isConsole }) {
+      const usageStatus = getUsageStatus(metrics);
+      return (
+        <div className="appliance-row">
+          <div className="appliance-name">
+            <span className="status-icon">{STATUS_ICON[usageStatus]}</span>
+            {isConsole ? `${name} (Console)` : name}
+          </div>
+          <div className={`appliance-metric ${usageStatus === 'critical' ? 'danger' : usageStatus === 'warning' ? 'attention' : ''}`}>
+            <strong>CPU</strong> {metrics.cpu ?? '—'}
+          </div>
+          <div className={`appliance-metric ${usageStatus === 'critical' ? 'danger' : usageStatus === 'warning' ? 'attention' : ''}`}>
+            <strong>Mem</strong> {metrics.memory ?? '—'}
+          </div>
+          <div className={`appliance-metric ${usageStatus === 'critical' ? 'danger' : usageStatus === 'warning' ? 'attention' : ''}`}>
+            <strong>Storage</strong> {metrics.storage ?? '—'}
+          </div>
+        </div>
+      );
+    }
+
+    function EnvironmentCard({ environment, isOpen, onToggle }) {
+      const licenseExpList = Array.isArray(environment.license_exp_list)
+        ? environment.license_exp_list.filter(Boolean)
+        : [];
+      const licenseBreakdown = Array.isArray(environment.license_breakdown)
+        ? environment.license_breakdown
+        : [];
+      const expirationTooltip = licenseBreakdown.length
+        ? licenseBreakdown
+            .map(item => {
+              const kind = item.kind ?? '—';
+              const limit = item.limit ?? '—';
+              const exp = item.expires ? ` (exp: ${item.expires})` : '';
+              return `${kind}: ${limit}${exp}`;
+            })
+            .join('\n')
+        : '';
+      const expirationCandidates = licenseExpList.length
+        ? licenseExpList
+        : environment.license_exp
+        ? [environment.license_exp]
+        : [];
+      const expirationDates = expirationCandidates
+        .map(parseDateValue)
+        .filter(date => date instanceof Date && !Number.isNaN(date.getTime()));
+      const expirationStatus = getExpirationStatus(expirationDates);
+      const epsCurrent = parseNumberValue(environment.eps_current);
+      const epsMax = parseNumberValue(environment.eps_max);
+      const licenseEps = parseNumberValue(environment.license_eps);
+      const epsDanger = licenseEps !== null && epsCurrent !== null && epsCurrent > licenseEps;
+      const epsMaxDanger = licenseEps !== null && epsMax !== null && epsMax > licenseEps;
+      const epsCurrentDisplay = formatCompact(environment.eps_current);
+      const epsMaxDisplay = formatCompact(environment.eps_max);
+      const licenseEpsDisplay = formatCompact(environment.license_eps);
+      const epsSummaryDisplay =
+        epsCurrentDisplay !== '—' && licenseEpsDisplay !== '—'
+          ? `${epsCurrentDisplay} / ${licenseEpsDisplay}`
+          : environment.eps_current ?? '—';
+
+      const consoleMetrics = {
+        cpu: environment.cpu,
+        memory: environment.memory,
+        storage: environment.storage
+      };
+      const envStatus = getUsageStatus(consoleMetrics);
+
+      const appliances = Array.isArray(environment.appliances) ? environment.appliances : [];
+
+      return (
+        <div className={`env-card ${isOpen ? 'open' : ''}`}>
+          <div className="env-card-header">
+            <div className="env-card-top">
+              <div className="env-name">
+                <span className="status-icon">{STATUS_ICON[envStatus]}</span>
+                {environment.name ?? '—'}
+              </div>
+              <button type="button" className="env-toggle" onClick={onToggle}>
+                <span>{isOpen ? 'Recolher detalhes' : 'Expandir detalhes'}</span>
+                <span className="chevron">▼</span>
+              </button>
+            </div>
+            <div className="env-summary-grid">
+              <MetricPill label="CPU" value={environment.cpu ?? '—'} status={getUsageStatus({ cpu: environment.cpu })} />
+              <MetricPill label="Memória" value={environment.memory ?? '—'} status={getUsageStatus({ memory: environment.memory })} />
+              <MetricPill label="Storage" value={environment.storage ?? '—'} status={getUsageStatus({ storage: environment.storage })} />
+              <MetricPill label="EPS" value={epsSummaryDisplay} status={epsDanger ? 'critical' : 'normal'} />
+              <MetricPill label="EPS Máx" value={epsMaxDisplay} status={epsMaxDanger ? 'critical' : 'normal'} />
+              <MetricPill label="Licença EPS" value={licenseEpsDisplay} status={epsDanger ? 'critical' : 'normal'} />
+              <MetricPill
+                label="Expiração"
+                value={licenseExpList.length ? licenseExpList.join(' • ') : environment.license_exp ?? '—'}
+                status={expirationStatus}
+                tooltip={expirationTooltip}
+              />
+            </div>
+          </div>
+          <div className="env-details">
+            <div className="env-details-inner">
+              <ApplianceRow name={environment.name ?? 'Console'} metrics={consoleMetrics} isConsole />
+              {appliances.length ? (
+                appliances.map((appliance, idx) => (
+                  <ApplianceRow
+                    key={`${environment.name || 'env'}-appliance-${idx}`}
+                    name={appliance.name ?? appliance.zabbix_host ?? 'Appliance'}
+                    metrics={{
+                      cpu: appliance.cpu,
+                      memory: appliance.memory,
+                      storage: appliance.storage
+                    }}
+                  />
+                ))
+              ) : (
+                <div className="empty-appliances">Nenhum appliance adicional configurado.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function MonitorApp() {
+      const [rows, setRows] = useState([]);
+      const [updatedAt, setUpdatedAt] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [openItems, setOpenItems] = useState(new Set());
+
+      const loadData = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const response = await fetch('/api/monitor');
+          if (!response.ok) {
+            throw new Error('Não foi possível carregar os dados do monitoramento.');
+          }
+          const payload = await response.json();
+          const environments = Array.isArray(payload.rows) ? payload.rows : [];
+          setRows(environments);
+          if (payload.updated_at) {
+            setUpdatedAt(payload.updated_at);
+          } else {
+            setUpdatedAt(new Date().toLocaleString());
+          }
+          setLoading(false);
+        } catch (err) {
+          console.error(err);
+          setError(err.message || 'Erro inesperado ao carregar o monitoramento.');
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        loadData();
+        const id = setInterval(loadData, 30000);
+        return () => clearInterval(id);
+      }, [loadData]);
+
+      const toggleItem = useCallback((key) => {
+        setOpenItems(prev => {
+          const next = new Set(prev);
+          if (next.has(key)) {
+            next.delete(key);
+          } else {
+            next.add(key);
+          }
+          return next;
+        });
+      }, []);
+
+      return (
+        <div className="monitor-app">
+          <div className="meta-row">
+            <div className="left">
+              <button className="btn secondary" type="button" onClick={loadData} disabled={loading}>
+                {loading ? 'Atualizando…' : 'Atualizar'}
+              </button>
+              {loading ? <span className="small">Buscando dados em tempo real…</span> : null}
+            </div>
+            <div className="right">
+              {updatedAt ? <span className="small">Atualizado: {updatedAt}</span> : null}
+            </div>
+          </div>
+          <div className="row small">
+            <span className="badge">CPU/Mem/Storage via Zabbix</span>
+            <span className="badge warn">Licença via license.sh</span>
+          </div>
+          {error ? <div className="error-message">{error}</div> : null}
+          {rows.length === 0 && !loading ? (
+            <div className="empty-state">Nenhum ambiente configurado ainda.</div>
+          ) : null}
+          <div className="env-list">
+            {rows.map((environment, index) => {
+              const key = environment.name || `env-${index}`;
+              return (
+                <EnvironmentCard
+                  key={key}
+                  environment={environment}
+                  isOpen={openItems.has(key)}
+                  onToggle={() => toggleItem(key)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    const rootEl = document.getElementById('monitor-app-root');
+    if (rootEl) {
+      const root = ReactDOM.createRoot(rootEl);
+      root.render(<MonitorApp />);
+    }
+  </script>
 </body>
 </html>
-
