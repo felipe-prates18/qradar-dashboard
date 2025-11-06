@@ -14,6 +14,29 @@
     "store_item_name": "/store: Space utilization",
     "store_key_fallback": "vfs.fs.pused[storageUsedPercentage.66]"
   },
+  "health": {
+    "services": [
+      "accumulator.service",
+      "ariel_proxy_server.service",
+      "ariel_query_server.service",
+      "ecs-ec-ingress.service",
+      "ecs-ec.service",
+      "ecs-ep.service",
+      "historical_correlation_server.service",
+      "hostcontext.service",
+      "hostservices.service",
+      "qflow.service",
+      "reporting_executor.service",
+      "tomcat.service",
+      "vis.service",
+      "ariel_proxy_server",
+      "ariel_query_server",
+      "postfix.service"
+    ],
+    "latency_warning_ms": 150,
+    "latency_critical_ms": 300,
+    "packet_loss_warning": 5
+  },
   "qradar_envs": [
     {
       "name": "QRADAR TAURUS CONSOLE",
