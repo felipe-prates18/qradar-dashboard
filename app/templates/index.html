@@ -14,7 +14,7 @@
         <img src="/static/logo-asper.png" alt="ASPER">
         <div class="title">
           <h1>Monitoramento &amp; Execução</h1>
-          <div class="sub">QRadar • Zabbix • SSH</div>
+          <div class="sub" id="dashboard-subtitle">Carregando status do monitoramento…</div>
         </div>
       </div>
       <div class="row">
@@ -165,46 +165,90 @@
       return String(numeric);
     }
 
-    function SummaryItem({ label, value, status, tooltip }) {
-      const classes = ['summary-item'];
-      if (status === 'critical') {
-        classes.push('danger');
-      } else if (status === 'warning') {
-        classes.push('attention');
-      }
+    const STATUS_RANK = { normal: 0, warning: 1, critical: 2 };
+    const STATUS_LABEL = {
+      normal: 'OK',
+      warning: 'At Risk',
+      critical: 'Overload'
+    };
+
+    function clampPercent(value) {
+      if (value === null || value === undefined || Number.isNaN(value)) return null;
+      return Math.max(0, Math.min(100, value));
+    }
+
+    function getSeverityByPercent(percent) {
+      if (percent === null || Number.isNaN(percent)) return 'neutral';
+      if (percent >= 90) return 'critical';
+      if (percent >= 75) return 'warning';
+      return 'normal';
+    }
+
+    function combineStatuses(statuses) {
+      return statuses.reduce((worst, current) => {
+        if (!current) return worst;
+        if (!(current in STATUS_RANK)) return worst;
+        return STATUS_RANK[current] > STATUS_RANK[worst] ? current : worst;
+      }, 'normal');
+    }
+
+    function SummaryMetric({ label, value, percent, status = 'neutral', tooltip }) {
+      const severityClass = status === 'neutral' || status === 'normal' ? '' : `is-${status}`;
+      const width = percent !== null && percent !== undefined ? `${clampPercent(percent)}%` : null;
 
       return (
-        <span className={classes.join(' ')} title={tooltip || ''}>
-          <strong>{label}:</strong>
-          <span className="value">{value ?? '—'}</span>
-        </span>
+        <div className={`summary-metric ${severityClass}`} title={tooltip || ''}>
+          <span className="metric-label">{label}</span>
+          <span className="metric-value">{value ?? '—'}</span>
+          {width !== null ? (
+            <span className="metric-bar">
+              <span className="metric-bar-fill" style={{ width }} />
+            </span>
+          ) : null}
+        </div>
       );
     }
 
-    function ApplianceRow({ name, metrics, isConsole, branchSymbol }) {
-      const usageStatus = getUsageStatus(metrics);
-      const statusClass =
-        usageStatus === 'critical' ? 'danger' : usageStatus === 'warning' ? 'attention' : '';
+    function ApplianceMetric({ label, value }) {
+      const numeric = clampPercent(parseNumberValue(value));
+      const status = getSeverityByPercent(numeric);
+      const display = value ?? '—';
 
       return (
-        <div className="appliance-row">
-          <span className="appliance-branch" aria-hidden="true">{branchSymbol}</span>
-          <div className="appliance-name">
-            <span className="status-icon">{STATUS_ICON[usageStatus]}</span>
-            <span className="appliance-label">{name}</span>
-            {isConsole ? <span className="appliance-tag">Console</span> : null}
+        <div
+          className={`appliance-metric-pill ${
+            status === 'neutral' || status === 'normal' ? '' : `is-${status}`
+          }`}
+        >
+          <span className="pill-label">{label}</span>
+          <span className="pill-value">{display}</span>
+          {numeric !== null ? (
+            <span className="pill-bar">
+              <span className="pill-bar-fill" style={{ width: `${numeric}%` }} />
+            </span>
+          ) : null}
+        </div>
+      );
+    }
+
+    function ApplianceCard({ name, metrics, isConsole }) {
+      const usageStatus = getUsageStatus(metrics);
+      const badgeLabel = STATUS_LABEL[usageStatus] || 'OK';
+
+      return (
+        <div className={`appliance-card status-${usageStatus}`}>
+          <div className="appliance-card-header">
+            <div className="appliance-card-title">
+              <span className="status-icon">{STATUS_ICON[usageStatus]}</span>
+              <span className="appliance-label">{name}</span>
+              {isConsole ? <span className="appliance-tag">Console</span> : null}
+            </div>
+            <span className={`status-badge is-${usageStatus}`}>{badgeLabel}</span>
           </div>
-          <div className={`appliance-metric ${statusClass}`}>
-            <strong>CPU</strong>
-            <span>{metrics.cpu ?? '—'}</span>
-          </div>
-          <div className={`appliance-metric ${statusClass}`}>
-            <strong>Mem</strong>
-            <span>{metrics.memory ?? '—'}</span>
-          </div>
-          <div className={`appliance-metric ${statusClass}`}>
-            <strong>Storage</strong>
-            <span>{metrics.storage ?? '—'}</span>
+          <div className="appliance-metric-grid">
+            <ApplianceMetric label="CPU" value={metrics.cpu} />
+            <ApplianceMetric label="Mem" value={metrics.memory} />
+            <ApplianceMetric label="Storage" value={metrics.storage} />
           </div>
         </div>
       );
@@ -239,8 +283,16 @@
       const epsCurrent = parseNumberValue(environment.eps_current);
       const epsMax = parseNumberValue(environment.eps_max);
       const licenseEps = parseNumberValue(environment.license_eps);
-      const epsDanger = licenseEps !== null && epsCurrent !== null && epsCurrent > licenseEps;
-      const epsMaxDanger = licenseEps !== null && epsMax !== null && epsMax > licenseEps;
+      const epsPercent =
+        licenseEps !== null && licenseEps > 0 && epsCurrent !== null
+          ? (epsCurrent / licenseEps) * 100
+          : null;
+      const epsMaxPercent =
+        licenseEps !== null && licenseEps > 0 && epsMax !== null
+          ? (epsMax / licenseEps) * 100
+          : null;
+      const epsDanger = epsPercent !== null && epsPercent > 100;
+      const epsMaxDanger = epsMaxPercent !== null && epsMaxPercent > 100;
       const epsCurrentDisplay = formatCompact(environment.eps_current);
       const epsMaxDisplay = formatCompact(environment.eps_max);
       const licenseEpsDisplay = formatCompact(environment.license_eps);
@@ -254,7 +306,7 @@
         memory: environment.memory,
         storage: environment.storage
       };
-      const envStatus = getUsageStatus(consoleMetrics);
+      const usageStatus = getUsageStatus(consoleMetrics);
 
       const appliances = Array.isArray(environment.appliances) ? environment.appliances : [];
 
@@ -290,79 +342,114 @@
         }))
       ];
 
+      const epsStatus = getSeverityByPercent(epsPercent ?? null);
+      const epsMaxStatus = getSeverityByPercent(epsMaxPercent ?? null);
+      const overallStatus = combineStatuses([usageStatus, epsDanger ? 'critical' : epsStatus, epsMaxDanger ? 'critical' : epsMaxStatus, expirationStatus]);
+
+      const summaryMetrics = [
+        {
+          key: 'cpu',
+          label: 'CPU',
+          value: environment.cpu ?? '—',
+          percent: parseNumberValue(environment.cpu),
+          status: getSeverityByPercent(parseNumberValue(environment.cpu))
+        },
+        {
+          key: 'mem',
+          label: 'Mem',
+          value: environment.memory ?? '—',
+          percent: parseNumberValue(environment.memory),
+          status: getSeverityByPercent(parseNumberValue(environment.memory))
+        },
+        {
+          key: 'storage',
+          label: 'Storage',
+          value: environment.storage ?? '—',
+          percent: parseNumberValue(environment.storage),
+          status: getSeverityByPercent(parseNumberValue(environment.storage))
+        },
+        {
+          key: 'eps',
+          label: 'EPS',
+          value:
+            epsCurrentDisplay !== '—' && licenseEpsDisplay !== '—'
+              ? `${epsCurrentDisplay} / ${licenseEpsDisplay}`
+              : epsCurrentDisplay,
+          percent: epsPercent,
+          status: epsDanger ? 'critical' : epsStatus,
+          tooltip: epsMaxDisplay !== '—' ? `EPS Máx: ${epsMaxDisplay}` : ''
+        },
+        {
+          key: 'exp',
+          label: 'Exp',
+          value:
+            licenseExpList.length
+              ? licenseExpList.join(' • ')
+              : environment.license_exp ?? '—',
+          percent: null,
+          status: expirationStatus,
+          tooltip: expirationTooltip
+        }
+      ];
+
       return (
-        <div className={`env-card ${isOpen ? 'open' : ''}`}>
-          <div className="env-card-header">
-            <div className="env-card-top">
-              <div className="env-name">
-                <span className="status-icon">{STATUS_ICON[envStatus]}</span>
-                {environment.name ?? '—'}
+        <div className={`env-card status-${overallStatus} ${isOpen ? 'open' : ''}`}>
+          <button
+            type="button"
+            className="env-card-header"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+          >
+            <div className="env-header-main">
+              <div className="env-title">
+                <span className="status-icon">{STATUS_ICON[overallStatus]}</span>
+                <span className="env-name-text">{environment.name ?? '—'}</span>
               </div>
-              <button
-                type="button"
-                className="env-toggle"
-                onClick={onToggle}
-                aria-expanded={isOpen}
-              >
-                <span>{isOpen ? 'Recolher detalhes' : 'Expandir detalhes'}</span>
-                <span className="chevron">▼</span>
-              </button>
+              <div className="env-summary-line">
+                {summaryMetrics.map(metric => (
+                  <SummaryMetric
+                    key={metric.key}
+                    label={metric.label}
+                    value={metric.value}
+                    percent={metric.percent}
+                    status={metric.status}
+                    tooltip={metric.tooltip}
+                  />
+                ))}
+              </div>
             </div>
-            <div className="env-summary-line">
-              <SummaryItem
-                label="CPU"
-                value={environment.cpu ?? '—'}
-                status={getUsageStatus({ cpu: environment.cpu })}
-              />
-              <SummaryItem
-                label="Mem"
-                value={environment.memory ?? '—'}
-                status={getUsageStatus({ memory: environment.memory })}
-              />
-              <SummaryItem
-                label="Storage"
-                value={environment.storage ?? '—'}
-                status={getUsageStatus({ storage: environment.storage })}
-              />
-              <SummaryItem
-                label="EPS Atual"
-                value={environment.eps_current ?? epsSummaryDisplay}
-                status={epsDanger ? 'critical' : 'normal'}
-              />
-              <SummaryItem
-                label="EPS Máx"
-                value={environment.eps_max ?? epsMaxDisplay}
-                status={epsMaxDanger ? 'critical' : 'normal'}
-              />
-              <SummaryItem
-                label="Licença EPS"
-                value={environment.license_eps ?? licenseEpsDisplay}
-                status={epsDanger ? 'critical' : 'normal'}
-              />
-              <SummaryItem
-                label="Expiração"
-                value={licenseExpList.length ? licenseExpList.join(' • ') : environment.license_exp ?? '—'}
-                status={expirationStatus}
-                tooltip={expirationTooltip}
-              />
-            </div>
-          </div>
+            <span className={`env-toggle-icon ${isOpen ? 'open' : ''}`} aria-hidden="true">
+              ▼
+            </span>
+          </button>
           <div
             className="env-details"
             style={{ maxHeight: `${detailsHeight}px` }}
             aria-hidden={!isOpen}
           >
             <div ref={detailsRef} className="env-details-inner">
+              {licenseBreakdown.length ? (
+                <div className="license-breakdown">
+                  {licenseBreakdown.map((item, idx) => (
+                    <div className="license-item" key={`${environment.name || 'env'}-license-${idx}`}>
+                      <span className="license-kind">{item.kind ?? 'Licença'}</span>
+                      <span className="license-limit">{item.limit ?? '—'}</span>
+                      {item.expires ? <span className="license-exp">Exp: {item.expires}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {detailItems.length ? (
-                detailItems.map((item, idx) => (
-                  <ApplianceRow
-                    key={`${environment.name || 'env'}-appliance-${idx}`}
-                    name={item.name}
-                    metrics={item.metrics}
-                    isConsole={item.isConsole}
-                    branchSymbol={idx === detailItems.length - 1 ? '└──' : '├──'}
-                  />
-                ))
+                <div className="appliance-grid">
+                  {detailItems.map((item, idx) => (
+                    <ApplianceCard
+                      key={`${environment.name || 'env'}-appliance-${idx}`}
+                      name={item.name}
+                      metrics={item.metrics}
+                      isConsole={item.isConsole}
+                    />
+                  ))}
+                </div>
               ) : (
                 <div className="empty-appliances">Nenhum appliance adicional configurado.</div>
               )}
@@ -421,20 +508,45 @@
         });
       }, []);
 
+      useEffect(() => {
+        const subtitleEl = document.getElementById('dashboard-subtitle');
+        if (!subtitleEl) return;
+        const count = rows.length;
+        const countLabel = `${count} ambiente${count === 1 ? '' : 's'} monitorado${count === 1 ? '' : 's'}`;
+        const statusText = loading
+          ? 'sincronizando…'
+          : updatedAt
+          ? `última atualização: ${updatedAt}`
+          : 'aguardando dados…';
+        subtitleEl.textContent = `${countLabel} – ${statusText}`;
+      }, [rows.length, updatedAt, loading]);
+
       return (
         <div className="monitor-app">
           <div className="meta-row">
-            <div className="left">
-              <button className="btn secondary" type="button" onClick={loadData} disabled={loading}>
-                {loading ? 'Atualizando…' : 'Atualizar'}
+            <div className="meta-left">
+              <button
+                className={`refresh-button${loading ? ' is-spinning' : ''}`}
+                type="button"
+                onClick={loadData}
+                disabled={loading}
+                aria-label="Atualizar monitoramento"
+                title="Atualizar monitoramento"
+              >
+                <span aria-hidden="true">🔄</span>
               </button>
-              {loading ? <span className="small">Buscando dados em tempo real…</span> : null}
+              <div className="meta-description">
+                <span className="meta-title">Monitoramento em tempo real</span>
+                <span className="meta-subtitle">
+                  {loading ? 'Atualizando dados…' : 'Clique para sincronizar manualmente'}
+                </span>
+              </div>
             </div>
-            <div className="right">
-              {updatedAt ? <span className="small">Atualizado: {updatedAt}</span> : null}
+            <div className="meta-right">
+              {updatedAt ? <span className="meta-updated">Atualizado: {updatedAt}</span> : null}
             </div>
           </div>
-          <div className="row small">
+          <div className="monitor-tags">
             <span className="badge">CPU/Mem/Storage via Zabbix</span>
             <span className="badge warn">Licença via license.sh</span>
           </div>
