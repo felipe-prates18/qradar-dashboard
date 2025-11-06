@@ -161,3 +161,46 @@ def api_admin_create_user(request: Request, username: str = Form(...), password:
 def is_admin_user(username: str) -> bool:
     return is_admin(username)
 
+
+@auth_router.get("/me/password", response_class=HTMLResponse)
+def change_password_page(request: Request, user: str = Depends(verify_user_required_page)):
+    return templates.TemplateResponse(
+        "change_password.html",
+        {"request": request, "user": user},
+    )
+
+
+@auth_router.post("/me/password", response_class=HTMLResponse)
+def change_password_submit(
+    request: Request,
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+    user: str = Depends(verify_user_required_page),
+):
+    context = {"request": request, "user": user}
+
+    row = verify_credentials(user, current_password)
+    if not row:
+        context["error"] = "Senha atual incorreta."
+        return templates.TemplateResponse("change_password.html", context, status_code=400)
+
+    new_password = new_password.strip()
+    confirm_password = confirm_password.strip()
+
+    if new_password != confirm_password:
+        context["error"] = "A confirmação da senha não confere."
+        return templates.TemplateResponse("change_password.html", context, status_code=400)
+
+    if len(new_password) < 6:
+        context["error"] = "A nova senha deve ter pelo menos 6 caracteres."
+        return templates.TemplateResponse("change_password.html", context, status_code=400)
+
+    if _verify_password(new_password, row["password_hash"]):
+        context["error"] = "A nova senha deve ser diferente da senha atual."
+        return templates.TemplateResponse("change_password.html", context, status_code=400)
+
+    _update_password_hash(row["id"], hash_password(new_password))
+    context["success"] = "Senha alterada com sucesso."
+    return templates.TemplateResponse("change_password.html", context)
+
