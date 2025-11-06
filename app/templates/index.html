@@ -63,7 +63,7 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script type="text/babel">
     {% raw %}
-    const { useState, useEffect, useCallback } = React;
+    const { useState, useEffect, useCallback, useRef } = React;
 
     const DAY_MS = 24 * 60 * 60 * 1000;
     const STATUS_ICON = {
@@ -165,37 +165,46 @@
       return String(numeric);
     }
 
-    function MetricPill({ label, value, status, tooltip }) {
-      const classes = ['env-summary-metric'];
+    function SummaryItem({ label, value, status, tooltip }) {
+      const classes = ['summary-item'];
       if (status === 'critical') {
         classes.push('danger');
       } else if (status === 'warning') {
         classes.push('attention');
       }
+
       return (
-        <div className={classes.join(' ')} title={tooltip || ''}>
-          <strong>{label}</strong>
-          <span>{value ?? '—'}</span>
-        </div>
+        <span className={classes.join(' ')} title={tooltip || ''}>
+          <strong>{label}:</strong>
+          <span className="value">{value ?? '—'}</span>
+        </span>
       );
     }
 
-    function ApplianceRow({ name, metrics, isConsole }) {
+    function ApplianceRow({ name, metrics, isConsole, branchSymbol }) {
       const usageStatus = getUsageStatus(metrics);
+      const statusClass =
+        usageStatus === 'critical' ? 'danger' : usageStatus === 'warning' ? 'attention' : '';
+
       return (
         <div className="appliance-row">
+          <span className="appliance-branch" aria-hidden="true">{branchSymbol}</span>
           <div className="appliance-name">
             <span className="status-icon">{STATUS_ICON[usageStatus]}</span>
-            {isConsole ? `${name} (Console)` : name}
+            <span className="appliance-label">{name}</span>
+            {isConsole ? <span className="appliance-tag">Console</span> : null}
           </div>
-          <div className={`appliance-metric ${usageStatus === 'critical' ? 'danger' : usageStatus === 'warning' ? 'attention' : ''}`}>
-            <strong>CPU</strong> {metrics.cpu ?? '—'}
+          <div className={`appliance-metric ${statusClass}`}>
+            <strong>CPU</strong>
+            <span>{metrics.cpu ?? '—'}</span>
           </div>
-          <div className={`appliance-metric ${usageStatus === 'critical' ? 'danger' : usageStatus === 'warning' ? 'attention' : ''}`}>
-            <strong>Mem</strong> {metrics.memory ?? '—'}
+          <div className={`appliance-metric ${statusClass}`}>
+            <strong>Mem</strong>
+            <span>{metrics.memory ?? '—'}</span>
           </div>
-          <div className={`appliance-metric ${usageStatus === 'critical' ? 'danger' : usageStatus === 'warning' ? 'attention' : ''}`}>
-            <strong>Storage</strong> {metrics.storage ?? '—'}
+          <div className={`appliance-metric ${statusClass}`}>
+            <strong>Storage</strong>
+            <span>{metrics.storage ?? '—'}</span>
           </div>
         </div>
       );
@@ -249,6 +258,38 @@
 
       const appliances = Array.isArray(environment.appliances) ? environment.appliances : [];
 
+      const detailsRef = useRef(null);
+      const [detailsHeight, setDetailsHeight] = useState(0);
+
+      useEffect(() => {
+        const el = detailsRef.current;
+        if (!el) return;
+        if (isOpen) {
+          const frame = requestAnimationFrame(() => {
+            setDetailsHeight(el.scrollHeight);
+          });
+          return () => cancelAnimationFrame(frame);
+        }
+        setDetailsHeight(0);
+      }, [isOpen, appliances, environment.cpu, environment.memory, environment.storage]);
+
+      const detailItems = [
+        {
+          name: 'Console',
+          metrics: consoleMetrics,
+          isConsole: true
+        },
+        ...appliances.map(appliance => ({
+          name: appliance.name ?? appliance.zabbix_host ?? 'Appliance',
+          metrics: {
+            cpu: appliance.cpu,
+            memory: appliance.memory,
+            storage: appliance.storage
+          },
+          isConsole: false
+        }))
+      ];
+
       return (
         <div className={`env-card ${isOpen ? 'open' : ''}`}>
           <div className="env-card-header">
@@ -257,19 +298,48 @@
                 <span className="status-icon">{STATUS_ICON[envStatus]}</span>
                 {environment.name ?? '—'}
               </div>
-              <button type="button" className="env-toggle" onClick={onToggle}>
+              <button
+                type="button"
+                className="env-toggle"
+                onClick={onToggle}
+                aria-expanded={isOpen}
+              >
                 <span>{isOpen ? 'Recolher detalhes' : 'Expandir detalhes'}</span>
                 <span className="chevron">▼</span>
               </button>
             </div>
-            <div className="env-summary-grid">
-              <MetricPill label="CPU" value={environment.cpu ?? '—'} status={getUsageStatus({ cpu: environment.cpu })} />
-              <MetricPill label="Memória" value={environment.memory ?? '—'} status={getUsageStatus({ memory: environment.memory })} />
-              <MetricPill label="Storage" value={environment.storage ?? '—'} status={getUsageStatus({ storage: environment.storage })} />
-              <MetricPill label="EPS" value={epsSummaryDisplay} status={epsDanger ? 'critical' : 'normal'} />
-              <MetricPill label="EPS Máx" value={epsMaxDisplay} status={epsMaxDanger ? 'critical' : 'normal'} />
-              <MetricPill label="Licença EPS" value={licenseEpsDisplay} status={epsDanger ? 'critical' : 'normal'} />
-              <MetricPill
+            <div className="env-summary-line">
+              <SummaryItem
+                label="CPU"
+                value={environment.cpu ?? '—'}
+                status={getUsageStatus({ cpu: environment.cpu })}
+              />
+              <SummaryItem
+                label="Mem"
+                value={environment.memory ?? '—'}
+                status={getUsageStatus({ memory: environment.memory })}
+              />
+              <SummaryItem
+                label="Storage"
+                value={environment.storage ?? '—'}
+                status={getUsageStatus({ storage: environment.storage })}
+              />
+              <SummaryItem
+                label="EPS Atual"
+                value={environment.eps_current ?? epsSummaryDisplay}
+                status={epsDanger ? 'critical' : 'normal'}
+              />
+              <SummaryItem
+                label="EPS Máx"
+                value={environment.eps_max ?? epsMaxDisplay}
+                status={epsMaxDanger ? 'critical' : 'normal'}
+              />
+              <SummaryItem
+                label="Licença EPS"
+                value={environment.license_eps ?? licenseEpsDisplay}
+                status={epsDanger ? 'critical' : 'normal'}
+              />
+              <SummaryItem
                 label="Expiração"
                 value={licenseExpList.length ? licenseExpList.join(' • ') : environment.license_exp ?? '—'}
                 status={expirationStatus}
@@ -277,19 +347,20 @@
               />
             </div>
           </div>
-          <div className="env-details">
-            <div className="env-details-inner">
-              <ApplianceRow name={environment.name ?? 'Console'} metrics={consoleMetrics} isConsole />
-              {appliances.length ? (
-                appliances.map((appliance, idx) => (
+          <div
+            className="env-details"
+            style={{ maxHeight: `${detailsHeight}px` }}
+            aria-hidden={!isOpen}
+          >
+            <div ref={detailsRef} className="env-details-inner">
+              {detailItems.length ? (
+                detailItems.map((item, idx) => (
                   <ApplianceRow
                     key={`${environment.name || 'env'}-appliance-${idx}`}
-                    name={appliance.name ?? appliance.zabbix_host ?? 'Appliance'}
-                    metrics={{
-                      cpu: appliance.cpu,
-                      memory: appliance.memory,
-                      storage: appliance.storage
-                    }}
+                    name={item.name}
+                    metrics={item.metrics}
+                    isConsole={item.isConsole}
+                    branchSymbol={idx === detailItems.length - 1 ? '└──' : '├──'}
                   />
                 ))
               ) : (
