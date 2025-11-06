@@ -21,7 +21,6 @@
       "collector": "host",
       "ssh_user": "root",
       "ssh_key": "/opt/qradar-dashboard/keys/TAURUS.pem",
-      "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": []
@@ -32,7 +31,6 @@
       "collector": "10.10.15.140",
       "ssh_user": "root",
       "ssh_key": "/opt/qradar-dashboard/keys/ECAD.pem",
-      "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [
@@ -47,7 +45,6 @@
       "collector": "10.252.145.201",
       "ssh_user": "root",
       "ssh_key": "/opt/qradar-dashboard/keys/JBS.pem",
-      "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [
@@ -64,7 +61,6 @@
       "collector": "host",
       "ssh_user": "root",
       "ssh_key": "/opt/qradar-dashboard/keys/BRPARTNERS.pem",
-      "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [
@@ -77,7 +73,6 @@
       "collector": "host",
       "ssh_user": "root",
       "ssh_key": "/opt/qradar-dashboard/keys/ELDORADO.pem",
-      "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": []
@@ -88,7 +83,6 @@
       "collector": "host",
       "ssh_user": "root",
       "ssh_key": "/opt/qradar-dashboard/keys/ASPER.pem",
-      "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [
