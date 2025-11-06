@@ -61,6 +61,23 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
         name = env.get("name")
         metrics = zbx.get_metrics(hostname=name, items=items_conf, zabbix_host_override=env.get("zabbix_host_override"))
 
+        appliances_out = []
+        for appliance in env.get("appliances", []):
+            appliance_name = appliance.get("name") or appliance.get("hostname") or appliance.get("zabbix_host") or "—"
+            appliance_host_hint = appliance.get("hostname") or appliance.get("name") or appliance_name
+            appliance_override = appliance.get("zabbix_host") or appliance.get("zabbix_host_override")
+            appliance_metrics = zbx.get_metrics(
+                hostname=appliance_host_hint,
+                items=items_conf,
+                zabbix_host_override=appliance_override,
+            )
+            appliances_out.append({
+                "name": appliance_name,
+                "cpu": pct(appliance_metrics.get("cpu")),
+                "memory": pct(appliance_metrics.get("memory")),
+                "storage": pct(appliance_metrics.get("storage")),
+            })
+
         lic_eps, lic_exp = "Erro", "Erro"
         lic_exp_list, lic_breakdown = [], []
         try:
@@ -95,6 +112,7 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
             "license_exp": lic_exp,
             "license_exp_list": lic_exp_list,
             "license_breakdown": lic_breakdown,
+            "appliances": appliances_out,
         })
     return JSONResponse({"updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"), "rows": data})
 

@@ -23,7 +23,12 @@
       "ssh_key": "/opt/qradar-dashboard/keys/TAURUS.pem",
       "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
-      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor"
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        { "name": "App Host", "zabbix_host": "TAURUS-APP" },
+        { "name": "Collector", "zabbix_host": "TAURUS-COLLECTOR" },
+        { "name": "Data Node 1", "zabbix_host": "TAURUS-DN1" }
+      ]
     },
     {
       "name": "QRADAR ECAD CONSOLE",
@@ -33,7 +38,11 @@
       "ssh_key": "/opt/qradar-dashboard/keys/ECAD.pem",
       "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
-      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor"
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        { "name": "App Host", "zabbix_host": "ECAD-APP" },
+        { "name": "Collector", "zabbix_host": "ECAD-COLLECTOR" }
+      ]
     },
     {
       "name": "QRADAR ASPER CONSOLE",
@@ -43,7 +52,12 @@
       "ssh_key": "/opt/qradar-dashboard/keys/ASPER.pem",
       "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
-      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor"
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        { "name": "App Host", "zabbix_host": "ASPER-APP" },
+        { "name": "Data Node 1", "zabbix_host": "ASPER-DN1" },
+        { "name": "Data Node 2", "zabbix_host": "ASPER-DN2" }
+      ]
     }
   ]
 }
