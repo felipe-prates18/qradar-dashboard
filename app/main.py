@@ -1,4 +1,5 @@
 import json
+import secrets
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -25,7 +26,15 @@ with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
 
 app = FastAPI(title="QRadar Monitoring App")
-app.add_middleware(SessionMiddleware, secret_key=CONFIG.get("session_secret", "qradar-app-secret"), same_site="lax")
+session_secret = CONFIG.get("session_secret", "qradar-app-secret")
+runtime_secret = f"{session_secret}:{secrets.token_hex(16)}"
+SESSION_MAX_AGE_SECONDS = 12 * 60 * 60
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=runtime_secret,
+    same_site="lax",
+    max_age=SESSION_MAX_AGE_SECONDS,
+)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(auth_router)

@@ -1,5 +1,6 @@
 import re
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import APIRouter, Request, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -13,6 +14,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 auth_router = APIRouter()
 LEGACY_SHA256_REGEX = re.compile(r"^[0-9a-f]{64}$")
 BCRYPT_COST = 12
+SESSION_DURATION = timedelta(hours=12)
 
 
 class AuthenticationError(Exception):
@@ -95,10 +97,24 @@ def verify_credentials(username: str, password: str):
 
 def verify_user(request: Request):
     u = request.session.get("user")
-    if not u:
+    login_at = request.session.get("login_at")
+    if not u or not login_at:
+        request.session.clear()
+        return None
+    try:
+        login_dt = datetime.fromisoformat(login_at)
+        if login_dt.tzinfo is None:
+            login_dt = login_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        request.session.clear()
+        return None
+    now = datetime.now(timezone.utc)
+    if now - login_dt >= SESSION_DURATION:
+        request.session.clear()
         return None
     row = get_user(u)
     if not row or int(row["is_active"]) != 1:
+        request.session.clear()
         return None
     return row["username"]
 
@@ -128,6 +144,7 @@ def login_submit(request: Request, username: str = Form(...), password: str = Fo
     if not row:
         return templates.TemplateResponse("login.html", {"request": request, "error": "Usuário ou senha inválidos"}, status_code=401)
     request.session["user"] = row["username"]
+    request.session["login_at"] = datetime.now(timezone.utc).isoformat()
     return RedirectResponse(url="/", status_code=302)
 
 @auth_router.get("/logout")
