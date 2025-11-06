@@ -62,9 +62,9 @@
         { "name": "Data Node 02", "zabbix_host": "QRADAR ECAD DATA NODE 2" }
       ],
       "connectivity_targets": [
-        { "name": "Event Collector", "target": "QRADAR ECAD EVENT COLLECTOR" },
-        { "name": "Data Node 01", "target": "QRADAR ECAD DATA NODE" },
-        { "name": "Data Node 02", "target": "QRADAR ECAD DATA NODE 2" }
+        { "name": "Event Collector", "target": "10.10.15.140" },
+        { "name": "Data Node 01", "target": "172.31.1.139" },
+        { "name": "Data Node 02", "target": "172.31.1.186" }
       ]
     },
     {
@@ -83,11 +83,11 @@
         { "name": "Data Node 02", "zabbix_host": "QRADAR JBS DATA NODE 02" }
       ],
       "connectivity_targets": [
-        { "name": "Event Collector", "target": "JBS Qradar Event Collector" },
-        { "name": "Event Processor", "target": "QRADAR JBS EVENT PROCESSOR" },
-        { "name": "App Host", "target": "QRADAR JBS APPHOST" },
-        { "name": "Data Node 01", "target": "QRADAR JBS DATA NODE 01" },
-        { "name": "Data Node 02", "target": "QRADAR JBS DATA NODE 02" }
+        { "name": "Event Collector", "target": "10.252.145.201" },
+        { "name": "Event Processor", "target": "10.252.145.204" },
+        { "name": "App Host", "target": "10.252.145.202" },
+        { "name": "Data Node 01", "target": "10.252.145.205" },
+        { "name": "Data Node 02", "target": "10.252.145.206" }
       ]
     },
     {
@@ -102,7 +102,7 @@
         { "name": "App Host", "zabbix_host": "QRADAR BR PARTNERS APPHOST" }
       ],
       "connectivity_targets": [
-        { "name": "App Host", "target": "QRADAR BR PARTNERS APPHOST" }
+        { "name": "App Host", "target": "10.11.112.180" }
       ]
     },
     {
@@ -127,7 +127,7 @@
         { "name": "App Host", "zabbix_host": "asper-apphost" }
       ],
       "connectivity_targets": [
-        { "name": "App Host", "target": "asper-apphost" }
+        { "name": "App Host", "target": "172.31.1.251" }
       ]
     }
   ]
