@@ -24,11 +24,7 @@
       "scripts_remote_dir": "/opt/scripts",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
-      "appliances": [
-        { "name": "App Host", "zabbix_host": "TAURUS-APP" },
-        { "name": "Collector", "zabbix_host": "TAURUS-COLLECTOR" },
-        { "name": "Data Node 1", "zabbix_host": "TAURUS-DN1" }
-      ]
+      "appliances": []
     },
     {
       "name": "QRADAR ECAD CONSOLE",
@@ -40,9 +36,51 @@
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [
-        { "name": "App Host", "zabbix_host": "ECAD-APP" },
-        { "name": "Collector", "zabbix_host": "ECAD-COLLECTOR" }
+        { "name": "Event Collector", "zabbix_host": "QRADAR ECAD EVENT COLLECTOR" },
+        { "name": "Data Node 01", "zabbix_host": "QRADAR ECAD DATA NODE" },
+        { "name": "Data Node 02", "zabbix_host": "QRADAR ECAD DATA NODE 2" }
       ]
+    },
+    {
+      "name": "QRADAR JBS CONSOLE",
+      "host": "10.252.145.203",
+      "collector": "10.252.145.201",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/JBS.pem",
+      "scripts_remote_dir": "/opt/scripts",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        { "name": "Event Collector", "zabbix_host": "JBS Qradar Event Collector" },
+        { "name": "Event Processor", "zabbix_host": "QRADAR JBS EVENT PROCESSOR" },
+        { "name": "App Host", "zabbix_host": "QRADAR JBS APPHOST" },
+        { "name": "Data Node 01", "zabbix_host": "QRADAR JBS DATA NODE 01" },
+        { "name": "Data Node 02", "zabbix_host": "QRADAR JBS DATA NODE 02" }
+      ]
+    },
+    {
+      "name": "QRADAR BR PARTNERS",
+      "host": "10.11.112.179",
+      "collector": "host",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/BRPARTNERS.pem",
+      "scripts_remote_dir": "/opt/scripts",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        { "name": "App Host", "zabbix_host": "QRADAR BR PARTNERS APPHOST" }
+      ]
+    },
+    {
+      "name": "QRADAR ELDORADO CONSOLE",
+      "host": "10.254.193.100",
+      "collector": "host",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/ELDORADO.pem",
+      "scripts_remote_dir": "/opt/scripts",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": []
     },
     {
       "name": "QRADAR ASPER CONSOLE",
@@ -54,11 +92,8 @@
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [
-        { "name": "App Host", "zabbix_host": "ASPER-APP" },
-        { "name": "Data Node 1", "zabbix_host": "ASPER-DN1" },
-        { "name": "Data Node 2", "zabbix_host": "ASPER-DN2" }
+        { "name": "App Host", "zabbix_host": "asper-apphost" }
       ]
     }
   ]
 }
-
