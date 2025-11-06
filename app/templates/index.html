@@ -13,7 +13,7 @@
       <div class="brand">
         <img src="/static/logo-asper.png" alt="ASPER">
         <div class="title">
-          <h1>Monitoramento &amp; Execução</h1>
+          <h1>Monitoramento</h1>
           <div class="sub" id="dashboard-subtitle">Carregando status do monitoramento…</div>
         </div>
       </div>
@@ -27,37 +27,10 @@
       </div>
     </header>
 
-    <div class="tabs-mode">
-      <div class="tab active" data-mode="monitor">Monitoramento</div>
-      <div class="tab" data-mode="scripts">Execução de Scripts</div>
-    </div>
-
-    <section id="mode-monitor" class="card">
+    <section class="card">
       <div id="monitor-app-root"></div>
     </section>
-
-    <section id="mode-scripts" class="card" style="display:none">
-      <div class="empty-state">Selecione um script ao lado para executar.</div>
-    </section>
   </div>
-
-  <script>
-    const tabs = Array.from(document.querySelectorAll('.tab'));
-    const sections = {
-      monitor: document.getElementById('mode-monitor'),
-      scripts: document.getElementById('mode-scripts')
-    };
-    tabs.forEach(tab => {
-      tab.addEventListener('click', () => {
-        tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        Object.entries(sections).forEach(([mode, el]) => {
-          if (!el) return;
-          el.style.display = mode === tab.dataset.mode ? 'block' : 'none';
-        });
-      });
-    });
-  </script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>

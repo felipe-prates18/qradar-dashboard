@@ -43,7 +43,10 @@ def pct(v):
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, user: str = Depends(verify_user_required_page)):
-    return templates.TemplateResponse("index.html", {"request": request, "user": user, "title": "Monitoramento & Execução"})
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "user": user, "title": "Monitoramento"},
+    )
 
 @app.get("/api/clients")
 def get_clients(user: str = Depends(verify_user_required_api)):
