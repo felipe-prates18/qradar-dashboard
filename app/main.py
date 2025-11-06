@@ -126,14 +126,33 @@ def get_health(user: str = Depends(verify_user_required_api)):
     services = health_conf.get("services") or []
     ssh = SSHClient()
 
-    def _appliance_target(appliance):
-        if not isinstance(appliance, dict):
+    def _connectivity_target(entry):
+        if not entry:
             return None
-        for key in ("host", "hostname", "ip", "address", "management_ip"):
-            value = appliance.get(key)
-            if value:
-                return value
+        if isinstance(entry, str):
+            return entry
+        if isinstance(entry, dict):
+            for key in (
+                "target",
+                "host",
+                "hostname",
+                "ip",
+                "address",
+                "management_ip",
+            ):
+                value = entry.get(key)
+                if value:
+                    return value
         return None
+
+    def _connectivity_name(entry):
+        if not entry:
+            return "Appliance"
+        if isinstance(entry, str):
+            return entry or "Appliance"
+        if isinstance(entry, dict):
+            return entry.get("name") or entry.get("label") or entry.get("target") or "Appliance"
+        return "Appliance"
 
     rows = []
     for env in CONFIG.get("qradar_envs", []):
@@ -160,13 +179,13 @@ def get_health(user: str = Depends(verify_user_required_api)):
                     }
                     for service in services
                 ]
-            appliances = env.get("appliances") or []
-            if appliances:
-                for appliance in appliances:
+            targets = env.get("connectivity_targets") or []
+            if targets:
+                for target_entry in targets:
                     connectivity_result.append(
                         {
-                            "name": appliance.get("name") or "Appliance",
-                            "target": _appliance_target(appliance),
+                            "name": _connectivity_name(target_entry),
+                            "target": _connectivity_target(target_entry),
                             "reachable": False,
                             "latency_ms": None,
                             "packet_loss": None,

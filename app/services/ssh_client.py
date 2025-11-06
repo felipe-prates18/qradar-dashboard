@@ -347,8 +347,7 @@ class SSHClient:
                     pass
 
     def check_connectivity(self, env, client=None):
-        appliances = env.get("appliances") or []
-        connectivity_overrides = env.get("connectivity_targets") or env.get("connectivity") or []
+        targets = env.get("connectivity_targets") or []
 
         entries = []
 
@@ -360,29 +359,13 @@ class SSHClient:
                 return
             if isinstance(base, dict):
                 merged = dict(base)
+                if "target" not in merged:
+                    merged["target"] = self._resolve_appliance_target(merged)
                 entries.append(merged)
                 return
 
-        for appliance in appliances:
-            nested_targets = []
-            if isinstance(appliance, dict):
-                nested_targets = appliance.get("connectivity_targets") or appliance.get("connectivity") or []
-            if nested_targets:
-                for nested in nested_targets:
-                    merged = {}
-                    if isinstance(appliance, dict):
-                        merged.update(appliance)
-                    if isinstance(nested, dict):
-                        merged.update(nested)
-                    else:
-                        merged["target"] = nested
-                    _append_entry(merged)
-            else:
-                _append_entry(appliance)
-
-        if connectivity_overrides:
-            for item in connectivity_overrides:
-                _append_entry(item)
+        for item in targets:
+            _append_entry(item)
 
         if not entries:
             return []
@@ -396,27 +379,27 @@ class SSHClient:
                 logger.error(f"Falha ao conectar para verificação de conectividade: {exc}")
                 return [
                     {
-                        "name": appliance.get("name") or "Appliance",
-                        "target": self._resolve_appliance_target(appliance),
+                        "name": entry.get("name") or entry.get("label") or entry.get("target") or "Appliance",
+                        "target": entry.get("target") or self._resolve_appliance_target(entry),
                         "reachable": False,
                         "latency_ms": None,
                         "packet_loss": None,
                         "status": "error",
                         "error": str(exc),
                     }
-                    for appliance in appliances
+                    for entry in entries
                 ]
 
         try:
             results = []
             seen = set()
-            for appliance in entries:
-                target = self._resolve_appliance_target(appliance)
+            for entry in entries:
+                target = entry.get("target") or self._resolve_appliance_target(entry)
                 name = None
-                if isinstance(appliance, dict):
-                    name = appliance.get("name") or appliance.get("label")
-                if not name and isinstance(appliance, str):
-                    name = appliance
+                if isinstance(entry, dict):
+                    name = entry.get("name") or entry.get("label")
+                if not name and isinstance(entry, str):
+                    name = entry
                 name = name or target or "Appliance"
 
                 dedupe_key = (name.lower() if isinstance(name, str) else name, target)
@@ -480,15 +463,15 @@ class SSHClient:
             logger.error(f"Falha ao verificar conectividade: {exc}")
             return [
                 {
-                    "name": appliance.get("name") or "Appliance",
-                    "target": self._resolve_appliance_target(appliance),
+                    "name": entry.get("name") or entry.get("label") or entry.get("target") or "Appliance",
+                    "target": entry.get("target") or self._resolve_appliance_target(entry),
                     "reachable": False,
                     "latency_ms": None,
                     "packet_loss": None,
                     "status": "error",
                     "error": str(exc),
                 }
-                for appliance in appliances
+                for entry in entries
             ]
         finally:
             if close_client and client is not None:
