@@ -201,11 +201,12 @@ header {
 /* Login page */
 .login-body {
   min-height: 100vh;
+  min-height: 100svh;
   margin: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(32px, 6vw, 64px) clamp(16px, 5vw, 40px);
+  padding: clamp(24px, 4vh, 48px) clamp(16px, 5vw, 40px);
   background: radial-gradient(circle at top left, #07342a 0%, #021b16 68%);
   position: relative;
   overflow: hidden;
@@ -233,7 +234,7 @@ header {
   background: rgba(46, 232, 171, 0.12);
   filter: blur(160px);
   border-radius: 50%;
-  top: 48%;
+  top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
   animation: login-pulse 16s ease-in-out infinite;
@@ -246,7 +247,9 @@ header {
   z-index: 1;
   width: min(720px, 100%);
   display: flex;
+  align-items: center;
   justify-content: center;
+  min-height: 100%;
 }
 
 .login-card {
@@ -271,7 +274,7 @@ header {
 }
 
 .login-logo img {
-  width: clamp(64px, 12vw, 84px);
+  width: clamp(84px, 14vw, 116px);
   filter: drop-shadow(0 8px 22px rgba(56, 232, 174, 0.35));
 }
 
