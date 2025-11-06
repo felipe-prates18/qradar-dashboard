@@ -38,24 +38,7 @@
       </div>
       <div class="hr"></div>
       <div class="row small"><span class="badge b-ok">CPU/Mem/Store via Zabbix</span><span class="badge b-warn">Licença via license.sh</span></div>
-      <div style="margin-top:10px; overflow:auto">
-        <table id="tbl">
-          <thead>
-            <tr>
-              <th class="icon-col"></th>
-              <th>Ambiente</th>
-              <th>CPU (%)</th>
-              <th>Memória (%)</th>
-              <th>Storage /store (%)</th>
-              <th>EPS Atual</th>
-              <th>EPS Máx</th>
-              <th>Licença EPS</th>
-              <th>Expiração</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
+      <div class="accordion" id="env-accordion"></div>
     </section>
 
 <script>
@@ -142,13 +125,22 @@ function getExpirationClass(expirations) {
   return '';
 }
 
+function formatApplianceMetrics(appliance) {
+  const metrics = [
+    `CPU ${appliance.cpu ?? '—'}`,
+    `Mem ${appliance.memory ?? '—'}`,
+    `Storage ${appliance.storage ?? '—'}`,
+  ];
+  return metrics.join(' | ');
+}
+
 async function loadMonitor(){
   const r = await fetch('/api/monitor');
   if(!r.ok) return;
   const j = await r.json();
   const rows = j.rows || [];
-  const tbody = document.querySelector('#tbl tbody');
-  tbody.innerHTML = rows.map(d=>{
+  const accordion = document.getElementById('env-accordion');
+  accordion.innerHTML = rows.map(d=>{
     const expList = Array.isArray(d.license_exp_list) ? d.license_exp_list.filter(Boolean) : [];
     const breakdown = Array.isArray(d.license_breakdown) ? d.license_breakdown : [];
     const expDisplay = expList.length ? expList.join(' • ') : (d.license_exp ?? '—');
@@ -178,18 +170,52 @@ async function loadMonitor(){
     } else if (expirationClass === 'cell-warn') {
       iconHtml = '<span class="warning-icon" title="Licença expira em menos de 30 dias">⚠️</span>';
     }
-    return `<tr>
-      <td class="icon-cell">${iconHtml}</td>
-      <td>${d.name}</td>
-      <td>${d.cpu ?? '—'}</td>
-      <td>${d.memory ?? '—'}</td>
-      <td>${d.storage ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.eps_current ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.eps_max ?? '—'}</td>
-      <td${warnEps ? ' class="cell-danger"' : ''}>${d.license_eps ?? '—'}</td>
-      <td${expirationClass ? ` class="${expirationClass}"` : ''}>${expCell}</td>
-    </tr>`;
+    const summaryPieces = [
+      `CPU: ${d.cpu ?? '—'}`,
+      `Mem: ${d.memory ?? '—'}`,
+      `Storage: ${d.storage ?? '—'}`,
+      `EPS Atual: ${d.eps_current ?? '—'}`,
+      `EPS Máx: ${d.eps_max ?? '—'}`,
+      `Licença EPS: ${d.license_eps ?? '—'}`,
+      `Expiração: ${expCell}`
+    ];
+    const appliances = Array.isArray(d.appliances) ? d.appliances : [];
+    const applianceList = appliances.length
+      ? `<ul class="appliance-tree">${appliances.map((appliance, idx) => {
+          const isLast = idx === appliances.length - 1;
+          return `<li class="${isLast ? 'last' : ''}">
+            <span class="appliance-name">${appliance.name ?? '—'}</span>
+            <span class="appliance-metrics">${formatApplianceMetrics(appliance)}</span>
+          </li>`;
+        }).join('')}</ul>`
+      : '<div class="empty-appliances">Nenhum appliance adicional configurado.</div>';
+    const epsDangerClass = warnEps ? 'text-danger' : '';
+    const expirationClassText = expirationClass === 'cell-danger' ? 'text-danger' : expirationClass === 'cell-warn' ? 'text-warn' : '';
+    return `<div class="accordion-item">
+      <button class="accordion-header" type="button">
+        <span class="chevron" aria-hidden="true">▶</span>
+        <div class="accordion-main">
+          <div class="accordion-title">${d.name ?? '—'}</div>
+          <div class="accordion-summary ${epsDangerClass} ${expirationClassText}">${summaryPieces.join(' | ')}</div>
+        </div>
+        <div class="accordion-status">[Expandir detalhes]</div>
+        <div class="accordion-icon">${iconHtml}</div>
+      </button>
+      <div class="accordion-panel">
+        ${applianceList}
+      </div>
+    </div>`;
   }).join('');
+  Array.from(document.querySelectorAll('.accordion-header')).forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = btn.closest('.accordion-item');
+      const status = btn.querySelector('.accordion-status');
+      const chevron = btn.querySelector('.chevron');
+      const isOpen = item.classList.toggle('open');
+      if (status) status.textContent = isOpen ? '[Recolher detalhes]' : '[Expandir detalhes]';
+      if (chevron) chevron.textContent = isOpen ? '▼' : '▶';
+    });
+  });
   document.getElementById('last-ts').textContent = 'Atualizado: '+(j.updated_at||new Date().toLocaleString());
 }
 
