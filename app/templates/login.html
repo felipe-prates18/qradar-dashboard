@@ -2,26 +2,97 @@
 <html lang="pt-br">
 <head>
   <meta charset="utf-8">
-  <title>Login • QRadar Dashboard</title>
+  <title>Login • ASPER QRadar Monitoring</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-  <div class="wrap">
-    <header>
-      <div class="brand">
-        <img src="/static/logo-asper.png" alt="ASPER">
-        <div class="title"><h1>QRadar Dashboard</h1><div class="sub">Autenticação</div></div>
-      </div>
-    </header>
+<body class="login-body">
+  <div class="auth-ambient">
+    <div class="login-wrapper">
+      <div class="login-card">
+        <header class="login-header">
+          <div class="login-logo">
+            <img src="/static/logo-asper.png" alt="ASPER">
+          </div>
+          <h1 class="login-title">ASPER QRadar Monitoring</h1>
+          <p class="login-subtitle">Engineered for Digital Protection.</p>
+        </header>
 
-    <div class="card">
-      <form method="post" action="/login" class="row">
-        <input type="text" name="username" placeholder="Usuário" required>
-        <input type="password" name="password" placeholder="Senha" required>
-        <button class="btn">Entrar</button>
-      </form>
-      <div class="small" style="margin-top:8px">Defina usuário/senha iniciais em <code>config.json</code>.</div>
+        <form method="post" action="/login" class="login-form" id="loginForm">
+          <div class="field">
+            <label class="field-label" for="username">Usuário</label>
+            <div class="field-control">
+              <span class="field-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z" />
+                  <path d="M3.5 21a8.5 8.5 0 0 1 17 0" stroke-linecap="round" />
+                </svg>
+              </span>
+              <input type="text" id="username" name="username" placeholder="Informe seu usuário" required autocomplete="username">
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="password">Senha</label>
+            <div class="field-control">
+              <span class="field-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M6 9a6 6 0 1 1 12 0v3" stroke-linecap="round" />
+                  <rect x="4" y="11" width="16" height="11" rx="3" />
+                  <path d="M12 16v2" stroke-linecap="round" />
+                </svg>
+              </span>
+              <input type="password" id="password" name="password" placeholder="Digite sua senha" required autocomplete="current-password">
+              <button type="button" class="toggle-password" aria-label="Mostrar senha">
+                <svg class="eye eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z" />
+                  <circle cx="12" cy="12" r="2.8" />
+                </svg>
+                <svg class="eye eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="m3 3 18 18" stroke-linecap="round" />
+                  <path d="M9.5 9.8A2.8 2.8 0 0 1 12 9c1.54 0 2.8 1.26 2.8 2.8 0 .87-.4 1.65-1 2.17" stroke-linecap="round" />
+                  <path d="M5 6.5C6.9 5.1 9.2 4 12 4c6 0 9.5 8 9.5 8a17.4 17.4 0 0 1-2.5 3.7" stroke-linecap="round" />
+                  <path d="M7.7 13.5C6 12.4 4.8 11 3.5 9" stroke-linecap="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <button class="login-btn" id="submitButton" type="submit">
+            <span class="btn-content">Entrar</span>
+            <span class="btn-spinner" aria-hidden="true"></span>
+          </button>
+        </form>
+
+        <p class="login-note">ℹ️ Usuário e senha iniciais definidos em <code>config.json</code></p>
+      </div>
     </div>
   </div>
+
+  <script>
+    const passwordInput = document.getElementById('password');
+    const togglePasswordBtn = document.querySelector('.toggle-password');
+    const loginForm = document.getElementById('loginForm');
+    const submitButton = document.getElementById('submitButton');
+    const btnContent = submitButton.querySelector('.btn-content');
+    const btnSpinner = submitButton.querySelector('.btn-spinner');
+
+    if (togglePasswordBtn && passwordInput) {
+      togglePasswordBtn.addEventListener('click', () => {
+        const isPassword = passwordInput.getAttribute('type') === 'password';
+        passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
+        togglePasswordBtn.classList.toggle('showing', isPassword);
+        togglePasswordBtn.setAttribute('aria-label', isPassword ? 'Ocultar senha' : 'Mostrar senha');
+        passwordInput.focus();
+      });
+    }
+
+    if (loginForm) {
+      loginForm.addEventListener('submit', () => {
+        submitButton.disabled = true;
+        btnContent.textContent = 'Entrando...';
+        btnSpinner.classList.add('active');
+      });
+    }
+  </script>
 </body>
 </html>

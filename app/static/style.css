@@ -198,6 +198,324 @@ header {
   gap: 22px;
 }
 
+/* Login page */
+.login-body {
+  min-height: 100vh;
+  background: radial-gradient(circle at top left, #07342a, #021b16 70%);
+}
+
+.login-body .auth-ambient {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 18px;
+  background: linear-gradient(135deg, rgba(0, 29, 20, 0.8), rgba(0, 33, 25, 0.6));
+  overflow: hidden;
+}
+
+.login-body .auth-ambient::before {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  background: radial-gradient(circle at top left, rgba(10, 80, 60, 0.45), transparent 55%),
+              radial-gradient(circle at 80% 20%, rgba(0, 120, 80, 0.3), transparent 45%),
+              radial-gradient(circle at 20% 80%, rgba(0, 90, 60, 0.25), transparent 48%);
+  filter: blur(0px);
+  opacity: 0.9;
+  animation: ambient-glow 22s ease-in-out infinite alternate;
+  z-index: 0;
+}
+
+.login-body .auth-ambient::after {
+  content: "";
+  position: absolute;
+  width: 420px;
+  height: 420px;
+  background: rgba(33, 209, 144, 0.08);
+  filter: blur(150px);
+  border-radius: 50%;
+  top: 32%;
+  left: 36%;
+  transform: translate(-50%, -50%);
+  animation: pulse 18s ease-in-out infinite;
+  z-index: 0;
+}
+
+.login-wrapper {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.login-card {
+  width: min(90%, 520px);
+  background: rgba(11, 33, 28, 0.82);
+  border-radius: 28px;
+  padding: clamp(28px, 4vw, 42px);
+  border: 1px solid rgba(40, 140, 110, 0.22);
+  box-shadow: 0 38px 70px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(18px);
+  position: relative;
+}
+
+.login-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: clamp(24px, 4vw, 38px);
+}
+
+.login-logo img {
+  width: clamp(52px, 8vw, 72px);
+  filter: drop-shadow(0 6px 18px rgba(33, 209, 144, 0.28));
+}
+
+.login-title {
+  margin: 0;
+  color: #55f6c8;
+  font-size: clamp(1.4rem, 2.2vw, 1.8rem);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.login-subtitle {
+  margin: 0;
+  color: rgba(197, 229, 219, 0.7);
+  font-size: clamp(0.9rem, 1.5vw, 1rem);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(16px, 3vw, 22px);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field-label {
+  font-size: 0.88rem;
+  color: rgba(200, 236, 224, 0.72);
+  letter-spacing: 0.02em;
+}
+
+.field-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: #102923;
+  border-radius: 16px;
+  border: 1px solid rgba(33, 209, 144, 0.12);
+  transition: border 0.24s ease, box-shadow 0.24s ease;
+}
+
+.field-control:focus-within {
+  border-color: rgba(72, 255, 187, 0.5);
+  box-shadow: 0 0 0 3px rgba(67, 217, 146, 0.25);
+}
+
+.field-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 100%;
+  color: rgba(118, 212, 182, 0.62);
+}
+
+.field-control input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #d8fff0;
+  padding: 14px 48px 14px 0;
+  font-size: 1rem;
+  line-height: 1.4;
+  outline: none;
+  border-radius: 16px;
+  transition: color 0.24s ease;
+}
+
+.field-control input::placeholder {
+  color: rgba(165, 233, 207, 0.35);
+  transition: opacity 0.3s ease;
+}
+
+.field-control input:focus::placeholder {
+  opacity: 0.3;
+}
+
+.toggle-password {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(23, 64, 52, 0.72);
+  border: 1px solid rgba(80, 230, 174, 0.15);
+  color: rgba(183, 243, 217, 0.76);
+  border-radius: 12px;
+  padding: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.toggle-password:hover,
+.toggle-password.showing {
+  background: rgba(41, 138, 108, 0.35);
+  border-color: rgba(67, 217, 146, 0.35);
+  color: rgba(217, 255, 238, 0.92);
+}
+
+.toggle-password .eye {
+  width: 22px;
+  height: 22px;
+  display: none;
+}
+
+.toggle-password .eye-open {
+  display: block;
+}
+
+.toggle-password.showing .eye-open {
+  display: none;
+}
+
+.toggle-password.showing .eye-closed {
+  display: block;
+}
+
+.login-btn {
+  background: linear-gradient(135deg, #4ade80, #10b981);
+  color: #012117;
+  border: none;
+  border-radius: 16px;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 14px 20px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow: 0 18px 30px rgba(16, 185, 129, 0.25);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+}
+
+.login-btn:hover:not([disabled]) {
+  transform: translateY(-1px) scale(1.03);
+  box-shadow: 0 26px 40px rgba(47, 231, 157, 0.32);
+  filter: brightness(1.03);
+}
+
+.login-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.8;
+  transform: none;
+  box-shadow: 0 16px 24px rgba(16, 185, 129, 0.18);
+}
+
+.btn-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(2, 40, 30, 0.18);
+  border-top-color: rgba(2, 40, 30, 0.8);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.btn-spinner.active {
+  opacity: 1;
+  transform: scale(1);
+  animation: spin 0.75s linear infinite;
+}
+
+.login-note {
+  margin-top: clamp(20px, 3vw, 30px);
+  text-align: right;
+  font-size: 0.78rem;
+  color: rgba(196, 226, 217, 0.6);
+  letter-spacing: 0.015em;
+}
+
+.login-note code {
+  background: rgba(16, 72, 56, 0.4);
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: rgba(176, 244, 218, 0.82);
+}
+
+@media (min-width: 1024px) {
+  .login-card {
+    width: min(640px, 40vw);
+  }
+
+  .login-title {
+    font-size: 2rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-body .auth-ambient {
+    padding: 20px 14px;
+  }
+
+  .field-control input {
+    padding-right: 56px;
+  }
+
+  .login-note {
+    text-align: center;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: scale(1) rotate(0deg);
+  }
+  to {
+    transform: scale(1) rotate(360deg);
+  }
+}
+
+@keyframes ambient-glow {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  100% {
+    transform: rotate(8deg) scale(1.1);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 0.6;
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0.6;
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+}
+
 .monitor-app .meta-row {
   display: flex;
   flex-wrap: wrap;
