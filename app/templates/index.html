@@ -13,7 +13,13 @@
       <div class="brand">
         <img src="/static/logo-asper.png" alt="ASPER">
         <div class="title">
-          <h1>Monitoramento</h1>
+          <div class="title-row">
+            <h1 id="dashboard-title">Monitoramento</h1>
+            <div class="module-tabs" id="module-tabs" role="tablist" aria-label="Seções do dashboard">
+              <button type="button" class="tab-button is-active" data-tab="monitor" role="tab" aria-selected="true">Monitoramento</button>
+              <button type="button" class="tab-button" data-tab="health" role="tab" aria-selected="false">Health Check</button>
+            </div>
+          </div>
           <div class="sub" id="dashboard-subtitle">Carregando status do monitoramento…</div>
         </div>
       </div>
@@ -192,6 +198,118 @@
         if (!(current in STATUS_RANK)) return worst;
         return STATUS_RANK[current] > STATUS_RANK[worst] ? current : worst;
       }, 'normal');
+    }
+
+    const SERVICE_STATUS_LABELS = {
+      active: 'Ativo',
+      inactive: 'Inativo',
+      failed: 'Falhou',
+      activating: 'Ativando',
+      deactivating: 'Desativando',
+      reloading: 'Recarregando',
+      maintenance: 'Manutenção',
+      unknown: 'Desconhecido',
+      error: 'Erro',
+    };
+
+    const SERVICE_SUBSTATE_LABELS = {
+      running: 'Em execução',
+      exited: 'Finalizado',
+      dead: 'Parado',
+      listening: 'Ouvindo',
+      auto_restart: 'Auto reiniciando',
+      reload: 'Recarregando',
+    };
+
+    const ENABLED_STATUS_LABELS = {
+      enabled: 'Habilitado',
+      disabled: 'Desabilitado',
+      static: 'Estático',
+      masked: 'Mascarado',
+      indirect: 'Indireto',
+      transient: 'Transitório',
+      generated: 'Gerado',
+      bad: 'Inválido',
+      unknown: 'Desconhecido',
+    };
+
+    const DEFAULT_HEALTH_SETTINGS = {
+      latency_warning_ms: 150,
+      latency_critical_ms: 300,
+      packet_loss_warning: 5,
+    };
+
+    function getServiceSeverity(service) {
+      const status = (service && service.status ? String(service.status) : '').toLowerCase();
+      if (!status) return service && service.error ? 'critical' : 'warning';
+      if (status === 'error') return 'critical';
+      if (status === 'active') return 'normal';
+      if (status === 'reloading' || status === 'activating') return 'warning';
+      if (status === 'deactivating') return 'warning';
+      if (status === 'unknown') return service && service.error ? 'critical' : 'warning';
+      return 'critical';
+    }
+
+    function getServiceStatusLabel(service) {
+      const statusKey = (service && service.status ? String(service.status) : '').toLowerCase();
+      const baseLabel = SERVICE_STATUS_LABELS[statusKey] || (service && service.status ? service.status : 'Desconhecido');
+      const subKey = (service && service.sub_state ? String(service.sub_state) : '').toLowerCase();
+      if (!subKey) return baseLabel;
+      const subLabel = SERVICE_SUBSTATE_LABELS[subKey] || (service ? service.sub_state : '');
+      if (!subLabel || subLabel.toLowerCase() === baseLabel.toLowerCase()) return baseLabel;
+      return `${baseLabel} (${subLabel})`;
+    }
+
+    function formatEnabledState(value) {
+      if (!value) return null;
+      const normalized = String(value).toLowerCase();
+      return ENABLED_STATUS_LABELS[normalized] || value;
+    }
+
+    function formatLatency(latency) {
+      if (latency === null || latency === undefined) return '—';
+      const numeric = Number(latency);
+      if (!Number.isFinite(numeric)) return '—';
+      if (numeric >= 1000) return `${Math.round(numeric)} ms`;
+      if (numeric >= 100) return `${numeric.toFixed(1)} ms`;
+      return `${numeric.toFixed(1).replace(/\.0$/, '')} ms`;
+    }
+
+    function formatPacketLoss(value) {
+      if (value === null || value === undefined) return '—';
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return '—';
+      return `${numeric % 1 === 0 ? numeric : numeric.toFixed(1)}%`;
+    }
+
+    function getConnectivitySeverity(item, settings) {
+      if (!item) return 'warning';
+      if (item.status === 'error') return 'critical';
+      if (item.status === 'unknown' && !item.reachable) return 'warning';
+      if (item.reachable === false) return 'critical';
+      const latency = Number(item.latency_ms);
+      const loss = Number(item.packet_loss);
+      const warnLatency = Number((settings && settings.latency_warning_ms) !== undefined ? settings.latency_warning_ms : DEFAULT_HEALTH_SETTINGS.latency_warning_ms);
+      const criticalLatency = Number((settings && settings.latency_critical_ms) !== undefined ? settings.latency_critical_ms : DEFAULT_HEALTH_SETTINGS.latency_critical_ms);
+      const warnLoss = Number((settings && settings.packet_loss_warning) !== undefined ? settings.packet_loss_warning : DEFAULT_HEALTH_SETTINGS.packet_loss_warning);
+
+      if (Number.isFinite(latency)) {
+        if (Number.isFinite(criticalLatency) && latency >= criticalLatency) return 'critical';
+        if (Number.isFinite(warnLatency) && latency >= warnLatency) return 'warning';
+      }
+      if (Number.isFinite(loss)) {
+        if (loss >= 100) return 'critical';
+        if (Number.isFinite(warnLoss) && loss >= warnLoss) return 'warning';
+      }
+      return 'normal';
+    }
+
+    function getConnectivityStatusLabel(item) {
+      if (!item) return 'Desconhecido';
+      if (item.status === 'error') return 'Erro';
+      if (item.reachable === false) return 'Sem resposta';
+      if (item.status === 'unknown') return 'Desconhecido';
+      return 'Conectado';
     }
 
     function SummaryMetric({ label, value, percent, status = 'neutral', tooltip }) {
@@ -493,6 +611,234 @@
       );
     }
 
+    function ServiceStatusItem({ item }) {
+      const severity = getServiceSeverity(item);
+      const statusLabel = getServiceStatusLabel(item);
+      const enabledLabel = formatEnabledState(item && item.enabled);
+      const subKey = item && item.sub_state ? String(item.sub_state).toLowerCase() : '';
+      const subLabel = subKey ? SERVICE_SUBSTATE_LABELS[subKey] || item.sub_state : '';
+      const description = item && item.description ? item.description : '';
+      const errorMessage = item && item.error ? item.error : '';
+
+      const metaItems = [];
+      if (enabledLabel) {
+        metaItems.push(`Estado: ${enabledLabel}`);
+      }
+      if (subLabel) {
+        metaItems.push(`Subestado: ${subLabel}`);
+      }
+
+      return (
+        <div className={`health-item service-item is-${severity}`}>
+          <div className="health-item-header">
+            <span className="health-item-name">{item && item.name ? item.name : 'Serviço'}</span>
+            <span className={`status-pill is-${severity}`}>{statusLabel}</span>
+          </div>
+          {description ? <div className="health-item-description">{description}</div> : null}
+          {metaItems.length ? (
+            <div className="health-item-meta">
+              {metaItems.map((meta, idx) => (
+                <span key={`service-meta-${idx}`}>{meta}</span>
+              ))}
+            </div>
+          ) : null}
+          {errorMessage ? <div className="health-item-error">{errorMessage}</div> : null}
+        </div>
+      );
+    }
+
+    function ConnectivityItem({ item, settings }) {
+      const severity = getConnectivitySeverity(item, settings);
+      const statusLabel = getConnectivityStatusLabel(item);
+      const latencyLabel = formatLatency(item ? item.latency_ms : null);
+      const lossLabel = formatPacketLoss(item ? item.packet_loss : null);
+      const errorMessage = item && item.error ? item.error : '';
+      const target = item && item.target ? item.target : '—';
+
+      return (
+        <div className={`health-item connectivity-item is-${severity}`}>
+          <div className="health-item-header">
+            <span className="health-item-name">{item && (item.name || item.target) ? (item.name || item.target) : 'Appliance'}</span>
+            <span className={`status-pill is-${severity}`}>{statusLabel}</span>
+          </div>
+          <div className="health-item-meta">
+            <span>Destino: {target || '—'}</span>
+            <span>Latência: {latencyLabel}</span>
+            <span>Perda: {lossLabel}</span>
+          </div>
+          {errorMessage ? <div className="health-item-error">{errorMessage}</div> : null}
+        </div>
+      );
+    }
+
+    function HealthEnvironmentCard({ environment, settings, isOpen, onToggle }) {
+      const detailsRef = useRef(null);
+      const [detailsHeight, setDetailsHeight] = useState(0);
+
+      useEffect(() => {
+        const el = detailsRef.current;
+        if (!el) {
+          setDetailsHeight(0);
+          return;
+        }
+        if (!isOpen) {
+          setDetailsHeight(0);
+          return;
+        }
+        setDetailsHeight(el.scrollHeight + 24);
+      }, [isOpen, environment]);
+
+      const services = Array.isArray(environment && environment.services) ? environment.services : [];
+      const connectivity = Array.isArray(environment && environment.connectivity) ? environment.connectivity : [];
+      const errorMessages = Array.isArray(environment && environment.errors)
+        ? environment.errors.filter(Boolean)
+        : [];
+
+      const serviceSeverities = services.map(getServiceSeverity);
+      const connectivitySeverities = connectivity.map(item => getConnectivitySeverity(item, settings));
+      const statusesForOverall = [...serviceSeverities, ...connectivitySeverities];
+      if (errorMessages.length) {
+        statusesForOverall.push('critical');
+      }
+      const overallStatus = combineStatuses(statusesForOverall);
+
+      const totalServices = services.length;
+      const serviceCritical = serviceSeverities.filter(status => status === 'critical').length;
+      const serviceWarning = serviceSeverities.filter(status => status === 'warning').length;
+      const serviceHealthy = totalServices - serviceCritical - serviceWarning;
+      const serviceSummaryStatus = serviceCritical > 0 ? 'critical' : serviceWarning > 0 ? 'warning' : 'normal';
+      const serviceSummaryValue = totalServices ? `${serviceHealthy}/${totalServices} OK` : 'Sem serviços';
+
+      const totalLinks = connectivity.length;
+      const linkCritical = connectivitySeverities.filter(status => status === 'critical').length;
+      const linkWarning = connectivitySeverities.filter(status => status === 'warning').length;
+      const linkHealthy = totalLinks - linkCritical - linkWarning;
+      const linkSummaryStatus = linkCritical > 0 ? 'critical' : linkWarning > 0 ? 'warning' : 'normal';
+      const linkSummaryValue = totalLinks ? `${linkHealthy}/${totalLinks} estáveis` : 'Sem links';
+
+      let maxLatency = null;
+      connectivity.forEach(item => {
+        const latency = Number(item && item.latency_ms);
+        if (Number.isFinite(latency)) {
+          if (maxLatency === null || latency > maxLatency) {
+            maxLatency = latency;
+          }
+        }
+      });
+
+      const warnLatency = Number((settings && settings.latency_warning_ms) !== undefined ? settings.latency_warning_ms : DEFAULT_HEALTH_SETTINGS.latency_warning_ms);
+      const criticalLatency = Number((settings && settings.latency_critical_ms) !== undefined ? settings.latency_critical_ms : DEFAULT_HEALTH_SETTINGS.latency_critical_ms);
+      let latencyStatus = 'normal';
+      if (maxLatency !== null) {
+        if (Number.isFinite(criticalLatency) && maxLatency >= criticalLatency) {
+          latencyStatus = 'critical';
+        } else if (Number.isFinite(warnLatency) && maxLatency >= warnLatency) {
+          latencyStatus = 'warning';
+        }
+      }
+
+      const summaryMetrics = [
+        {
+          key: 'services',
+          label: 'Serviços',
+          value: serviceSummaryValue,
+          percent: null,
+          status: serviceSummaryStatus,
+          tooltip: `${serviceHealthy} de ${totalServices} com status estável`,
+        },
+        {
+          key: 'links',
+          label: 'Conectividade',
+          value: linkSummaryValue,
+          percent: null,
+          status: linkSummaryStatus,
+          tooltip: `${linkHealthy} de ${totalLinks} destinos respondendo dentro do esperado`,
+        },
+        {
+          key: 'latency',
+          label: 'Maior latência',
+          value: maxLatency !== null ? formatLatency(maxLatency) : '—',
+          percent: null,
+          status: latencyStatus,
+          tooltip: maxLatency !== null ? `Latência máxima observada: ${formatLatency(maxLatency)}` : undefined,
+        },
+      ];
+
+      return (
+        <div className={`env-card health-card status-${overallStatus} ${isOpen ? 'open' : ''}`}>
+          <button
+            type="button"
+            className="env-card-header"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+          >
+            <div className="env-header-main">
+              <div className="env-title">
+                <span className="status-icon">{STATUS_ICON[overallStatus]}</span>
+                <span className="env-name-text">{environment && environment.name ? environment.name : '—'}</span>
+              </div>
+              <div className="env-summary-line">
+                {summaryMetrics.map(metric => (
+                  <SummaryMetric
+                    key={`health-${metric.key}`}
+                    label={metric.label}
+                    value={metric.value}
+                    percent={metric.percent}
+                    status={metric.status}
+                    tooltip={metric.tooltip}
+                  />
+                ))}
+              </div>
+            </div>
+            <span className={`env-toggle-icon ${isOpen ? 'open' : ''}`} aria-hidden="true">
+              ▼
+            </span>
+          </button>
+          <div
+            className="env-details"
+            style={{ maxHeight: `${detailsHeight}px` }}
+            aria-hidden={!isOpen}
+          >
+            <div ref={detailsRef} className="env-details-inner">
+              {errorMessages.length ? (
+                <div className="health-alert">
+                  {errorMessages.map((msg, idx) => (
+                    <div key={`health-error-${idx}`}>{msg}</div>
+                  ))}
+                </div>
+              ) : null}
+              <div className="health-sections">
+                <div className="health-section">
+                  <h3>Serviços monitorados</h3>
+                  {services.length ? (
+                    <div className="service-list">
+                      {services.map((item, idx) => (
+                        <ServiceStatusItem key={`${(environment && environment.name) || 'env'}-service-${idx}`} item={item} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="health-empty">Nenhum serviço configurado para este ambiente.</div>
+                  )}
+                </div>
+                <div className="health-section">
+                  <h3>Conectividade entre appliances</h3>
+                  {connectivity.length ? (
+                    <div className="connectivity-list">
+                      {connectivity.map((item, idx) => (
+                        <ConnectivityItem key={`${(environment && environment.name) || 'env'}-conn-${idx}`} item={item} settings={settings} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="health-empty">Nenhum destino configurado para verificação.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function MonitorApp() {
       const [rows, setRows] = useState([]);
       const [updatedAt, setUpdatedAt] = useState('');
@@ -605,10 +951,194 @@
       );
     }
 
+    function HealthCheckApp() {
+      const [rows, setRows] = useState([]);
+      const [updatedAt, setUpdatedAt] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [settings, setSettings] = useState(DEFAULT_HEALTH_SETTINGS);
+      const [openItems, setOpenItems] = useState(new Set());
+
+      const loadData = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const response = await fetch('/api/health');
+          if (!response.ok) {
+            throw new Error('Não foi possível carregar os dados do health check.');
+          }
+          const payload = await response.json();
+          const environments = Array.isArray(payload.rows) ? payload.rows : [];
+          setRows(environments);
+          const incomingSettings = payload.settings && typeof payload.settings === 'object' ? payload.settings : {};
+          setSettings({
+            ...DEFAULT_HEALTH_SETTINGS,
+            ...incomingSettings,
+          });
+          if (payload.updated_at) {
+            setUpdatedAt(payload.updated_at);
+          } else {
+            setUpdatedAt(new Date().toLocaleString());
+          }
+          setLoading(false);
+        } catch (err) {
+          console.error(err);
+          setError(err.message || 'Erro inesperado ao carregar o health check.');
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        loadData();
+        const id = setInterval(loadData, 45000);
+        return () => clearInterval(id);
+      }, [loadData]);
+
+      const toggleItem = useCallback((key) => {
+        setOpenItems(prev => {
+          const next = new Set(prev);
+          if (next.has(key)) {
+            next.delete(key);
+          } else {
+            next.add(key);
+          }
+          return next;
+        });
+      }, []);
+
+      useEffect(() => {
+        const subtitleEl = document.getElementById('dashboard-subtitle');
+        if (!subtitleEl) return;
+        const count = rows.length;
+        const countLabel = `${count} ambiente${count === 1 ? '' : 's'} verificado${count === 1 ? '' : 's'}`;
+        const statusText = loading
+          ? 'sincronizando…'
+          : updatedAt
+          ? `última verificação: ${updatedAt}`
+          : 'aguardando dados…';
+        subtitleEl.textContent = `${countLabel} – ${statusText}`;
+      }, [rows.length, updatedAt, loading]);
+
+      return (
+        <div className="monitor-app health-app">
+          <div className="meta-row">
+            <div className="meta-left">
+              <button
+                className={`refresh-button${loading ? ' is-spinning' : ''}`}
+                type="button"
+                onClick={loadData}
+                disabled={loading}
+                aria-label="Atualizar health check"
+                title="Atualizar health check"
+              >
+                <RefreshIcon />
+              </button>
+              <div className="meta-description">
+                <span className="meta-title">Health check dos serviços</span>
+                <span className="meta-subtitle">
+                  {loading ? 'Sincronizando dados…' : 'Clique para sincronizar manualmente'}
+                </span>
+              </div>
+            </div>
+            <div className="meta-right">
+              {updatedAt ? <span className="meta-updated">Atualizado: {updatedAt}</span> : null}
+            </div>
+          </div>
+          <div className="monitor-tags">
+            <span className="badge">Serviços via systemctl</span>
+            <span className="badge warn">Latência via ping</span>
+          </div>
+          {error ? <div className="error-message">{error}</div> : null}
+          {rows.length === 0 && !loading ? (
+            <div className="empty-state">Nenhum ambiente configurado ainda.</div>
+          ) : null}
+          <div className="env-list">
+            {rows.map((environment, index) => {
+              const key = environment && environment.name ? environment.name : `env-health-${index}`;
+              return (
+                <HealthEnvironmentCard
+                  key={key}
+                  environment={environment}
+                  settings={settings}
+                  isOpen={openItems.has(key)}
+                  onToggle={() => toggleItem(key)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    function DashboardApp() {
+      const [activeTab, setActiveTab] = useState('monitor');
+
+      useEffect(() => {
+        const titleEl = document.getElementById('dashboard-title');
+        if (titleEl) {
+          titleEl.textContent = activeTab === 'monitor' ? 'Monitoramento' : 'Health Check';
+        }
+      }, [activeTab]);
+
+      useEffect(() => {
+        const subtitleEl = document.getElementById('dashboard-subtitle');
+        if (!subtitleEl) return;
+        subtitleEl.textContent = activeTab === 'monitor'
+          ? 'Carregando status do monitoramento…'
+          : 'Carregando status do health check…';
+      }, [activeTab]);
+
+      useEffect(() => {
+        const tabsRoot = document.getElementById('module-tabs');
+        if (!tabsRoot) return;
+        const buttons = Array.from(tabsRoot.querySelectorAll('[data-tab]'));
+        const handlers = [];
+        buttons.forEach(button => {
+          const tab = button.getAttribute('data-tab');
+          if (!tab) return;
+          const handler = () => {
+            setActiveTab(tab);
+          };
+          button.addEventListener('click', handler);
+          handlers.push({ button, handler });
+        });
+        return () => {
+          handlers.forEach(({ button, handler }) => {
+            button.removeEventListener('click', handler);
+          });
+        };
+      }, []);
+
+      useEffect(() => {
+        const tabsRoot = document.getElementById('module-tabs');
+        if (!tabsRoot) return;
+        const buttons = Array.from(tabsRoot.querySelectorAll('[data-tab]'));
+        buttons.forEach(button => {
+          const tab = button.getAttribute('data-tab');
+          const isActive = tab === activeTab;
+          if (isActive) {
+            button.classList.add('is-active');
+            button.setAttribute('aria-selected', 'true');
+            button.removeAttribute('tabindex');
+          } else {
+            button.classList.remove('is-active');
+            button.setAttribute('aria-selected', 'false');
+            button.setAttribute('tabindex', '-1');
+          }
+        });
+      }, [activeTab]);
+
+      return (
+        <div className="dashboard-panels">
+          {activeTab === 'monitor' ? <MonitorApp key="monitor" /> : <HealthCheckApp key="health" />}
+        </div>
+      );
+    }
+
     const rootEl = document.getElementById('monitor-app-root');
     if (rootEl) {
       const root = ReactDOM.createRoot(rootEl);
-      root.render(<MonitorApp />);
+      root.render(<DashboardApp />);
     }
     {% endraw %}
   </script>

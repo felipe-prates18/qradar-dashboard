@@ -119,6 +119,123 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
         })
     return JSONResponse({"updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"), "rows": data})
 
+
+@app.get("/api/health")
+def get_health(user: str = Depends(verify_user_required_api)):
+    health_conf = CONFIG.get("health", {}) or {}
+    services = health_conf.get("services") or []
+    ssh = SSHClient()
+
+    def _connectivity_target(entry):
+        if not entry:
+            return None
+        if isinstance(entry, str):
+            return entry
+        if isinstance(entry, dict):
+            for key in (
+                "target",
+                "host",
+                "hostname",
+                "ip",
+                "address",
+                "management_ip",
+            ):
+                value = entry.get(key)
+                if value:
+                    return value
+        return None
+
+    def _connectivity_name(entry):
+        if not entry:
+            return "Appliance"
+        if isinstance(entry, str):
+            return entry or "Appliance"
+        if isinstance(entry, dict):
+            return entry.get("name") or entry.get("label") or entry.get("target") or "Appliance"
+        return "Appliance"
+
+    rows = []
+    for env in CONFIG.get("qradar_envs", []):
+        env_name = env.get("name") or env.get("host") or "Ambiente"
+        services_result = []
+        connectivity_result = []
+        errors = []
+
+        client = None
+        try:
+            client = ssh.connect_env(env)
+        except Exception as exc:
+            error_message = str(exc)
+            errors.append(error_message)
+            if services:
+                services_result = [
+                    {
+                        "name": service,
+                        "status": "error",
+                        "enabled": "unknown",
+                        "sub_state": "",
+                        "description": "",
+                        "error": error_message,
+                    }
+                    for service in services
+                ]
+            targets = env.get("connectivity_targets") or []
+            if targets:
+                for target_entry in targets:
+                    connectivity_result.append(
+                        {
+                            "name": _connectivity_name(target_entry),
+                            "target": _connectivity_target(target_entry),
+                            "reachable": False,
+                            "latency_ms": None,
+                            "packet_loss": None,
+                            "status": "error",
+                            "error": error_message,
+                        }
+                    )
+            rows.append(
+                {
+                    "name": env_name,
+                    "services": services_result,
+                    "connectivity": connectivity_result,
+                    "errors": errors,
+                }
+            )
+            continue
+
+        try:
+            services_result = ssh.check_services(env, services, client=client)
+            connectivity_result = ssh.check_connectivity(env, client=client)
+        except Exception as exc:
+            errors.append(str(exc))
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+        rows.append(
+            {
+                "name": env_name,
+                "services": services_result,
+                "connectivity": connectivity_result,
+                "errors": errors,
+            }
+        )
+
+    payload = {
+        "updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
+        "rows": rows,
+        "settings": {
+            "latency_warning_ms": health_conf.get("latency_warning_ms", 150),
+            "latency_critical_ms": health_conf.get("latency_critical_ms", 300),
+            "packet_loss_warning": health_conf.get("packet_loss_warning", 5),
+        },
+    }
+
+    return JSONResponse(payload)
+
 @app.exception_handler(AuthenticationError)
 def handle_authentication_error(request: Request, exc: AuthenticationError):
     return templates.TemplateResponse(

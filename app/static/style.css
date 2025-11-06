@@ -60,6 +60,50 @@ header {
   font-size: 24px;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.module-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(29, 157, 111, 0.25);
+  background: rgba(29, 157, 111, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(6, 22, 18, 0.5);
+}
+
+.tab-button {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 7px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.22s ease, color 0.22s ease, box-shadow 0.22s ease;
+}
+
+.tab-button:hover,
+.tab-button:focus-visible {
+  background: rgba(38, 217, 141, 0.18);
+  color: var(--text-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(38, 217, 141, 0.28);
+}
+
+.tab-button.is-active {
+  background: linear-gradient(135deg, rgba(29, 157, 111, 0.88), rgba(38, 217, 141, 0.94));
+  color: #022117;
+  box-shadow: 0 14px 24px rgba(29, 157, 111, 0.35);
+}
+
 .title .sub {
   color: var(--text-muted);
   margin-top: 4px;
@@ -595,6 +639,164 @@ header {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.health-app .meta-title {
+  color: #6ef7d0;
+}
+
+.health-app .badge {
+  background: rgba(46, 200, 146, 0.14);
+  border-color: rgba(46, 200, 146, 0.32);
+}
+
+.health-app .badge.warn {
+  border-color: rgba(240, 173, 78, 0.5);
+  background: rgba(240, 173, 78, 0.2);
+}
+
+.health-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+@media (min-width: 960px) {
+  .health-sections {
+    flex-direction: row;
+  }
+}
+
+.health-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+
+.health-section h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--green-strong);
+  letter-spacing: 0.02em;
+}
+
+.service-list,
+.connectivity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.health-item {
+  border: 1px solid rgba(29, 157, 111, 0.35);
+  border-radius: 16px;
+  background: rgba(7, 22, 18, 0.78);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border 0.25s ease, background 0.25s ease;
+}
+
+.health-item.is-warning {
+  border-color: rgba(240, 173, 78, 0.45);
+  background: rgba(240, 173, 78, 0.14);
+}
+
+.health-item.is-critical {
+  border-color: rgba(217, 83, 79, 0.55);
+  background: rgba(217, 83, 79, 0.18);
+}
+
+.health-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.health-item-name {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-primary);
+}
+
+.health-item.is-warning .health-item-name {
+  color: #ffe5af;
+}
+
+.health-item.is-critical .health-item-name {
+  color: #ffd2cf;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(29, 157, 111, 0.22);
+  color: var(--green-strong);
+  min-width: 0;
+}
+
+.status-pill.is-warning {
+  background: rgba(240, 173, 78, 0.22);
+  color: #ffe3a3;
+}
+
+.status-pill.is-critical {
+  background: rgba(217, 83, 79, 0.24);
+  color: #ffb8b3;
+}
+
+.health-item-description {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.health-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.health-item-error {
+  font-size: 13px;
+  color: #ff9f9a;
+  background: rgba(217, 83, 79, 0.16);
+  border: 1px solid rgba(217, 83, 79, 0.42);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.health-alert {
+  border: 1px solid rgba(217, 83, 79, 0.5);
+  background: rgba(217, 83, 79, 0.18);
+  color: #ffd2cf;
+  border-radius: 16px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.health-empty {
+  font-size: 14px;
+  color: var(--text-muted);
+  padding: 16px;
+  text-align: center;
+  border: 1px dashed rgba(46, 160, 122, 0.45);
+  border-radius: 16px;
+  background: rgba(7, 25, 20, 0.6);
 }
 
 .env-card {

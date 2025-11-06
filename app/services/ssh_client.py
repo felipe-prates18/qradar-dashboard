@@ -25,6 +25,16 @@ class SSHClient:
         logger.info(f"SSH exit={code} stdout='{out[:4000]}' stderr='{err[:4000]}'")
         return code, out, err
 
+    def connect_env(self, env):
+        host = env.get("host")
+        user = env.get("ssh_user")
+        key_path = env.get("ssh_key")
+
+        if not host or not user or not key_path:
+            raise ValueError("Configuração SSH incompleta para o ambiente")
+
+        return self._connect(host, user, key_path)
+
     def _format_date(self, raw):
         try:
             if len(raw) >= 8:
@@ -236,4 +246,264 @@ class SSHClient:
         except Exception as e:
             logger.error(f"Falha na coleta EPS host={host} collector={collector}: {e}")
             return {"eps_current": None, "eps_max": None}
+
+    def check_services(self, env, services, client=None):
+        services = [s for s in services or [] if s]
+        if not services:
+            return []
+
+        close_client = False
+        if client is None:
+            try:
+                client = self.connect_env(env)
+                close_client = True
+            except Exception as exc:
+                logger.error(f"Falha ao conectar para health check de serviços: {exc}")
+                return [
+                    {
+                        "name": service,
+                        "status": "error",
+                        "enabled": "unknown",
+                        "sub_state": "unknown",
+                        "description": "",
+                        "error": str(exc),
+                    }
+                    for service in services
+                ]
+
+        try:
+            services_list = " ".join(shlex.quote(service) for service in services)
+            script = (
+                f"for svc in {services_list}; do\n"
+                "  active=$(systemctl is-active \"$svc\" 2>/dev/null || echo unknown)\n"
+                "  enabled=$(systemctl is-enabled \"$svc\" 2>/dev/null || echo unknown)\n"
+                "  sub=$(systemctl show \"$svc\" --no-page --property=SubState 2>/dev/null | head -n1 | cut -d= -f2-)\n"
+                "  desc=$(systemctl show \"$svc\" --no-page --property=Description 2>/dev/null | head -n1 | cut -d= -f2-)\n"
+                "  sub=${sub//|/ }\n"
+                "  desc=${desc//|/ }\n"
+                "  printf '__SERVICE__|%s|%s|%s|%s|%s\\n' \"$svc\" \"$active\" \"$enabled\" \"$sub\" \"$desc\"\n"
+                "done"
+            )
+
+            code, out, err = self._exec(client, f"bash -lc {shlex.quote(script)}")
+            if code != 0:
+                logger.warning(
+                    "Execução do script de verificação de serviços retornou código %s: %s",
+                    code,
+                    err,
+                )
+
+            results = []
+            for raw_line in out.splitlines():
+                if not raw_line.startswith("__SERVICE__|"):
+                    continue
+                parts = raw_line.split("|", 5)
+                if len(parts) < 6:
+                    continue
+                _, name, status, enabled, sub_state, description = parts
+                results.append(
+                    {
+                        "name": name,
+                        "status": status or "unknown",
+                        "enabled": enabled or "unknown",
+                        "sub_state": sub_state or "",
+                        "description": description or "",
+                        "error": None,
+                    }
+                )
+
+            missing = [service for service in services if service not in {r["name"] for r in results}]
+            for service in missing:
+                results.append(
+                    {
+                        "name": service,
+                        "status": "unknown",
+                        "enabled": "unknown",
+                        "sub_state": "",
+                        "description": "",
+                        "error": err or "Serviço não encontrado ou inacessível",
+                    }
+                )
+
+            return results
+        except Exception as exc:
+            logger.error(f"Falha ao verificar serviços: {exc}")
+            return [
+                {
+                    "name": service,
+                    "status": "error",
+                    "enabled": "unknown",
+                    "sub_state": "",
+                    "description": "",
+                    "error": str(exc),
+                }
+                for service in services
+            ]
+        finally:
+            if close_client and client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    def check_connectivity(self, env, client=None):
+        targets = env.get("connectivity_targets") or []
+
+        entries = []
+
+        def _append_entry(base):
+            if not base:
+                return
+            if isinstance(base, str):
+                entries.append({"name": base, "target": base})
+                return
+            if isinstance(base, dict):
+                merged = dict(base)
+                if "target" not in merged:
+                    merged["target"] = self._resolve_appliance_target(merged)
+                entries.append(merged)
+                return
+
+        for item in targets:
+            _append_entry(item)
+
+        if not entries:
+            return []
+
+        close_client = False
+        if client is None:
+            try:
+                client = self.connect_env(env)
+                close_client = True
+            except Exception as exc:
+                logger.error(f"Falha ao conectar para verificação de conectividade: {exc}")
+                return [
+                    {
+                        "name": entry.get("name") or entry.get("label") or entry.get("target") or "Appliance",
+                        "target": entry.get("target") or self._resolve_appliance_target(entry),
+                        "reachable": False,
+                        "latency_ms": None,
+                        "packet_loss": None,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                    for entry in entries
+                ]
+
+        try:
+            results = []
+            seen = set()
+            for entry in entries:
+                target = entry.get("target") or self._resolve_appliance_target(entry)
+                name = None
+                if isinstance(entry, dict):
+                    name = entry.get("name") or entry.get("label")
+                if not name and isinstance(entry, str):
+                    name = entry
+                name = name or target or "Appliance"
+
+                dedupe_key = (name.lower() if isinstance(name, str) else name, target)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+
+                if not target:
+                    results.append(
+                        {
+                            "name": name,
+                            "target": None,
+                            "reachable": False,
+                            "latency_ms": None,
+                            "packet_loss": None,
+                            "status": "unknown",
+                            "error": "Nenhum endereço configurado para este appliance.",
+                        }
+                    )
+                    continue
+
+                ping_cmd = f"ping -c 4 -w 8 {shlex.quote(target)}"
+                code, out, err = self._exec(client, f"bash -lc {shlex.quote(ping_cmd)}")
+
+                reachable = code == 0
+                latency_ms = None
+                packet_loss = None
+
+                try:
+                    loss_match = re.search(r"([0-9.]+)% packet loss", out)
+                    if loss_match:
+                        packet_loss = float(loss_match.group(1))
+                except Exception:
+                    packet_loss = None
+
+                try:
+                    rtt_match = re.search(r"=\s*([0-9.]+)/([0-9.]+)/([0-9.]+)/([0-9.]+)", out)
+                    if rtt_match:
+                        latency_ms = float(rtt_match.group(2))
+                except Exception:
+                    latency_ms = None
+
+                status = "online" if reachable else "offline"
+                error_msg = None
+                if not reachable:
+                    error_msg = err or "Não foi possível alcançar o destino."
+                results.append(
+                    {
+                        "name": name,
+                        "target": target,
+                        "reachable": reachable,
+                        "latency_ms": latency_ms,
+                        "packet_loss": packet_loss,
+                        "status": status,
+                        "error": error_msg.strip() if error_msg else None,
+                    }
+                )
+
+            return results
+        except Exception as exc:
+            logger.error(f"Falha ao verificar conectividade: {exc}")
+            return [
+                {
+                    "name": entry.get("name") or entry.get("label") or entry.get("target") or "Appliance",
+                    "target": entry.get("target") or self._resolve_appliance_target(entry),
+                    "reachable": False,
+                    "latency_ms": None,
+                    "packet_loss": None,
+                    "status": "error",
+                    "error": str(exc),
+                }
+                for entry in entries
+            ]
+        finally:
+            if close_client and client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    def _resolve_appliance_target(self, appliance):
+        if not appliance:
+            return None
+        if isinstance(appliance, str):
+            return appliance
+        for key in (
+            "host",
+            "hostname",
+            "ip",
+            "address",
+            "management_ip",
+            "ip_address",
+            "mgmt_ip",
+            "connectivity_ip",
+            "ping_ip",
+            "target",
+            "destination",
+        ):
+            value = appliance.get(key)
+            if value:
+                return value
+        for key in ("zabbix_host", "zabbix_host_override"):
+            value = appliance.get(key)
+            if value:
+                return value
+        return None
 
