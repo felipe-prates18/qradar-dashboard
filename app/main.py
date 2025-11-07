@@ -18,6 +18,7 @@ from .auth import (
     AuthenticationError,
     has_wallboard_token,
     WALLBOARD_COOKIE_NAME,
+    wallboard_token_request_allowed,
 )
 from .services.zabbix_client import ZabbixClient
 from .services.ssh_client import SSHClient
@@ -43,6 +44,27 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(auth_router)
+
+
+@app.middleware("http")
+async def restrict_wallboard_token_scope(request: Request, call_next):
+    if has_wallboard_token(request) and not wallboard_token_request_allowed(request):
+        session_user = verify_user(request)
+        if not session_user:
+            accept_header = (request.headers.get("accept") or "").lower()
+            if "text/html" in accept_header:
+                response = templates.TemplateResponse(
+                    "error.html",
+                    {"request": request, "message": "Acesso restrito ao painel SOC."},
+                    status_code=401,
+                )
+            else:
+                response = JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            response.delete_cookie(WALLBOARD_COOKIE_NAME)
+            return response
+    response = await call_next(request)
+    return response
+
 
 def _con():
     con = sqlite3.connect(str(DB_PATH))
