@@ -257,6 +257,18 @@
       "codigo": "MMX3"
     },
     {
+      "name": "QRADAR G4-EDUCACAO",
+      "host": "172.31.1.99",
+      "collector": "host",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/G4.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [],
+      "connectivity_targets": [],
+      "codigo": "MMX4"
+    },
+    {
       "name": "QRADAR BR PARTNERS",
       "host": "10.11.112.179",
       "collector": "host",
@@ -332,6 +344,50 @@
         }
       ],
       "codigo": "MMX8"
+    },
+    {
+      "name": "QRADAR NTS CONSOLE",
+      "host": "172.31.1.83",
+      "collector": "10.1.12.132",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/NTS.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        {
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR NTS EVENT COLLECTOR"
+        }
+      ],
+      "connectivity_targets": [
+        {
+          "name": "Event Collector",
+          "target": "10.1.12.132"
+        }
+      ],
+      "codigo": "MMX9"
+    },
+    {
+      "name": "QRADAR PERNABUCANAS CONSOLE",
+      "host": "172.31.1.241",
+      "collector": "10.14.117.53",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/PERNAMBUCANAS.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        {
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR PERNABUCANAS EVENT COLLECTOR"
+        }
+      ],
+      "connectivity_targets": [
+        {
+          "name": "Event Collector",
+          "target": "10.14.117.53"
+        }
+      ],
+      "codigo": "MMX10"
     }
   ],
   "wallboard_token": "uej3g14re4bfa2c65qkhyym75747ff8538bib1u07ae534f4vkyja7ma6a89dbe4"
