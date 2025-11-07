@@ -12,9 +12,12 @@ from .auth import (
     auth_router,
     verify_user_required_page,
     verify_user_required_api,
+    verify_user,
     is_admin,
     hash_password,
     AuthenticationError,
+    has_wallboard_token,
+    WALLBOARD_COOKIE_NAME,
 )
 from .services.zabbix_client import ZabbixClient
 from .services.ssh_client import SSHClient
@@ -29,6 +32,8 @@ app = FastAPI(title="QRadar Monitoring App")
 session_secret = CONFIG.get("session_secret", "qradar-app-secret")
 runtime_secret = f"{session_secret}:{secrets.token_hex(16)}"
 SESSION_MAX_AGE_SECONDS = 12 * 60 * 60
+WALLBOARD_TOKEN = CONFIG.get("wallboard_token")
+WALLBOARD_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 app.add_middleware(
     SessionMiddleware,
     secret_key=runtime_secret,
@@ -50,6 +55,17 @@ def pct(v):
     except Exception:
         return "—"
 
+
+def _wallboard_token_supplied_via_link(request: Request) -> bool:
+    if not WALLBOARD_TOKEN:
+        return False
+    query_token = request.query_params.get("token") if hasattr(request, "query_params") else None
+    header_token = request.headers.get("x-wallboard-token")
+    for candidate in (query_token, header_token):
+        if candidate and secrets.compare_digest(str(candidate), WALLBOARD_TOKEN):
+            return True
+    return False
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, user: str = Depends(verify_user_required_page)):
     return templates.TemplateResponse(
@@ -59,15 +75,36 @@ def home(request: Request, user: str = Depends(verify_user_required_page)):
 
 
 @app.get("/painel", response_class=HTMLResponse)
-def wallboard(request: Request, user: str = Depends(verify_user_required_page)):
-    return templates.TemplateResponse(
-        "tv.html",
-        {"request": request, "user": user, "title": "Painel SOC"},
-    )
+def wallboard(request: Request):
+    session_user = verify_user(request)
+    token_authenticated = has_wallboard_token(request)
+    if not session_user and not token_authenticated:
+        raise AuthenticationError("Sessão expirada ou inválida. Faça login novamente.")
+
+    context = {"request": request, "user": session_user or "__wallboard__", "title": "Painel SOC"}
+    response = templates.TemplateResponse("tv.html", context)
+
+    if token_authenticated and WALLBOARD_TOKEN and _wallboard_token_supplied_via_link(request):
+        response.set_cookie(
+            WALLBOARD_COOKIE_NAME,
+            WALLBOARD_TOKEN,
+            max_age=WALLBOARD_COOKIE_MAX_AGE,
+            httponly=True,
+            samesite="lax",
+        )
+
+    return response
 
 @app.get("/api/clients")
 def get_clients(user: str = Depends(verify_user_required_api)):
-    clients = [{"name": e.get("name", ""), "host": e.get("host", "")} for e in CONFIG.get("qradar_envs", [])]
+    clients = [
+        {
+            "name": e.get("name", ""),
+            "host": e.get("host", ""),
+            "code": e.get("codigo") or e.get("code") or "",
+        }
+        for e in CONFIG.get("qradar_envs", [])
+    ]
     return JSONResponse(clients)
 
 @app.get("/api/monitor")
@@ -123,6 +160,7 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
 
         data.append({
             "name": name,
+            "code": env.get("codigo") or env.get("code"),
             "cpu": pct(metrics.get("cpu")),
             "memory": pct(metrics.get("memory")),
             "storage": pct(metrics.get("storage")),

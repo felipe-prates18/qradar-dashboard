@@ -183,6 +183,7 @@
     }
 
     function buildEnvironmentSnapshot(environment) {
+      const environmentCode = environment.code ?? environment.codigo ?? null;
       const licenseExpRawList = Array.isArray(environment.license_exp_list)
         ? environment.license_exp_list.filter(Boolean)
         : [];
@@ -250,9 +251,17 @@
         expirationStatus,
       ]);
 
+      const displayLabel =
+        environmentCode || environment.name || environment.host || environment.id || '—';
+
       return {
-        key: environment.name || environment.host || environment.id || Math.random().toString(16).slice(2),
-        name: environment.name ?? '—',
+        key:
+          environmentCode ||
+          environment.name ||
+          environment.host ||
+          environment.id ||
+          Math.random().toString(16).slice(2),
+        name: displayLabel,
         overallStatus,
         statusLabel: STATUS_LABEL[overallStatus] || 'Normal',
         statusIcon: STATUS_ICON[overallStatus] || '🟢',
