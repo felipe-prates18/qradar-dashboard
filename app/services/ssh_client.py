@@ -16,13 +16,30 @@ class SSHClient:
         client.connect(hostname=host, username=user, pkey=key, timeout=20, banner_timeout=20, auth_timeout=20)
         return client
 
-    def _exec(self, client, cmd):
-        logger.info(f"SSH exec: {cmd}")
+    def _summarize_for_log(self, text, max_chars=400):
+        if not text:
+            return ""
+        cleaned = text.replace("\n", "\\n")
+        if len(cleaned) <= max_chars:
+            return cleaned
+        trimmed = cleaned[:max_chars]
+        remainder = len(cleaned) - max_chars
+        return f"{trimmed}… (+{remainder} chars)"
+
+    def _exec(self, client, cmd, *, max_output_chars=400):
+        logger.debug("SSH exec: %s", cmd)
         stdin, stdout, stderr = client.exec_command(cmd, get_pty=True)
         out = stdout.read().decode(errors="replace").strip()
         err = stderr.read().decode(errors="replace").strip()
         code = stdout.channel.recv_exit_status()
-        logger.info(f"SSH exit={code} stdout='{out[:4000]}' stderr='{err[:4000]}'")
+        summary_out = self._summarize_for_log(out, max_output_chars)
+        summary_err = self._summarize_for_log(err, max_output_chars)
+        logger.info(
+            "SSH exit=%s stdout='%s' stderr='%s'",
+            code,
+            summary_out,
+            summary_err,
+        )
         return code, out, err
 
     def connect_env(self, env):
