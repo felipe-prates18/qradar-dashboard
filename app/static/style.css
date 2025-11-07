@@ -11,6 +11,7 @@
   --yellow: #f0ad4e;
   --yellow-bright: #ffe3a3;
   --red: #d9534f;
+  --red-bright: #ff8480;
   --border: rgba(38, 99, 77, 0.55);
   --shadow: 0 18px 45px rgba(0, 0, 0, 0.35);
 }
@@ -511,8 +512,13 @@ header {
   background: var(--yellow);
 }
 
+.tv-metric.is-critical .tv-metric-value,
+.tv-metric.is-critical .tv-metric-line {
+  color: var(--red-bright);
+}
+
 .tv-metric.is-critical .tv-metric-bar-fill {
-  background: var(--red);
+  background: var(--red-bright);
 }
 
 .tv-empty {
@@ -1311,12 +1317,13 @@ header {
   background: rgba(217, 83, 79, 0.14);
 }
 
-.summary-metric.is-critical .metric-value {
-  color: var(--red);
+.summary-metric.is-critical .metric-value,
+.summary-metric.is-critical .metric-value-line {
+  color: var(--red-bright);
 }
 
 .summary-metric.is-critical .metric-bar-fill {
-  background: var(--red);
+  background: var(--red-bright);
 }
 
 .env-toggle-icon {
@@ -1564,10 +1571,13 @@ header {
   background: rgba(217, 83, 79, 0.14);
 }
 
-.appliance-metric-pill.is-critical .pill-value,
+.appliance-metric-pill.is-critical .pill-value {
+  color: var(--red-bright);
+}
+
 .appliance-metric-pill.is-critical .pill-bar-fill {
-  color: var(--red);
-  background: var(--red);
+  color: var(--red-bright);
+  background: var(--red-bright);
 }
 
 .empty-appliances {
