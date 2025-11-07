@@ -142,7 +142,7 @@
           "target": "10.252.145.206"
         }
       ],
-      "codigo": "JBS1"
+      "codigo": "VPX2"
     },
     {
       "name": "QRADAR BR PARTNERS",
@@ -164,7 +164,7 @@
           "target": "10.11.112.180"
         }
       ],
-      "codigo": "BRP1"
+      "codigo": "MMX5"
     },
     {
       "name": "QRADAR ELDORADO CONSOLE",
@@ -175,7 +175,7 @@
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [],
-      "codigo": "ELD1"
+      "codigo": "MMX7"
     },
     {
       "name": "QRADAR ASPER CONSOLE",
@@ -197,8 +197,8 @@
           "target": "172.31.1.251"
         }
       ],
-      "codigo": "ASP1"
+      "codigo": "VPX1"
     }
   ],
-  "wallboard_token": "soc-wallboard-secret-token"
+  "wallboard_token": "uej3g14re4bfa2c65qkhyym75747ff8538bib1u07ae534f4vkyja7ma6a89dbe4"
 }
