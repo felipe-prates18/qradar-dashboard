@@ -117,7 +117,7 @@
     {
       "name": "QRADAR CNA CONSOLE",
       "host": "172.31.1.172",
-      "collector": "10.1.0.54",
+      "collector": "172.3.0.2",
       "ssh_user": "root",
       "ssh_key": "/opt/qradar-dashboard/keys/CNA.pem",
       "jmx_port": 7787,
@@ -135,7 +135,7 @@
       "connectivity_targets": [
         {
           "name": "Event Collector",
-          "target": "10.1.0.54"
+          "target": "172.3.0.2"
         },
         {
           "name": "Data Node",
