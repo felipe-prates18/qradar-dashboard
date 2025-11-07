@@ -352,7 +352,7 @@ def get_health(user: str = Depends(verify_user_required_api)):
                 return candidate.rstrip("/")
         if not host:
             return None
-        return f"https://{host}/console/api"
+        return f"https://{host}/api"
 
     def _check_offenses(env):
         token = _resolve_api_token(env)
