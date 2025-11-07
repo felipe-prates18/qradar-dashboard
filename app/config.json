@@ -21,7 +21,6 @@
     "services": [
       "accumulator.service",
       "ariel_proxy_server.service",
-      "ariel_query_server.service",
       "ecs-ec-ingress.service",
       "ecs-ec.service",
       "ecs-ep.service",
@@ -32,8 +31,6 @@
       "reporting_executor.service",
       "tomcat.service",
       "vis.service",
-      "ariel_proxy_server",
-      "ariel_query_server",
       "postfix.service"
     ],
     "latency_warning_ms": 150,
