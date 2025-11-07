@@ -390,5 +390,26 @@
       "codigo": "MMX10"
     }
   ],
-  "wallboard_token": "uej3g14re4bfa2c65qkhyym75747ff8538bib1u07ae534f4vkyja7ma6a89dbe4"
+  "wallboard_token": "uej3g14re4bfa2c65qkhyym75747ff8538bib1u07ae534f4vkyja7ma6a89dbe4",
+  "qradar_api": {
+    "verify_tls": false,
+    "timeout": 20,
+    "version": "16.0",
+    "tokens": {
+      "VPX1": "",
+      "VPX2": "",
+      "VPX3": "",
+      "VPX4": "",
+      "MMX1": "",
+      "MMX2": "",
+      "MMX3": "",
+      "MMX4": "",
+      "MMX5": "",
+      "MMX6": "",
+      "MMX7": "",
+      "MMX8": "",
+      "MMX9": "",
+      "MMX10": ""
+    }
+  }
 }

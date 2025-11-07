@@ -200,6 +200,38 @@
       }, 'normal');
     }
 
+    const SIMPLE_CHECK_STATUS_LABELS = {
+      ok: 'OK',
+      success: 'OK',
+      warning: 'Atenção',
+      error: 'Erro',
+      critical: 'Erro',
+      failed: 'Erro',
+      empty: 'Sem registros',
+      missing: 'Indisponível',
+    };
+
+    function getSimpleCheckSeverity(check) {
+      if (!check) return 'warning';
+      const statusKey = (check.status ? String(check.status) : '').toLowerCase();
+      if (statusKey === 'ok' || statusKey === 'success') return 'normal';
+      if (statusKey === 'warning') return 'warning';
+      if (statusKey === 'error' || statusKey === 'critical' || statusKey === 'failed') return 'critical';
+      if (statusKey === 'empty' || statusKey === 'missing') return 'critical';
+      if (check.error) return 'critical';
+      return 'warning';
+    }
+
+    function getSimpleCheckStatusLabel(check) {
+      if (!check) return 'Indefinido';
+      const statusKey = (check.status ? String(check.status) : '').toLowerCase();
+      if (SIMPLE_CHECK_STATUS_LABELS[statusKey]) {
+        return SIMPLE_CHECK_STATUS_LABELS[statusKey];
+      }
+      if (check.error) return 'Erro';
+      return check.status ? String(check.status) : 'Indefinido';
+    }
+
     const SERVICE_STATUS_LABELS = {
       active: 'Ativo',
       inactive: 'Inativo',
@@ -671,6 +703,35 @@
       );
     }
 
+    function SimpleCheckItem({ title, check }) {
+      const severity = getSimpleCheckSeverity(check);
+      const statusLabel = getSimpleCheckStatusLabel(check);
+      const message = check && check.message ? check.message : '';
+      const errorMessage = check && check.error ? check.error : '';
+      const details = Array.isArray(check && check.details) ? check.details.filter(Boolean) : [];
+      const showError = errorMessage && severity === 'critical' && errorMessage !== message;
+
+      return (
+        <div className={`health-item simple-check-item is-${severity}`}>
+          <div className="health-item-header">
+            <span className="health-item-name">{title}</span>
+            <span className={`status-pill is-${severity}`}>{statusLabel}</span>
+          </div>
+          {message ? <div className="health-item-description">{message}</div> : null}
+          {details.length ? (
+            <div className="health-item-meta">
+              {details.map((detail, idx) => (
+                <span key={`simple-check-detail-${idx}`}>{detail}</span>
+              ))}
+            </div>
+          ) : null}
+          {showError ? (
+            <div className="health-item-error">{errorMessage}</div>
+          ) : null}
+        </div>
+      );
+    }
+
     function HealthEnvironmentCard({ environment, settings, isOpen, onToggle }) {
       const detailsRef = useRef(null);
       const [detailsHeight, setDetailsHeight] = useState(0);
@@ -690,6 +751,8 @@
 
       const services = Array.isArray(environment && environment.services) ? environment.services : [];
       const connectivity = Array.isArray(environment && environment.connectivity) ? environment.connectivity : [];
+      const offenseCheck = environment && environment.offense_check ? environment.offense_check : null;
+      const emailCheck = environment && environment.email_check ? environment.email_check : null;
       const errorMessages = Array.isArray(environment && environment.errors)
         ? environment.errors.filter(Boolean)
         : [];
@@ -697,6 +760,12 @@
       const serviceSeverities = services.map(getServiceSeverity);
       const connectivitySeverities = connectivity.map(item => getConnectivitySeverity(item, settings));
       const statusesForOverall = [...serviceSeverities, ...connectivitySeverities];
+      if (offenseCheck) {
+        statusesForOverall.push(getSimpleCheckSeverity(offenseCheck));
+      }
+      if (emailCheck) {
+        statusesForOverall.push(getSimpleCheckSeverity(emailCheck));
+      }
       if (errorMessages.length) {
         statusesForOverall.push('critical');
       }
@@ -715,6 +784,18 @@
       const linkHealthy = totalLinks - linkCritical - linkWarning;
       const linkSummaryStatus = linkCritical > 0 ? 'critical' : linkWarning > 0 ? 'warning' : 'normal';
       const linkSummaryValue = totalLinks ? `${linkHealthy}/${totalLinks} estáveis` : 'Sem links';
+
+      const offenseCount = offenseCheck && typeof offenseCheck.count === 'number' ? offenseCheck.count : null;
+      const offenseSummaryValue = offenseCount !== null
+        ? `${offenseCount} ${offenseCount === 1 ? 'ofensa' : 'ofensas'}`
+        : '—';
+      const offenseSeverity = offenseCheck ? getSimpleCheckSeverity(offenseCheck) : 'warning';
+
+      const emailCount = emailCheck && typeof emailCheck.count === 'number' ? emailCheck.count : null;
+      const emailSummaryValue = emailCount !== null
+        ? `${emailCount} ${emailCount === 1 ? 'envio' : 'envios'}`
+        : '—';
+      const emailSeverity = emailCheck ? getSimpleCheckSeverity(emailCheck) : 'warning';
 
       let maxLatency = null;
       connectivity.forEach(item => {
@@ -763,6 +844,28 @@
           tooltip: maxLatency !== null ? `Latência máxima observada: ${formatLatency(maxLatency)}` : undefined,
         },
       ];
+
+      if (offenseCheck) {
+        summaryMetrics.push({
+          key: 'offenses',
+          label: 'Ofensas (24h)',
+          value: offenseSummaryValue,
+          percent: null,
+          status: offenseSeverity,
+          tooltip: offenseCheck.message || undefined,
+        });
+      }
+
+      if (emailCheck) {
+        summaryMetrics.push({
+          key: 'emails',
+          label: 'Envios de e-mail (24h)',
+          value: emailSummaryValue,
+          percent: null,
+          status: emailSeverity,
+          tooltip: emailCheck.message || undefined,
+        });
+      }
 
       return (
         <div className={`env-card health-card status-${overallStatus} ${isOpen ? 'open' : ''}`}>
@@ -830,6 +933,22 @@
                     </div>
                   ) : (
                     <div className="health-empty">Nenhum destino configurado para verificação.</div>
+                  )}
+                </div>
+                <div className="health-section">
+                  <h3>Ofensas recentes</h3>
+                  {offenseCheck ? (
+                    <SimpleCheckItem title="Ofensas nas últimas 24 horas" check={offenseCheck} />
+                  ) : (
+                    <div className="health-empty">Verificação de ofensas não configurada.</div>
+                  )}
+                </div>
+                <div className="health-section">
+                  <h3>Envio de e-mails</h3>
+                  {emailCheck ? (
+                    <SimpleCheckItem title="Envios nas últimas 24 horas" check={emailCheck} />
+                  ) : (
+                    <div className="health-empty">Verificação de e-mails não disponível.</div>
                   )}
                 </div>
               </div>
