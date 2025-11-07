@@ -39,53 +39,26 @@
   },
   "qradar_envs": [
     {
-      "name": "QRADAR TAURUS CONSOLE",
-      "host": "172.31.1.4",
+      "name": "QRADAR ASPER CONSOLE",
+      "host": "172.31.1.8",
       "collector": "host",
       "ssh_user": "root",
-      "ssh_key": "/opt/qradar-dashboard/keys/TAURUS.pem",
-      "jmx_port": 7787,
-      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
-      "appliances": [],
-      "codigo": "TAUR"
-    },
-    {
-      "name": "QRADAR ECAD CONSOLE",
-      "host": "172.31.1.18",
-      "collector": "10.10.15.140",
-      "ssh_user": "root",
-      "ssh_key": "/opt/qradar-dashboard/keys/ECAD.pem",
+      "ssh_key": "/opt/qradar-dashboard/keys/ASPER.pem",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [
         {
-          "name": "Event Collector",
-          "zabbix_host": "QRADAR ECAD EVENT COLLECTOR"
-        },
-        {
-          "name": "Data Node 01",
-          "zabbix_host": "QRADAR ECAD DATA NODE"
-        },
-        {
-          "name": "Data Node 02",
-          "zabbix_host": "QRADAR ECAD DATA NODE 2"
+          "name": "App Host",
+          "zabbix_host": "QRADAR ASPER APPHOST"
         }
       ],
       "connectivity_targets": [
         {
-          "name": "Event Collector",
-          "target": "10.10.15.140"
-        },
-        {
-          "name": "Data Node 01",
-          "target": "172.31.1.139"
-        },
-        {
-          "name": "Data Node 02",
-          "target": "172.31.1.186"
+          "name": "App Host",
+          "target": "172.31.1.251"
         }
       ],
-      "codigo": "MMX1"
+      "codigo": "VPX1"
     },
     {
       "name": "QRADAR JBS CONSOLE",
@@ -142,6 +115,148 @@
       "codigo": "VPX2"
     },
     {
+      "name": "QRADAR CNA CONSOLE",
+      "host": "172.31.1.172",
+      "collector": "10.1.0.54",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/CNA.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        {
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR CNA EVENT COLLECTOR"
+        },
+        {
+          "name": "Data Node 01",
+          "zabbix_host": "QRADAR CNA DATA NODE"
+        }
+      ],
+      "connectivity_targets": [
+        {
+          "name": "Event Collector",
+          "target": "10.1.0.54"
+        },
+        {
+          "name": "Data Node",
+          "target": "172.31.1.55"
+        }
+      ],
+      "codigo": "VPX3"
+    },
+    {
+      "name": "QRADAR BANESE CONSOLE",
+      "host": "172.31.1.10",
+      "collector": "10.48.2.16",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/BANESE.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        {
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR BANESE EVENT COLLECTOR"
+        }
+      ],
+      "connectivity_targets": [
+        {
+          "name": "Event Collector",
+          "target": "10.48.2.16"
+        }
+      ],
+      "codigo": "VPX4"
+    },
+    {
+      "name": "QRADAR ECAD CONSOLE",
+      "host": "172.31.1.18",
+      "collector": "10.10.15.140",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/ECAD.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        {
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR ECAD EVENT COLLECTOR"
+        },
+        {
+          "name": "Data Node 01",
+          "zabbix_host": "QRADAR ECAD DATA NODE"
+        },
+        {
+          "name": "Data Node 02",
+          "zabbix_host": "QRADAR ECAD DATA NODE 2"
+        }
+      ],
+      "connectivity_targets": [
+        {
+          "name": "Event Collector",
+          "target": "10.10.15.140"
+        },
+        {
+          "name": "Data Node 01",
+          "target": "172.31.1.139"
+        },
+        {
+          "name": "Data Node 02",
+          "target": "172.31.1.186"
+        }
+      ],
+      "codigo": "MMX1"
+    },
+    {
+      "name": "QRADAR ICATU CONSOLE",
+      "host": "172.31.1.224",
+      "collector": "10.1.60.4",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/ICATU.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        {
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR ICATU EVENT COLLECTOR"
+        },
+        {
+          "name": "Event Processor",
+          "zabbix_host": "QRADAR ICATU EVENT FLOW PROCESSOR"
+        }
+      ],
+      "connectivity_targets": [
+        {
+          "name": "Event Collector",
+          "target": "10.1.60.4"
+        },
+        {
+          "name": "Event Processor",
+          "target": "10.1.60.5"
+        }
+      ],
+      "codigo": "MMX2"
+    },
+    {
+      "name": "QRADAR PETRONECT CONSOLE",
+      "host": "172.31.1.127",
+      "collector": "10.135.30.144",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/PETRONECT.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        {
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR PETRONECT EVENT COLLECTOR"
+        }
+      ],
+      "connectivity_targets": [
+        {
+          "name": "Event Collector",
+          "target": "10.135.30.144"
+        }
+      ],
+      "codigo": "MMX3"
+    },
+    {
       "name": "QRADAR BR PARTNERS",
       "host": "10.11.112.179",
       "collector": "host",
@@ -164,6 +279,28 @@
       "codigo": "MMX5"
     },
     {
+      "name": "QRADAR CNSEG CONSOLE",
+      "host": "172.31.1.201",
+      "collector": "10.10.30.120",
+      "ssh_user": "root",
+      "ssh_key": "/opt/qradar-dashboard/keys/CNSEG.pem",
+      "jmx_port": 7787,
+      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
+      "appliances": [
+        {
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR CNSEG EVENT COLLECTOR"
+        }
+      ],
+      "connectivity_targets": [
+        {
+          "name": "Event Collector",
+          "target": "10.10.30.120"
+        }
+      ],
+      "codigo": "MMX6"
+    },
+    {
       "name": "QRADAR ELDORADO CONSOLE",
       "host": "10.254.193.100",
       "collector": "host",
@@ -175,26 +312,26 @@
       "codigo": "MMX7"
     },
     {
-      "name": "QRADAR ASPER CONSOLE",
-      "host": "172.31.1.8",
-      "collector": "host",
+      "name": "QRADAR SILIMED CONSOLE",
+      "host": "172.31.1.128",
+      "collector": "10.21.1.15",
       "ssh_user": "root",
-      "ssh_key": "/opt/qradar-dashboard/keys/ASPER.pem",
+      "ssh_key": "/opt/qradar-dashboard/keys/SILIMED.pem",
       "jmx_port": 7787,
       "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
       "appliances": [
         {
-          "name": "App Host",
-          "zabbix_host": "asper-apphost"
+          "name": "Event Collector",
+          "zabbix_host": "QRADAR SILIMED EVENT COLLECTOR"
         }
       ],
       "connectivity_targets": [
         {
-          "name": "App Host",
-          "target": "172.31.1.251"
+          "name": "Event Collector",
+          "target": "10.21.1.15"
         }
       ],
-      "codigo": "VPX1"
+      "codigo": "MMX8"
     }
   ],
   "wallboard_token": "uej3g14re4bfa2c65qkhyym75747ff8538bib1u07ae534f4vkyja7ma6a89dbe4"
