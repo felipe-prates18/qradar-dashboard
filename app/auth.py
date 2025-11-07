@@ -118,25 +118,30 @@ def verify_credentials(username: str, password: str):
     return row
 
 def verify_user(request: Request):
-    u = request.session.get("user")
-    login_at = request.session.get("login_at")
+    try:
+        session = request.session
+    except AssertionError:
+        return None
+
+    u = session.get("user")
+    login_at = session.get("login_at")
     if not u or not login_at:
-        request.session.clear()
+        session.clear()
         return None
     try:
         login_dt = datetime.fromisoformat(login_at)
         if login_dt.tzinfo is None:
             login_dt = login_dt.replace(tzinfo=timezone.utc)
     except Exception:
-        request.session.clear()
+        session.clear()
         return None
     now = datetime.now(timezone.utc)
     if now - login_dt >= SESSION_DURATION:
-        request.session.clear()
+        session.clear()
         return None
     row = get_user(u)
     if not row or int(row["is_active"]) != 1:
-        request.session.clear()
+        session.clear()
         return None
     return row["username"]
 
