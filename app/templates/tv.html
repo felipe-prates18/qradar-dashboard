@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Painel SOC - QRadar</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/favicon.png">
+</head>
+<body class="tv-body">
+  <div class="tv-wrap">
+    <header class="tv-header">
+      <div class="tv-brand">
+        <img src="/static/logo-asper.png" alt="ASPER">
+        <div class="tv-brand-text">
+          <h1>Painel SOC</h1>
+          <p>Resumo consolidado do monitoramento do QRadar</p>
+        </div>
+      </div>
+      <div class="tv-meta" id="tv-meta">
+        <span class="tv-meta-updated" id="tv-updated">Atualizado: —</span>
+        <span class="tv-meta-count" id="tv-count">Ambientes: —</span>
+      </div>
+    </header>
+
+    <section class="tv-legend" aria-label="Legenda de status">
+      <span class="tv-legend-item">
+        <span class="tv-status-indicator is-normal" aria-hidden="true"></span>
+        Normal
+      </span>
+      <span class="tv-legend-item">
+        <span class="tv-status-indicator is-warning" aria-hidden="true"></span>
+        Atenção
+      </span>
+      <span class="tv-legend-item">
+        <span class="tv-status-indicator is-critical" aria-hidden="true"></span>
+        Crítico
+      </span>
+    </section>
+
+    <main id="tv-root"></main>
+  </div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+    {% raw %}
+    const { useState, useEffect, useCallback, useMemo } = React;
+
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const STATUS_ICON = {
+      normal: '🟢',
+      warning: '🟡',
+      critical: '🔴'
+    };
+    const STATUS_RANK = { normal: 0, warning: 1, critical: 2 };
+    const STATUS_LABEL = {
+      normal: 'Normal',
+      warning: 'Atenção',
+      critical: 'Crítico'
+    };
+
+    function parseNumberValue(raw) {
+      if (raw === null || raw === undefined) return null;
+      const trimmed = String(raw).trim();
+      if (!trimmed) return null;
+
+      const tokenMatches = trimmed.replace(/\u00A0/g, ' ').match(/[-+]?\d[\d.,\s]*/g);
+      if (!tokenMatches) return null;
+
+      for (const token of tokenMatches) {
+        let sanitized = token
+          .replace(/\s+/g, '')
+          .replace(/[^0-9,.+-]/g, '');
+        if (!sanitized || /^[-+]+$/.test(sanitized)) continue;
+
+        const isNegative = sanitized.startsWith('-');
+        const isPositive = sanitized.startsWith('+');
+        if (isNegative || isPositive) {
+          sanitized = sanitized.slice(1);
+        }
+
+        const hasComma = sanitized.includes(',');
+        const hasDot = sanitized.includes('.');
+
+        if (hasComma && hasDot) {
+          if (sanitized.lastIndexOf('.') > sanitized.lastIndexOf(',')) {
+            sanitized = sanitized.replace(/,/g, '');
+          } else {
+            sanitized = sanitized.replace(/\./g, '').replace(',', '.');
+          }
+        } else if (hasComma) {
+          const thousandsCommaPattern = /^\d{1,3}(,\d{3})+$/;
+          if (thousandsCommaPattern.test(sanitized)) {
+            sanitized = sanitized.replace(/,/g, '');
+          } else {
+            sanitized = sanitized.replace(/,/g, '.');
+          }
+        } else if (hasDot) {
+          const thousandsDotPattern = /^\d{1,3}(\.\d{3})+$/;
+          if (thousandsDotPattern.test(sanitized)) {
+            sanitized = sanitized.replace(/\./g, '');
+          }
+        }
+
+        const numeric = Number(sanitized);
+        if (Number.isFinite(numeric)) {
+          return isNegative ? -numeric : numeric;
+        }
+      }
+
+      return null;
+    }
+
+    function parseDateValue(raw) {
+      if (typeof raw !== 'string') return null;
+      const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (m) {
+        const [, dd, mm, yyyy] = m;
+        const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    function formatExpirationDisplay(raw) {
+      if (raw === null || raw === undefined) return null;
+      const trimmed = String(raw).trim();
+      if (!trimmed) return null;
+      if (trimmed === '01/01/9999' || trimmed.startsWith('01/01/9999 ')) return 'PERPETUAL';
+      return trimmed;
+    }
+
+    function getUsageStatus({ cpu, memory, storage }) {
+      const values = [cpu, memory, storage]
+        .map(parseNumberValue)
+        .filter(v => typeof v === 'number');
+      if (!values.length) return 'normal';
+      const max = Math.max(...values);
+      if (max >= 85) return 'critical';
+      if (max >= 70) return 'warning';
+      return 'normal';
+    }
+
+    function getExpirationStatus(expirations) {
+      if (!expirations.length) return 'normal';
+      const now = new Date();
+      const soonest = expirations.reduce((min, current) => (current < min ? current : min));
+      const diffDays = (soonest - now) / DAY_MS;
+      if (diffDays < 15) return 'critical';
+      if (diffDays < 30) return 'warning';
+      return 'normal';
+    }
+
+    function formatCompact(value) {
+      const numeric = parseNumberValue(value);
+      if (numeric === null) return '—';
+      if (numeric >= 1000000) return (numeric / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (numeric >= 1000) return Math.round(numeric / 100) / 10 + 'k';
+      return String(numeric);
+    }
+
+    function clampPercent(value) {
+      if (value === null || value === undefined || Number.isNaN(value)) return null;
+      return Math.max(0, Math.min(100, value));
+    }
+
+    function getSeverityByPercent(percent) {
+      if (percent === null || Number.isNaN(percent)) return 'neutral';
+      if (percent >= 90) return 'critical';
+      if (percent >= 75) return 'warning';
+      return 'normal';
+    }
+
+    function combineStatuses(statuses) {
+      return statuses.reduce((worst, current) => {
+        if (!current) return worst;
+        if (!(current in STATUS_RANK)) return worst;
+        return STATUS_RANK[current] > STATUS_RANK[worst] ? current : worst;
+      }, 'normal');
+    }
+
+    function buildEnvironmentSnapshot(environment) {
+      const environmentCode = environment.code ?? environment.codigo ?? null;
+      const licenseExpRawList = Array.isArray(environment.license_exp_list)
+        ? environment.license_exp_list.filter(Boolean)
+        : [];
+      const licenseBreakdown = Array.isArray(environment.license_breakdown)
+        ? environment.license_breakdown
+        : [];
+      const expirationTooltip = licenseBreakdown.length
+        ? licenseBreakdown
+            .map(item => {
+              const kind = item.kind ?? '—';
+              const limit = item.limit ?? '—';
+              const expLabel = formatExpirationDisplay(item.expires) ?? item.expires;
+              const exp = expLabel ? ` (exp: ${expLabel})` : '';
+              return `${kind}: ${limit}${exp}`;
+            })
+            .join('\n')
+        : '';
+      const expirationCandidatesRaw = licenseExpRawList.length
+        ? licenseExpRawList
+        : environment.license_exp
+        ? [environment.license_exp]
+        : [];
+      const expirationDisplayList = expirationCandidatesRaw.map(item => formatExpirationDisplay(item) ?? item);
+      const expirationDates = expirationCandidatesRaw
+        .map(parseDateValue)
+        .filter(date => date instanceof Date && !Number.isNaN(date.getTime()));
+      const expirationStatus = getExpirationStatus(expirationDates);
+
+      const consoleMetrics = {
+        cpu: environment.cpu,
+        memory: environment.memory,
+        storage: environment.storage,
+      };
+      const usageStatus = getUsageStatus(consoleMetrics);
+
+      const epsCurrent = parseNumberValue(environment.eps_current);
+      const epsMax = parseNumberValue(environment.eps_max);
+      const licenseEps = parseNumberValue(environment.license_eps);
+      const epsPercent =
+        licenseEps !== null && licenseEps > 0 && epsCurrent !== null
+          ? (epsCurrent / licenseEps) * 100
+          : null;
+      const epsMaxPercent =
+        licenseEps !== null && licenseEps > 0 && epsMax !== null
+          ? (epsMax / licenseEps) * 100
+          : null;
+      const epsDanger = epsPercent !== null && epsPercent > 100;
+      const epsMaxDanger = epsMaxPercent !== null && epsMaxPercent > 100;
+      const epsStatus = getSeverityByPercent(epsPercent ?? null);
+      const epsMaxStatus = getSeverityByPercent(epsMaxPercent ?? null);
+
+      const epsCurrentDisplay = formatCompact(environment.eps_current);
+      const epsMaxDisplay = formatCompact(environment.eps_max);
+      const licenseEpsDisplay = formatCompact(environment.license_eps);
+
+      const epsSummaryDisplay =
+        epsCurrentDisplay !== '—' && licenseEpsDisplay !== '—'
+          ? `${epsCurrentDisplay} / ${licenseEpsDisplay}`
+          : epsCurrentDisplay;
+
+      const overallStatus = combineStatuses([
+        usageStatus,
+        epsDanger ? 'critical' : epsStatus,
+        epsMaxDanger ? 'critical' : epsMaxStatus,
+        expirationStatus,
+      ]);
+
+      const displayLabel =
+        environmentCode || environment.name || environment.host || environment.id || '—';
+
+      return {
+        key:
+          environmentCode ||
+          environment.name ||
+          environment.host ||
+          environment.id ||
+          Math.random().toString(16).slice(2),
+        name: displayLabel,
+        overallStatus,
+        statusLabel: STATUS_LABEL[overallStatus] || 'Normal',
+        statusIcon: STATUS_ICON[overallStatus] || '🟢',
+        metrics: [
+          {
+            key: 'cpu',
+            label: 'CPU',
+            value: environment.cpu ?? '—',
+            percent: parseNumberValue(environment.cpu),
+            status: getSeverityByPercent(parseNumberValue(environment.cpu)),
+          },
+          {
+            key: 'mem',
+            label: 'Mem',
+            value: environment.memory ?? '—',
+            percent: parseNumberValue(environment.memory),
+            status: getSeverityByPercent(parseNumberValue(environment.memory)),
+          },
+          {
+            key: 'storage',
+            label: 'Storage',
+            value: environment.storage ?? '—',
+            percent: parseNumberValue(environment.storage),
+            status: getSeverityByPercent(parseNumberValue(environment.storage)),
+          },
+          {
+            key: 'eps',
+            label: 'EPS',
+            value: epsSummaryDisplay,
+            percent: epsPercent,
+            status: epsDanger ? 'critical' : epsStatus,
+            subValue: epsMaxDisplay !== '—' ? `Pico: ${epsMaxDisplay}` : null,
+          },
+          {
+            key: 'exp',
+            label: 'Expiração',
+            value: expirationDisplayList.length ? expirationDisplayList : [formatExpirationDisplay(environment.license_exp) ?? '—'],
+            percent: null,
+            status: expirationStatus,
+            tooltip: expirationTooltip,
+          },
+        ],
+      };
+    }
+
+    function TvMetric({ label, value, percent, status = 'neutral', subValue, tooltip }) {
+      const severityModifier = status === 'neutral' || status === 'normal' ? '' : `is-${status}`;
+      const width = percent !== null && percent !== undefined ? clampPercent(percent) : null;
+      const isArrayValue = Array.isArray(value);
+      const hasArrayValues = isArrayValue && value.length > 0;
+      const displayValue = isArrayValue
+        ? hasArrayValues
+          ? value.map((entry, index) => (
+              <span key={index} className="pill-line">
+                {entry}
+              </span>
+            ))
+          : '—'
+        : value ?? '—';
+
+      const classes = ['appliance-metric-pill'];
+      if (severityModifier) classes.push(severityModifier);
+      if (isArrayValue) classes.push('has-multiline');
+      if (subValue) classes.push('has-subvalue');
+
+      const widthStyle = width !== null ? { width: `${width}%` } : null;
+
+      return (
+        <div className={classes.join(' ')} title={tooltip || ''}>
+          <span className="pill-label">{label}</span>
+          <span className={`pill-value${isArrayValue ? ' multiline' : ''}`}>{displayValue}</span>
+          {subValue ? <span className="pill-subvalue">{subValue}</span> : null}
+          {width !== null ? (
+            <span className="pill-bar">
+              <span className="pill-bar-fill" style={widthStyle} />
+            </span>
+          ) : null}
+        </div>
+      );
+    }
+
+    function TvCard({ snapshot }) {
+      return (
+        <article className={`appliance-card status-${snapshot.overallStatus}`}>
+          <header className="appliance-card-header">
+            <div className="appliance-card-title">
+              <span className="status-icon" aria-hidden="true">{snapshot.statusIcon}</span>
+              <span className="appliance-label">{snapshot.name}</span>
+            </div>
+            <span className={`status-badge is-${snapshot.overallStatus}`}>{snapshot.statusLabel}</span>
+          </header>
+          <div className="appliance-metric-grid tv-metric-grid">
+            {snapshot.metrics.map(metric => (
+              <TvMetric
+                key={`${snapshot.key}-${metric.key}`}
+                label={metric.label}
+                value={metric.value}
+                percent={metric.percent}
+                status={metric.status}
+                subValue={metric.subValue}
+                tooltip={metric.tooltip}
+              />
+            ))}
+          </div>
+        </article>
+      );
+    }
+
+    function TvDashboardApp() {
+      const [rows, setRows] = useState([]);
+      const [updatedAt, setUpdatedAt] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+
+      const loadData = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        try {
+          const response = await fetch('/api/monitor');
+          if (!response.ok) {
+            throw new Error('Não foi possível carregar os dados do monitoramento.');
+          }
+          const payload = await response.json();
+          const environments = Array.isArray(payload.rows) ? payload.rows : [];
+          setRows(environments);
+          if (payload.updated_at) {
+            setUpdatedAt(payload.updated_at);
+          } else {
+            setUpdatedAt(new Date().toLocaleString());
+          }
+          setLoading(false);
+        } catch (err) {
+          console.error(err);
+          setError(err.message || 'Erro inesperado ao carregar o monitoramento.');
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        loadData();
+        const id = setInterval(loadData, 30000);
+        return () => clearInterval(id);
+      }, [loadData]);
+
+      useEffect(() => {
+        const updatedEl = document.getElementById('tv-updated');
+        const countEl = document.getElementById('tv-count');
+        if (updatedEl) {
+          const statusText = loading ? 'sincronizando…' : updatedAt ? updatedAt : 'aguardando dados…';
+          updatedEl.textContent = `Atualizado: ${statusText}`;
+        }
+        if (countEl) {
+          const count = rows.length;
+          countEl.textContent = `Ambientes: ${count}`;
+        }
+      }, [updatedAt, loading, rows.length]);
+
+      const snapshots = useMemo(() => {
+        return rows.map(buildEnvironmentSnapshot);
+      }, [rows]);
+
+      const orderedSnapshots = useMemo(() => {
+        return [...snapshots].sort((a, b) => {
+          const rankB = STATUS_RANK[b.overallStatus] ?? 0;
+          const rankA = STATUS_RANK[a.overallStatus] ?? 0;
+          if (rankB !== rankA) {
+            return rankB - rankA;
+          }
+          return a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' });
+        });
+      }, [snapshots]);
+
+      return (
+        <div className="tv-dashboard">
+          <div className="tv-info-row">
+            <div className={`tv-refresh ${loading ? 'is-loading' : ''}`}>
+              <button
+                className="tv-refresh-button"
+                type="button"
+                onClick={loadData}
+                disabled={loading}
+                aria-label="Atualizar painel"
+              >
+                ↻
+              </button>
+              <span>{loading ? 'Atualizando…' : 'Atualizar agora'}</span>
+            </div>
+            {error ? <div className="tv-error">{error}</div> : null}
+          </div>
+          <div className="appliance-grid tv-grid">
+            {orderedSnapshots.map(snapshot => (
+              <TvCard key={snapshot.key} snapshot={snapshot} />
+            ))}
+          </div>
+          {orderedSnapshots.length === 0 && !loading ? (
+            <div className="tv-empty">Nenhum ambiente configurado.</div>
+          ) : null}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('tv-root'));
+    root.render(<TvDashboardApp />);
+    {% endraw %}
+  </script>
+</body>
+</html>
