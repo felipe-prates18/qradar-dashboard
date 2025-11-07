@@ -1514,6 +1514,22 @@ header {
   color: var(--text-primary);
 }
 
+.appliance-metric-pill .pill-value.multiline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.appliance-metric-pill .pill-line {
+  display: block;
+  line-height: 1.2;
+}
+
+.appliance-metric-pill .pill-subvalue {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .appliance-metric-pill .pill-bar {
   display: block;
   width: 100%;

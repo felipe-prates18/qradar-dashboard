@@ -299,28 +299,35 @@
     }
 
     function TvMetric({ label, value, percent, status = 'neutral', subValue, tooltip }) {
-      const severityClass = status === 'neutral' || status === 'normal' ? '' : `is-${status}`;
-      const width = percent !== null && percent !== undefined ? `${clampPercent(percent)}%` : null;
+      const severityModifier = status === 'neutral' || status === 'normal' ? '' : `is-${status}`;
+      const width = percent !== null && percent !== undefined ? clampPercent(percent) : null;
       const isArrayValue = Array.isArray(value);
       const hasArrayValues = isArrayValue && value.length > 0;
       const displayValue = isArrayValue
         ? hasArrayValues
           ? value.map((entry, index) => (
-              <span key={index} className="tv-metric-line">
+              <span key={index} className="pill-line">
                 {entry}
               </span>
             ))
           : '—'
         : value ?? '—';
 
+      const classes = ['appliance-metric-pill'];
+      if (severityModifier) classes.push(severityModifier);
+      if (isArrayValue) classes.push('has-multiline');
+      if (subValue) classes.push('has-subvalue');
+
+      const widthStyle = width !== null ? { width: `${width}%` } : null;
+
       return (
-        <div className={`tv-metric ${severityClass}`} title={tooltip || ''}>
-          <span className="tv-metric-label">{label}</span>
-          <span className={`tv-metric-value${isArrayValue ? ' multiline' : ''}`}>{displayValue}</span>
-          {subValue ? <span className="tv-metric-sub">{subValue}</span> : null}
+        <div className={classes.join(' ')} title={tooltip || ''}>
+          <span className="pill-label">{label}</span>
+          <span className={`pill-value${isArrayValue ? ' multiline' : ''}`}>{displayValue}</span>
+          {subValue ? <span className="pill-subvalue">{subValue}</span> : null}
           {width !== null ? (
-            <span className="tv-metric-bar">
-              <span className="tv-metric-bar-fill" style={{ width }} />
+            <span className="pill-bar">
+              <span className="pill-bar-fill" style={widthStyle} />
             </span>
           ) : null}
         </div>
@@ -329,15 +336,15 @@
 
     function TvCard({ snapshot }) {
       return (
-        <article className={`tv-card status-${snapshot.overallStatus}`}>
-          <header className="tv-card-header">
-            <div className="tv-card-title">
+        <article className={`appliance-card status-${snapshot.overallStatus}`}>
+          <header className="appliance-card-header">
+            <div className="appliance-card-title">
               <span className="status-icon" aria-hidden="true">{snapshot.statusIcon}</span>
-              <span className="tv-card-name">{snapshot.name}</span>
+              <span className="appliance-label">{snapshot.name}</span>
             </div>
-            <span className={`tv-status-badge is-${snapshot.overallStatus}`}>{snapshot.statusLabel}</span>
+            <span className={`status-badge is-${snapshot.overallStatus}`}>{snapshot.statusLabel}</span>
           </header>
-          <div className="tv-metric-grid">
+          <div className="appliance-metric-grid tv-metric-grid">
             {snapshot.metrics.map(metric => (
               <TvMetric
                 key={`${snapshot.key}-${metric.key}`}
@@ -435,7 +442,7 @@
             </div>
             {error ? <div className="tv-error">{error}</div> : null}
           </div>
-          <div className="tv-grid">
+          <div className="appliance-grid tv-grid">
             {orderedSnapshots.map(snapshot => (
               <TvCard key={snapshot.key} snapshot={snapshot} />
             ))}
