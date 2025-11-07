@@ -141,6 +141,8 @@ def verify_user(request: Request):
     return row["username"]
 
 def verify_user_required_page(request: Request):
+    if has_wallboard_token(request):
+        return "__wallboard__"
     u = verify_user(request)
     if not u:
         raise AuthenticationError("Sessão expirada ou inválida. Faça login novamente.")
