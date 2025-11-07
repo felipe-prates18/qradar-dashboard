@@ -1,6 +1,8 @@
 # /opt/qradar-dashboard/app/services/zabbix_client.py
-import requests
+import logging
 from typing import Optional, Dict, Any, List
+
+import requests
 from requests.exceptions import RequestException
 
 DEFAULT_OUT = {"cpu": None, "memory": None, "storage": None, "eps_current": None, "eps_max": None}
@@ -15,6 +17,7 @@ class ZabbixClient:
         self.enabled = conf.get("enabled", True)
         self._token = None
         self._timeout = 10
+        self._logger = logging.getLogger(__name__)
 
     def _rpc(self, method: str, params: dict, auth: Optional[str] = None, rid: int = 1):
         payload = {"jsonrpc": "2.0", "method": method, "params": params, "id": rid}
@@ -40,8 +43,10 @@ class ZabbixClient:
                 return self._token
             res = self._rpc("user.login", {"username": self.user, "password": self.password})
             self._token = res
+            self._logger.debug("Token de API obtido com sucesso")
             return self._token
-        except Exception:
+        except Exception as exc:
+            self._logger.exception("Falha ao autenticar na API do Zabbix: %s", exc)
             return None
 
     def _host_get(self, filter_dict: Dict[str, List[str]]) -> Optional[dict]:
@@ -58,15 +63,27 @@ class ZabbixClient:
 
     def host_get_id(self, hostname_hint: str, zabbix_host_override: Optional[str] = None) -> Optional[str]:
         if zabbix_host_override:
+            self._logger.debug(
+                "Buscando host override=%s hostname_hint=%s", zabbix_host_override, hostname_hint
+            )
             h = self._host_get({"name": [zabbix_host_override]}) or self._host_get({"host": [zabbix_host_override]})
             if h:
+                self._logger.debug("Host override encontrado hostid=%s", h["hostid"])
                 return h["hostid"]
+            self._logger.debug("Host override não encontrado, tentando hint")
         h = self._host_get({"name": [hostname_hint]})
-        if h: return h["hostid"]
+        if h:
+            self._logger.debug("Host localizado por nome hostid=%s", h["hostid"])
+            return h["hostid"]
         h = self._host_get({"host": [hostname_hint]})
-        if h: return h["hostid"]
+        if h:
+            self._logger.debug("Host localizado por host field hostid=%s", h["hostid"])
+            return h["hostid"]
         h = self._host_search_by_name(hostname_hint)
-        if h: return h["hostid"]
+        if h:
+            self._logger.debug("Host localizado via busca hostid=%s", h["hostid"])
+            return h["hostid"]
+        self._logger.warning("Host não encontrado no Zabbix hostname_hint=%s", hostname_hint)
         return None
 
     def _item_get_by_name(self, hostid: str, name: str) -> Optional[dict]:
@@ -130,6 +147,11 @@ class ZabbixClient:
             hostid = self.host_get_id(hostname_hint=zabbix_host_override or hostname,
                                       zabbix_host_override=zabbix_host_override)
             if not hostid:
+                self._logger.warning(
+                    "Não foi possível localizar host no Zabbix hostname=%s override=%s",
+                    hostname,
+                    zabbix_host_override,
+                )
                 return out
 
             cpu = self._resolve_item_value(hostid, items.get("cpu_item_name"), items.get("cpu_key_fallback"))
@@ -144,9 +166,18 @@ class ZabbixClient:
             if store is not None:
                 out["storage"] = store
 
+            self._logger.debug(
+                "Métricas obtidas hostid=%s cpu=%s memory=%s storage=%s",
+                hostid,
+                out["cpu"],
+                out["memory"],
+                out["storage"],
+            )
             return out
-        except RequestException:
+        except RequestException as exc:
+            self._logger.exception("Erro de requisição ao coletar métricas hostname=%s: %s", hostname, exc)
             return DEFAULT_OUT.copy()
-        except Exception:
+        except Exception as exc:
+            self._logger.exception("Erro inesperado ao coletar métricas hostname=%s: %s", hostname, exc)
             return DEFAULT_OUT.copy()
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import secrets
 import sqlite3
 from datetime import datetime
@@ -30,6 +31,7 @@ with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
 
 app = FastAPI(title="QRadar Monitoring App")
+logger = logging.getLogger(__name__)
 session_secret = CONFIG.get("session_secret", "qradar-app-secret")
 runtime_secret = f"{session_secret}:{secrets.token_hex(16)}"
 SESSION_MAX_AGE_SECONDS = 12 * 60 * 60
@@ -138,17 +140,45 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
     data = []
     for env in CONFIG.get("qradar_envs", []):
         name = env.get("name")
-        metrics = zbx.get_metrics(hostname=name, items=items_conf, zabbix_host_override=env.get("zabbix_host_override"))
+        env_code = env.get("codigo") or env.get("code") or name or "desconhecido"
+        logger.info("Iniciando coleta de métricas para ambiente=%s", env_code)
+        metrics = zbx.get_metrics(
+            hostname=name,
+            items=items_conf,
+            zabbix_host_override=env.get("zabbix_host_override"),
+        )
+        logger.info(
+            "Métricas coletadas ambiente=%s cpu=%s memory=%s storage=%s",
+            env_code,
+            metrics.get("cpu"),
+            metrics.get("memory"),
+            metrics.get("storage"),
+        )
 
         appliances_out = []
         for appliance in env.get("appliances", []):
             appliance_name = appliance.get("name") or appliance.get("hostname") or appliance.get("zabbix_host") or "—"
             appliance_host_hint = appliance.get("hostname") or appliance.get("name") or appliance_name
             appliance_override = appliance.get("zabbix_host") or appliance.get("zabbix_host_override")
+            logger.info(
+                "Iniciando coleta de appliance ambiente=%s appliance=%s host_hint=%s override=%s",
+                env_code,
+                appliance_name,
+                appliance_host_hint,
+                appliance_override,
+            )
             appliance_metrics = zbx.get_metrics(
                 hostname=appliance_host_hint,
                 items=items_conf,
                 zabbix_host_override=appliance_override,
+            )
+            logger.info(
+                "Métricas de appliance coletadas ambiente=%s appliance=%s cpu=%s memory=%s storage=%s",
+                env_code,
+                appliance_name,
+                appliance_metrics.get("cpu"),
+                appliance_metrics.get("memory"),
+                appliance_metrics.get("storage"),
             )
             appliances_out.append({
                 "name": appliance_name,
@@ -160,25 +190,39 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
         lic_eps, lic_exp = "Erro", "Erro"
         lic_exp_list, lic_breakdown = [], []
         try:
+            logger.info("Coletando informações de licença ambiente=%s", env_code)
             lic = ssh.read_license(env)
             if isinstance(lic, dict):
                 lic_eps = str(lic.get("license_eps", "Erro"))
                 lic_exp = lic.get("license_expiration", "Erro")
                 lic_exp_list = lic.get("license_expiration_list") or []
                 lic_breakdown = lic.get("license_breakdown") or []
-        except Exception:
-            pass
+            logger.info(
+                "Licença coletada ambiente=%s eps=%s expiracao=%s",
+                env_code,
+                lic_eps,
+                lic_exp,
+            )
+        except Exception as exc:
+            logger.exception("Erro ao coletar licença ambiente=%s", env_code)
 
         eps_cur, eps_max = "—", "—"
         try:
+            logger.info("Coletando informações de EPS ambiente=%s", env_code)
             eps = ssh.read_eps(env)
             if isinstance(eps, dict):
                 if eps.get("eps_current") is not None:
                     eps_cur = f"{int(eps['eps_current'])}"
                 if eps.get("eps_max") is not None:
                     eps_max = f"{int(eps['eps_max'])}"
-        except Exception:
-            pass
+            logger.info(
+                "EPS coletado ambiente=%s atual=%s max=%s",
+                env_code,
+                eps_cur,
+                eps_max,
+            )
+        except Exception as exc:
+            logger.exception("Erro ao coletar EPS ambiente=%s", env_code)
 
         data.append({
             "name": name,
@@ -240,10 +284,13 @@ def get_health(user: str = Depends(verify_user_required_api)):
 
         client = None
         try:
+            logger.info("Iniciando conexão SSH ambiente=%s", env_name)
             client = ssh.connect_env(env)
+            logger.info("Conexão SSH estabelecida ambiente=%s", env_name)
         except Exception as exc:
             error_message = str(exc)
             errors.append(error_message)
+            logger.exception("Falha ao conectar ao ambiente %s", env_name)
             if services:
                 services_result = [
                     {
@@ -281,14 +328,20 @@ def get_health(user: str = Depends(verify_user_required_api)):
             continue
 
         try:
+            logger.info("Verificando serviços ambiente=%s", env_name)
             services_result = ssh.check_services(env, services, client=client)
+            logger.info("Status de serviços coletados ambiente=%s total=%s", env_name, len(services_result))
+            logger.info("Verificando conectividade ambiente=%s", env_name)
             connectivity_result = ssh.check_connectivity(env, client=client)
+            logger.info("Resultados de conectividade coletados ambiente=%s total=%s", env_name, len(connectivity_result))
         except Exception as exc:
             errors.append(str(exc))
+            logger.exception("Erro durante verificação de saúde do ambiente %s", env_name)
         finally:
             if client is not None:
                 try:
                     client.close()
+                    logger.info("Conexão SSH encerrada ambiente=%s", env_name)
                 except Exception:
                     pass
 
