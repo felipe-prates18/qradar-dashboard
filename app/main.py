@@ -57,6 +57,14 @@ def home(request: Request, user: str = Depends(verify_user_required_page)):
         {"request": request, "user": user, "title": "Monitoramento"},
     )
 
+
+@app.get("/painel", response_class=HTMLResponse)
+def wallboard(request: Request, user: str = Depends(verify_user_required_page)):
+    return templates.TemplateResponse(
+        "tv.html",
+        {"request": request, "user": user, "title": "Painel SOC"},
+    )
+
 @app.get("/api/clients")
 def get_clients(user: str = Depends(verify_user_required_api)):
     clients = [{"name": e.get("name", ""), "host": e.get("host", "")} for e in CONFIG.get("qradar_envs", [])]
