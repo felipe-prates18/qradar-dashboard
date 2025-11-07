@@ -1,4 +1,6 @@
+import json
 import re
+import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +17,12 @@ auth_router = APIRouter()
 LEGACY_SHA256_REGEX = re.compile(r"^[0-9a-f]{64}$")
 BCRYPT_COST = 12
 SESSION_DURATION = timedelta(hours=12)
+WALLBOARD_COOKIE_NAME = "wallboard_token"
+
+with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
+    CONFIG = json.load(f)
+
+WALLBOARD_TOKEN = CONFIG.get("wallboard_token")
 
 
 class AuthenticationError(Exception):
@@ -59,6 +67,20 @@ def _needs_bcrypt_rehash(password_hash: str) -> bool:
     except (IndexError, ValueError):
         return True
     return cost < BCRYPT_COST or password_hash.startswith("$2a$")
+
+
+def has_wallboard_token(request: Request) -> bool:
+    if not WALLBOARD_TOKEN:
+        return False
+    candidates = [
+        request.headers.get("x-wallboard-token"),
+        getattr(request, "query_params", {}).get("token") if hasattr(request, "query_params") else None,
+        request.cookies.get(WALLBOARD_COOKIE_NAME),
+    ]
+    for candidate in candidates:
+        if candidate and secrets.compare_digest(str(candidate), WALLBOARD_TOKEN):
+            return True
+    return False
 
 def get_user(username: str):
     con = _connect()
@@ -124,11 +146,40 @@ def verify_user_required_page(request: Request):
         raise AuthenticationError("Sessão expirada ou inválida. Faça login novamente.")
     return u
 
+WALLBOARD_TOKEN_PAGE_PATHS = {"/painel"}
+WALLBOARD_TOKEN_STATIC_PREFIXES = ("/static/",)
+WALLBOARD_TOKEN_API_PATHS = {"/api/monitor"}
+
+
+def wallboard_token_request_allowed(request: Request) -> bool:
+    path = request.url.path or "/"
+    normalized_path = path.rstrip("/") or "/"
+
+    if normalized_path in WALLBOARD_TOKEN_PAGE_PATHS:
+        return True
+
+    for prefix in WALLBOARD_TOKEN_STATIC_PREFIXES:
+        if path.startswith(prefix):
+            return True
+
+    if request.method.upper() == "GET" and normalized_path in WALLBOARD_TOKEN_API_PATHS:
+        return True
+
+    return False
+
+
 def verify_user_required_api(request: Request):
-    u = verify_user(request)
-    if not u:
+    session_user = verify_user(request)
+    if session_user:
+        return session_user
+
+    if has_wallboard_token(request):
+        path = request.url.path.rstrip("/") or "/"
+        if request.method.upper() == "GET" and path in WALLBOARD_TOKEN_API_PATHS:
+            return "__wallboard__"
         raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Unauthorized")
-    return u
+
+    raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
 def is_admin(username: str) -> bool:
     row = get_user(username)
