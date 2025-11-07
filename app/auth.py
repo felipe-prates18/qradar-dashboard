@@ -148,9 +148,21 @@ def verify_user_required_page(request: Request):
         raise AuthenticationError("Sessão expirada ou inválida. Faça login novamente.")
     return u
 
+WALLBOARD_TOKEN_API_PATHS = {"/api/monitor"}
+
+
+def _wallboard_token_allowed_for_request(request: Request) -> bool:
+    if request.method.upper() not in {"GET"}:
+        return False
+    path = request.url.path.rstrip("/") or "/"
+    return path in WALLBOARD_TOKEN_API_PATHS
+
+
 def verify_user_required_api(request: Request):
     if has_wallboard_token(request):
-        return "__wallboard__"
+        if _wallboard_token_allowed_for_request(request):
+            return "__wallboard__"
+        raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Unauthorized")
     u = verify_user(request)
     if not u:
         raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="Unauthorized")
