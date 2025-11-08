@@ -210,7 +210,7 @@ class AlertManager:
                 data,
             )
             response = requests.post(
-                self.webhook_url, headers=headers, data=data.encode("utf-8"), timeout=10
+                self.webhook_url, headers=headers, data=data.encode("utf-8"), timeout=10, verify=False
             )
             self.logger.debug(
                 "Resposta do webhook do Teams | status=%s corpo=%s",
