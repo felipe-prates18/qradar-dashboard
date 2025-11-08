@@ -18,7 +18,7 @@
     "store_key_fallback": "vfs.fs.pused[storageUsedPercentage.66]"
   },
   "alerts": {
-    "teams_webhook_url": "https://defaultc2e73db9ad0a428091af1f0fdeb73f.0d.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/7d761eaef26e4857b2a993f6322416a5/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=W4P1KBZU7uT5Tu3ifXehiTnTgpsp4uKkmGz-TkSrX7E",
+    "teams_webhook_url": "https://defaultc2e73db9ad0a428091af1f0fdeb73f.0d.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/16633727a38144df8be71648bd55301e/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=ptUydJ_gdtuFjK7r2z3mnxM2Od689EauNwKjIDJQy70",
     "interval_seconds": 600
   },
   "health": {
