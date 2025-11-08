@@ -189,25 +189,12 @@ class AlertManager:
             "Preparando envio de alerta | titulo='%s' severidade='%s'", title, severity
         )
 
-        card_payload = {
-            "@type": "MessageCard",
-            "@context": "https://schema.org/extensions",
-            "summary": title,
-            "themeColor": {
-                "normal": "2F8DEE",
-                "warning": "FFA500",
-                "critical": "D13438",
-            }.get(severity, "2F8DEE"),
-            "title": title,
-            "text": f"**Severidade:** {severity.upper()}<br>{message}",
-        }
-        card_json = json.dumps(card_payload, ensure_ascii=False)
+        summary = message
         payload = {
-            "MessageCard": card_json,
-            "MessageCardObject": card_payload,
-            "Severity": severity,
-            "Title": title,
-            "MessageBody": card_payload.get("text"),
+            "title": title,
+            "summary": summary,
+            "severity": severity.upper(),
+            "message": message,
         }
         headers = {"Content-Type": "application/json"}
         body = json.dumps(payload, ensure_ascii=False)
