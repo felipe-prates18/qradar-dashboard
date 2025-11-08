@@ -1059,15 +1059,18 @@ header {
 
 .health-item-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .health-item-name {
   font-weight: 600;
   letter-spacing: 0.01em;
   color: var(--text-primary);
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .health-item.is-warning .health-item-name {
@@ -1090,6 +1093,9 @@ header {
   background: rgba(29, 157, 111, 0.22);
   color: var(--green-strong);
   min-width: 0;
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .status-pill.is-warning {
