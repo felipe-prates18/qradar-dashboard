@@ -189,7 +189,7 @@ class AlertManager:
             "Preparando envio de alerta | titulo='%s' severidade='%s'", title, severity
         )
 
-        payload = {
+        card_payload = {
             "@type": "MessageCard",
             "@context": "https://schema.org/extensions",
             "summary": title,
@@ -201,16 +201,24 @@ class AlertManager:
             "title": title,
             "text": f"**Severidade:** {severity.upper()}<br>{message}",
         }
+        payload = {
+            "MessageCard": card_payload,
+            "Severity": severity,
+            "Title": title,
+        }
         headers = {"Content-Type": "application/json"}
-        data = json.dumps(payload, ensure_ascii=False)
+        body = json.dumps(payload, ensure_ascii=False)
         try:
             self.logger.debug(
                 "Enviando webhook para o Microsoft Teams | headers=%s payload=%s",
                 headers,
-                data,
+                body,
             )
             response = requests.post(
-                self.webhook_url, headers=headers, data=data.encode("utf-8"), timeout=10, verify=False
+                self.webhook_url,
+                headers=headers,
+                data=body.encode("utf-8"),
+                timeout=10,
             )
             self.logger.debug(
                 "Resposta do webhook do Teams | status=%s corpo=%s",
