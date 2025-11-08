@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import requests
@@ -85,6 +85,13 @@ class AlertManager:
 
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
+
+        self.dashboard_url_template = alerts_conf.get("dashboard_url_template")
+        self.dashboard_url_base = (
+            alerts_conf.get("dashboard_url")
+            or alerts_conf.get("dashboard_base_url")
+            or "http://172.31.1.253:8000/login"
+        )
 
         self._resource_state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
         self._storage_alerts: Dict[Tuple[str, str, str], bool] = {}
@@ -184,18 +191,100 @@ class AlertManager:
             return f"{name} ({code})"
         return name
 
-    def _send_alert(self, title: str, message: str, severity: str = "normal") -> None:
+    def _build_dashboard_url(
+        self,
+        *,
+        env_code: Optional[str] = None,
+        category: Optional[str] = None,
+        component: Optional[str] = None,
+        severity: Optional[str] = None,
+    ) -> str:
+        if self.dashboard_url_template:
+            class _SafeDict(dict):
+                def __missing__(self, key: str) -> str:
+                    return ""
+
+            context = _SafeDict(
+                {
+                    "code": env_code or "",
+                    "category": category or "",
+                    "component": component or "",
+                    "severity": severity or "",
+                }
+            )
+            try:
+                url = self.dashboard_url_template.format_map(context)
+                if url:
+                    return url
+            except Exception:
+                self.logger.exception(
+                    "Falha ao formatar dashboard_url_template. Usando URL padrão."
+                )
+
+        base = self.dashboard_url_base
+        if env_code:
+            separator = "&" if "?" in base else "?"
+            return f"{base}{separator}env={env_code}"
+        return base
+
+    def _send_alert(
+        self,
+        title: str,
+        message: str,
+        *,
+        severity: str = "normal",
+        summary: Optional[str] = None,
+        facts: Optional[Tuple[Dict[str, str], ...]] = None,
+        category: Optional[str] = None,
+        detected_at: Optional[datetime] = None,
+        extra: Optional[Dict[str, Any]] = None,
+        env_code: Optional[str] = None,
+        component: Optional[str] = None,
+    ) -> None:
         self.logger.info(
             "Preparando envio de alerta | titulo='%s' severidade='%s'", title, severity
         )
 
-        summary = message
-        payload = {
+        summary = summary or title
+        severity_key = (severity or "normal").strip().lower()
+        severity_map = {
+            "critical": "CRITICAL",
+            "warning": "WARNING",
+            "info": "INFO",
+            "informational": "INFO",
+            "normal": "INFO",
+        }
+        normalized_severity = severity_map.get(severity_key, severity_key.upper())
+
+        payload: Dict[str, Any] = {
             "title": title,
             "summary": summary,
-            "severity": severity.upper(),
+            "severity": normalized_severity,
             "message": message,
         }
+
+        if facts:
+            payload["facts"] = [dict(item) for item in facts if item.get("value")]
+        if category:
+            payload["category"] = category
+
+        timestamp = detected_at or datetime.utcnow().replace(tzinfo=timezone.utc)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = timestamp.astimezone(timezone.utc)
+        timestamp = timestamp.replace(microsecond=0)
+        payload["detectedAt"] = timestamp.isoformat().replace("+00:00", "Z")
+
+        payload["dashboardUrl"] = self._build_dashboard_url(
+            env_code=env_code,
+            category=category,
+            component=component,
+            severity=normalized_severity,
+        )
+
+        if extra:
+            payload.update(extra)
         headers = {"Content-Type": "application/json"}
         body = json.dumps(payload, ensure_ascii=False)
         try:
@@ -272,7 +361,24 @@ class AlertManager:
                         f"{env_label} - {component}: consumo crítico de {metric_key.upper()} "
                         f"por mais de 1 hora ({percent:.1f}%)."
                     )
-                    self._send_alert("Consumo crítico prolongado", message, severity="critical")
+                    facts = (
+                        {"title": "Ambiente", "value": env_label},
+                        {"title": "Componente", "value": component},
+                        {"title": "Recurso", "value": metric_key.upper()},
+                        {"title": "Uso", "value": f"{percent:.1f}%" if percent is not None else "n/d"},
+                        {"title": "Duração", "value": ">= 1 hora"},
+                    )
+                    self._send_alert(
+                        "Consumo crítico prolongado",
+                        message,
+                        severity="critical",
+                        summary=f"{env_label} - {component}",
+                        facts=facts,
+                        category="resource",
+                        detected_at=now,
+                        env_code=code,
+                        component=component,
+                    )
                     state["alert_sent"] = True
                 else:
                     remaining = timedelta(hours=1) - (now - state["first_seen"])
@@ -294,7 +400,22 @@ class AlertManager:
                         message = (
                             f"{env_label} - {component}: armazenamento atingiu {percent:.1f}% de uso."
                         )
-                        self._send_alert("Armazenamento crítico", message, severity="critical")
+                        facts = (
+                            {"title": "Ambiente", "value": env_label},
+                            {"title": "Componente", "value": component},
+                            {"title": "Uso", "value": f"{percent:.1f}%"},
+                        )
+                        self._send_alert(
+                            "Armazenamento crítico",
+                            message,
+                            severity="critical",
+                            summary=f"{env_label} - {component}",
+                            facts=facts,
+                            category="storage",
+                            detected_at=now,
+                            env_code=code,
+                            component=component,
+                        )
                         self._storage_alerts[key] = True
                     else:
                         self.logger.debug(
@@ -334,7 +455,23 @@ class AlertManager:
                         f"{env_label}: EPS atual ({eps_current}) excede o limite de licença ({license_eps}) "
                         "há mais de 24 horas."
                     )
-                    self._send_alert("EPS acima do licenciado", message, severity="critical")
+                    duration = now - state["first_exceeded"]
+                    facts = (
+                        {"title": "Ambiente", "value": env_label},
+                        {"title": "EPS atual", "value": str(eps_current)},
+                        {"title": "Limite da licença", "value": str(license_eps)},
+                        {"title": "Excedendo há", "value": f"{duration.days * 24 + duration.seconds // 3600}h"},
+                    )
+                    self._send_alert(
+                        "EPS acima do licenciado",
+                        message,
+                        severity="critical",
+                        summary=env_label,
+                        facts=facts,
+                        category="eps",
+                        detected_at=now,
+                        env_code=code,
+                    )
                     state["last_sent_date"] = now.date()
                 else:
                     self.logger.debug(
@@ -380,7 +517,21 @@ class AlertManager:
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
-                self._send_alert("Licença próxima da expiração", message, severity="critical")
+                facts = (
+                    {"title": "Ambiente", "value": env_label},
+                    {"title": "Data de expiração", "value": soonest.strftime("%d/%m/%Y")},
+                    {"title": "Dias restantes", "value": str(days_until)},
+                )
+                self._send_alert(
+                    "Licença próxima da expiração",
+                    message,
+                    severity="critical",
+                    summary=env_label,
+                    facts=facts,
+                    category="license",
+                    detected_at=now,
+                    env_code=code,
+                )
                 state["critical_date"] = now.date()
                 state["info_sent"] = True
                 state["warning_sent"] = True
@@ -389,14 +540,42 @@ class AlertManager:
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
-                self._send_alert("Licença próxima da expiração", message, severity="warning")
+                facts = (
+                    {"title": "Ambiente", "value": env_label},
+                    {"title": "Data de expiração", "value": soonest.strftime("%d/%m/%Y")},
+                    {"title": "Dias restantes", "value": str(days_until)},
+                )
+                self._send_alert(
+                    "Licença próxima da expiração",
+                    message,
+                    severity="warning",
+                    summary=env_label,
+                    facts=facts,
+                    category="license",
+                    detected_at=now,
+                    env_code=code,
+                )
                 state["warning_sent"] = True
         elif days_until <= 45:
             if not state.get("info_sent"):
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
-                self._send_alert("Licença próxima da expiração", message, severity="normal")
+                facts = (
+                    {"title": "Ambiente", "value": env_label},
+                    {"title": "Data de expiração", "value": soonest.strftime("%d/%m/%Y")},
+                    {"title": "Dias restantes", "value": str(days_until)},
+                )
+                self._send_alert(
+                    "Licença próxima da expiração",
+                    message,
+                    severity="normal",
+                    summary=env_label,
+                    facts=facts,
+                    category="license",
+                    detected_at=now,
+                    env_code=code,
+                )
                 state["info_sent"] = True
         else:
             self._license_state.pop(code, None)
@@ -409,25 +588,43 @@ class AlertManager:
             env_label = self._env_label(row)
             code = row.get("code") or env_label
 
-            self._check_email_alert(row, env_label, code)
-            self._check_postfix_alert(row, env_label, code)
-            self._check_offense_alert(row, env_label, code)
-            self._check_connectivity_alert(row, env_label, code)
+            self._check_email_alert(row, env_label, code, now)
+            self._check_postfix_alert(row, env_label, code, now)
+            self._check_offense_alert(row, env_label, code, now)
+            self._check_connectivity_alert(row, env_label, code, now)
 
-    def _check_email_alert(self, row: Dict[str, Any], env_label: str, code: str) -> None:
+    def _check_email_alert(
+        self, row: Dict[str, Any], env_label: str, code: str, now: datetime
+    ) -> None:
         email_check = row.get("email_check") or {}
         status = str(email_check.get("status") or "").lower()
         if status in {"error", "critical", "failed", "missing"}:
             if not self._email_state.get(code):
                 message = f"{env_label}: sem envios de e-mail nas últimas 24 horas ou verificação com erro."
-                self._send_alert("Falha no envio de e-mails", message, severity="critical")
+                facts = (
+                    {"title": "Ambiente", "value": env_label},
+                    {"title": "Status", "value": status or "desconhecido"},
+                )
+                self._send_alert(
+                    "Falha no envio de e-mails",
+                    message,
+                    severity="critical",
+                    summary=env_label,
+                    facts=facts,
+                    category="email",
+                    detected_at=now,
+                    env_code=code,
+                    component="email",
+                )
                 self._email_state[code] = True
             else:
                 self.logger.debug("Alerta de e-mail já enviado para %s", env_label)
         else:
             self._email_state.pop(code, None)
 
-    def _check_postfix_alert(self, row: Dict[str, Any], env_label: str, code: str) -> None:
+    def _check_postfix_alert(
+        self, row: Dict[str, Any], env_label: str, code: str, now: datetime
+    ) -> None:
         services = row.get("services") or []
         postfix_entry = next((svc for svc in services if (svc.get("name") or "").endswith("postfix.service")), None)
         if postfix_entry:
@@ -435,28 +632,61 @@ class AlertManager:
             if status != "active":
                 if not self._postfix_state.get(code):
                     message = f"{env_label}: serviço postfix está inativo (status: {status or 'desconhecido'})."
-                    self._send_alert("Postfix indisponível", message, severity="critical")
+                    facts = (
+                        {"title": "Ambiente", "value": env_label},
+                        {"title": "Status", "value": status or "desconhecido"},
+                    )
+                    self._send_alert(
+                        "Postfix indisponível",
+                        message,
+                        severity="critical",
+                        summary=env_label,
+                        facts=facts,
+                        category="email",
+                        detected_at=now,
+                        env_code=code,
+                        component="postfix",
+                    )
                     self._postfix_state[code] = True
                 else:
                     self.logger.debug("Alerta de postfix já enviado para %s", env_label)
             else:
                 self._postfix_state.pop(code, None)
 
-    def _check_offense_alert(self, row: Dict[str, Any], env_label: str, code: str) -> None:
+    def _check_offense_alert(
+        self, row: Dict[str, Any], env_label: str, code: str, now: datetime
+    ) -> None:
         offense_check = row.get("offense_check") or {}
         status = str(offense_check.get("status") or "").lower()
         count = offense_check.get("count")
         if status != "ok" or (isinstance(count, int) and count == 0):
             if not self._offense_state.get(code):
                 message = f"{env_label}: nenhuma ofensa registrada nas últimas 24 horas."
-                self._send_alert("Ausência de ofensas", message, severity="critical")
+                facts = (
+                    {"title": "Ambiente", "value": env_label},
+                    {"title": "Status", "value": status or "desconhecido"},
+                    {"title": "Ofensas nas últimas 24h", "value": str(count) if count is not None else "0"},
+                )
+                self._send_alert(
+                    "Ausência de ofensas",
+                    message,
+                    severity="critical",
+                    summary=env_label,
+                    facts=facts,
+                    category="offense",
+                    detected_at=now,
+                    env_code=code,
+                    component="offense",
+                )
                 self._offense_state[code] = True
             else:
                 self.logger.debug("Alerta de ofensas já enviado para %s", env_label)
         else:
             self._offense_state.pop(code, None)
 
-    def _check_connectivity_alert(self, row: Dict[str, Any], env_label: str, code: str) -> None:
+    def _check_connectivity_alert(
+        self, row: Dict[str, Any], env_label: str, code: str, now: datetime
+    ) -> None:
         connectivity = row.get("connectivity") or []
         for entry in connectivity:
             target = entry.get("target") or entry.get("name") or "Appliance"
@@ -467,7 +697,22 @@ class AlertManager:
             if reachable is False or status in {"error", "critical", "failed"}:
                 if not self._connectivity_state.get(key):
                     message = f"{env_label}: perda de comunicação com {target}."
-                    self._send_alert("Falha de conectividade", message, severity="critical")
+                    facts = (
+                        {"title": "Ambiente", "value": env_label},
+                        {"title": "Destino", "value": target},
+                        {"title": "Status", "value": status or "desconhecido"},
+                    )
+                    self._send_alert(
+                        "Falha de conectividade",
+                        message,
+                        severity="critical",
+                        summary=f"{env_label} - {target}",
+                        facts=facts,
+                        category="connectivity",
+                        detected_at=now,
+                        env_code=code,
+                        component=target,
+                    )
                     self._connectivity_state[key] = True
                 else:
                     self.logger.debug(
