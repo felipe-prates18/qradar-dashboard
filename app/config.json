@@ -18,7 +18,7 @@
     "store_key_fallback": "vfs.fs.pused[storageUsedPercentage.66]"
   },
   "alerts": {
-    "teams_webhook_url": "",
+    "teams_webhook_url": "https://defaultc2e73db9ad0a428091af1f0fdeb73f.0d.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/ca314467e29e4632be792ff65fb9c06f/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=8my24G_Wqy2mJwlwMunrv7SFcKvK-HCs90WLRhCXcf0",
     "interval_seconds": 600
   },
   "health": {
@@ -400,20 +400,20 @@
     "timeout": 20,
     "version": "16.0",
     "tokens": {
-      "VPX1": "",
-      "VPX2": "",
-      "VPX3": "",
-      "VPX4": "",
-      "MMX1": "",
-      "MMX2": "",
-      "MMX3": "",
-      "MMX4": "",
-      "MMX5": "",
-      "MMX6": "",
-      "MMX7": "",
-      "MMX8": "",
-      "MMX9": "",
-      "MMX10": ""
+      "VPX1": "43c61a18-fef4-4c4b-a3c6-596b49ca95bc",
+      "VPX2": "5a7db6d5-cc62-4813-9335-20022ad08f88",
+      "VPX3": "1f0eb1b1-fca0-4359-9bec-49bac2d664e3",
+      "VPX4": "8decfba9-b76c-4e3f-8bff-d4b9af4ba71a",
+      "MMX1": "cb53a2f8-32a8-4995-8b56-d0cd5c2b8589",
+      "MMX2": "2a68bc15-87cc-475d-88da-321128ce1636",
+      "MMX3": "ff6adef5-d500-4600-b46a-8224a0e07701",
+      "MMX4": "c11cc12b-1172-47f2-b3a6-28e10ac7ede3",
+      "MMX5": "221fe836-864e-43e0-85f1-12bff5fad379",
+      "MMX6": "0bf494be-1097-4843-89da-d291bdf5374f",
+      "MMX7": "f3b4353a-758d-424f-bd47-3266d1945bf6",
+      "MMX8": "d45b8459-c51f-4776-bcf9-8c3b8cabc0c6",
+      "MMX9": "d142c822-1ad1-490d-993e-88b3a4d92ef7",
+      "MMX10": "371f6f40-907e-4aea-8f01-087e33afd499"
     }
   }
 }
