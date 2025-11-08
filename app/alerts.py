@@ -202,10 +202,28 @@ class AlertManager:
         }
         try:
             response = requests.post(self.webhook_url, json=payload, timeout=10)
+            self.logger.debug(
+                "Resposta do webhook do Teams | status=%s corpo=%s",
+                getattr(response, "status_code", "desconhecido"),
+                (response.text[:1000] if getattr(response, "text", None) else ""),
+            )
             response.raise_for_status()
             self.logger.info("Alerta enviado com sucesso: %s", title)
+        except requests.RequestException as exc:
+            resp = getattr(exc, "response", None)
+            if resp is not None:
+                body = resp.text[:1000] if getattr(resp, "text", None) else ""
+                self.logger.exception(
+                    "Falha ao enviar alerta para o Microsoft Teams | status=%s corpo=%s",
+                    resp.status_code,
+                    body,
+                )
+            else:
+                self.logger.exception(
+                    "Falha ao enviar alerta para o Microsoft Teams sem resposta HTTP"
+                )
         except Exception:
-            self.logger.exception("Falha ao enviar alerta para o Microsoft Teams")
+            self.logger.exception("Falha inesperada ao enviar alerta para o Microsoft Teams")
 
     def _process_monitoring_alerts(self, monitoring: Dict[str, Any], now: datetime) -> None:
         rows = monitoring.get("rows") or []
