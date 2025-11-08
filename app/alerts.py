@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -190,7 +191,7 @@ class AlertManager:
 
         payload = {
             "@type": "MessageCard",
-            "@context": "http://schema.org/extensions",
+            "@context": "https://schema.org/extensions",
             "summary": title,
             "themeColor": {
                 "normal": "2F8DEE",
@@ -200,8 +201,17 @@ class AlertManager:
             "title": title,
             "text": f"**Severidade:** {severity.upper()}<br>{message}",
         }
+        headers = {"Content-Type": "application/json"}
+        data = json.dumps(payload, ensure_ascii=False)
         try:
-            response = requests.post(self.webhook_url, json=payload, timeout=10)
+            self.logger.debug(
+                "Enviando webhook para o Microsoft Teams | headers=%s payload=%s",
+                headers,
+                data,
+            )
+            response = requests.post(
+                self.webhook_url, headers=headers, data=data.encode("utf-8"), timeout=10
+            )
             self.logger.debug(
                 "Resposta do webhook do Teams | status=%s corpo=%s",
                 getattr(response, "status_code", "desconhecido"),
