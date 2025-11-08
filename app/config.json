@@ -17,6 +17,10 @@
     "store_item_name": "/store: Space utilization",
     "store_key_fallback": "vfs.fs.pused[storageUsedPercentage.66]"
   },
+  "alerts": {
+    "teams_webhook_url": "",
+    "interval_seconds": 600
+  },
   "health": {
     "services": [
       "accumulator.service",
