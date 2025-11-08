@@ -129,11 +129,13 @@ class AlertManager:
         loop = asyncio.get_running_loop()
         while not self._stop_event.is_set():
             started_at = loop.time()
+            self.logger.debug("Iniciando ciclo de verificação de alertas")
             try:
                 await asyncio.to_thread(self._perform_checks)
             except Exception:
                 self.logger.exception("Erro ao executar verificações de alertas")
             elapsed = loop.time() - started_at
+            self.logger.debug("Ciclo de verificação concluído em %.2fs", elapsed)
             wait_seconds = max(0, self.interval - elapsed)
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=wait_seconds)
@@ -154,10 +156,23 @@ class AlertManager:
             self.logger.exception("Falha ao coletar dados de saúde para alertas")
             health = None
 
-        if monitoring:
-            self._process_monitoring_alerts(monitoring, now)
-        if health:
-            self._process_health_alerts(health, now)
+        if monitoring is not None:
+            if monitoring:
+                self._process_monitoring_alerts(monitoring, now)
+            else:
+                self.logger.info("Dados de monitoramento vazios recebidos para alertas")
+        else:
+            self.logger.warning("Falha ao obter dados de monitoramento para alertas")
+
+        if health is not None:
+            if health:
+                self._process_health_alerts(health, now)
+            else:
+                self.logger.info("Dados de saúde vazios recebidos para alertas")
+        else:
+            self.logger.warning("Falha ao obter dados de saúde para alertas")
+        if monitoring is None and health is None:
+            self.logger.warning("Nenhum dado disponível para avaliação de alertas")
 
     def _env_label(self, row: Dict[str, Any]) -> str:
         code = row.get("code")
@@ -169,6 +184,10 @@ class AlertManager:
         return name
 
     def _send_alert(self, title: str, message: str, severity: str = "normal") -> None:
+        self.logger.info(
+            "Preparando envio de alerta | titulo='%s' severidade='%s'", title, severity
+        )
+
         payload = {
             "@type": "MessageCard",
             "@context": "http://schema.org/extensions",
@@ -190,6 +209,7 @@ class AlertManager:
 
     def _process_monitoring_alerts(self, monitoring: Dict[str, Any], now: datetime) -> None:
         rows = monitoring.get("rows") or []
+        self.logger.debug("Processando %d registros de monitoramento", len(rows))
         for row in rows:
             env_label = self._env_label(row)
             code = row.get("code") or env_label
@@ -228,6 +248,17 @@ class AlertManager:
                     )
                     self._send_alert("Consumo crítico prolongado", message, severity="critical")
                     state["alert_sent"] = True
+                else:
+                    remaining = timedelta(hours=1) - (now - state["first_seen"])
+                    if remaining.total_seconds() < 0:
+                        remaining = timedelta(0)
+                    self.logger.debug(
+                        "Consumo crítico detectado para %s/%s/%s, aguardando %s para alertar",
+                        env_label,
+                        component,
+                        metric_key,
+                        remaining,
+                    )
             else:
                 self._resource_state.pop(key, None)
 
@@ -239,6 +270,13 @@ class AlertManager:
                         )
                         self._send_alert("Armazenamento crítico", message, severity="critical")
                         self._storage_alerts[key] = True
+                    else:
+                        self.logger.debug(
+                            "Alerta de armazenamento já enviado para %s/%s (%s%%)",
+                            env_label,
+                            component,
+                            percent,
+                        )
                 else:
                     self._storage_alerts.pop(key, None)
 
@@ -272,6 +310,19 @@ class AlertManager:
                     )
                     self._send_alert("EPS acima do licenciado", message, severity="critical")
                     state["last_sent_date"] = now.date()
+                else:
+                    self.logger.debug(
+                        "Alerta diário de EPS já enviado para %s na data %s",
+                        env_label,
+                        last_sent,
+                    )
+            else:
+                elapsed = now - state["first_exceeded"]
+                self.logger.debug(
+                    "EPS excedido para %s há %s; aguardando 24h para alertar",
+                    env_label,
+                    elapsed,
+                )
         else:
             self._eps_state.pop(code, None)
 
@@ -291,6 +342,10 @@ class AlertManager:
         state = self._license_state.setdefault(
             code,
             {"info_sent": False, "warning_sent": False, "critical_date": None},
+        )
+
+        self.logger.debug(
+            "Licença de %s expira em %d dias (data %s)", env_label, days_until, soonest.date()
         )
 
         if days_until <= 15:
@@ -322,6 +377,8 @@ class AlertManager:
 
     def _process_health_alerts(self, health: Dict[str, Any], now: datetime) -> None:
         rows = health.get("rows") or []
+        self.logger.debug("Processando %d registros de saúde", len(rows))
+
         for row in rows:
             env_label = self._env_label(row)
             code = row.get("code") or env_label
@@ -339,6 +396,8 @@ class AlertManager:
                 message = f"{env_label}: sem envios de e-mail nas últimas 24 horas ou verificação com erro."
                 self._send_alert("Falha no envio de e-mails", message, severity="critical")
                 self._email_state[code] = True
+            else:
+                self.logger.debug("Alerta de e-mail já enviado para %s", env_label)
         else:
             self._email_state.pop(code, None)
 
@@ -352,6 +411,8 @@ class AlertManager:
                     message = f"{env_label}: serviço postfix está inativo (status: {status or 'desconhecido'})."
                     self._send_alert("Postfix indisponível", message, severity="critical")
                     self._postfix_state[code] = True
+                else:
+                    self.logger.debug("Alerta de postfix já enviado para %s", env_label)
             else:
                 self._postfix_state.pop(code, None)
 
@@ -364,6 +425,8 @@ class AlertManager:
                 message = f"{env_label}: nenhuma ofensa registrada nas últimas 24 horas."
                 self._send_alert("Ausência de ofensas", message, severity="critical")
                 self._offense_state[code] = True
+            else:
+                self.logger.debug("Alerta de ofensas já enviado para %s", env_label)
         else:
             self._offense_state.pop(code, None)
 
@@ -380,5 +443,9 @@ class AlertManager:
                     message = f"{env_label}: perda de comunicação com {target}."
                     self._send_alert("Falha de conectividade", message, severity="critical")
                     self._connectivity_state[key] = True
+                else:
+                    self.logger.debug(
+                        "Alerta de conectividade já enviado para %s -> %s", env_label, target
+                    )
             else:
                 self._connectivity_state.pop(key, None)
