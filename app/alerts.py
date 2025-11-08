@@ -201,10 +201,13 @@ class AlertManager:
             "title": title,
             "text": f"**Severidade:** {severity.upper()}<br>{message}",
         }
+        card_json = json.dumps(card_payload, ensure_ascii=False)
         payload = {
-            "MessageCard": card_payload,
+            "MessageCard": card_json,
+            "MessageCardObject": card_payload,
             "Severity": severity,
             "Title": title,
+            "MessageBody": card_payload.get("text"),
         }
         headers = {"Content-Type": "application/json"}
         body = json.dumps(payload, ensure_ascii=False)
