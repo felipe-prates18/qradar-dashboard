@@ -535,6 +535,8 @@ class SSHClient:
                         for raw in handle:
                             if 'status=sent' not in raw:
                                 continue
+                            if 'to=<root@qradarasper.symphony.local>' in raw:
+                                continue
                             match = re.match(r'^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})', raw)
                             if not match:
                                 continue
