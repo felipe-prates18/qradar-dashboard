@@ -1,8 +1,12 @@
+import asyncio
 import json
 import logging
 import secrets
 import sqlite3
+from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Lock
+from typing import Any, Callable, Dict, Optional
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -46,6 +50,8 @@ runtime_secret = f"{session_secret}:{secrets.token_hex(16)}"
 SESSION_MAX_AGE_SECONDS = 12 * 60 * 60
 WALLBOARD_TOKEN = CONFIG.get("wallboard_token")
 WALLBOARD_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
+CACHE_TTL_SECONDS = 180
+CACHE_REFRESH_INTERVAL_SECONDS = CACHE_TTL_SECONDS
 app.add_middleware(
     SessionMiddleware,
     secret_key=runtime_secret,
@@ -57,20 +63,161 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(auth_router)
 
 
-def _collect_monitoring_payload():
-    return collect_monitoring_data(CONFIG, logger=logger)
+class _DataCache:
+    def __init__(self, ttl_seconds: int):
+        self.ttl = timedelta(seconds=max(1, int(ttl_seconds)))
+        self._lock = Lock()
+        self._payload: Optional[Dict[str, Any]] = None
+        self._collected_at: Optional[datetime] = None
+
+    def _now(self) -> datetime:
+        return datetime.utcnow()
+
+    def get_cached(self) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return self._payload
+
+    def store(self, payload: Dict[str, Any]) -> None:
+        timestamp = self._now()
+        with self._lock:
+            self._payload = payload
+            self._collected_at = timestamp
+
+    def refresh(self, fetcher: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
+        payload = fetcher()
+        self.store(payload)
+        return payload
+
+    def get_or_refresh(self, fetcher: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
+        with self._lock:
+            payload = self._payload
+            collected_at = self._collected_at
+
+        if (
+            payload is not None
+            and collected_at is not None
+            and self._now() - collected_at < self.ttl
+        ):
+            return payload
+
+        return self.refresh(fetcher)
+
+    def is_expired(self) -> bool:
+        with self._lock:
+            if self._collected_at is None:
+                return True
+            return self._now() - self._collected_at > self.ttl
 
 
-def _collect_health_payload():
-    return collect_health_data(CONFIG, logger=logger)
+_monitoring_cache = _DataCache(CACHE_TTL_SECONDS)
+_health_cache = _DataCache(CACHE_TTL_SECONDS)
+
+
+def _refresh_monitoring_cache() -> Dict[str, Any]:
+    return _monitoring_cache.refresh(lambda: collect_monitoring_data(CONFIG, logger=logger))
+
+
+def _refresh_health_cache() -> Dict[str, Any]:
+    return _health_cache.refresh(lambda: collect_health_data(CONFIG, logger=logger))
+
+
+def _get_monitoring_payload() -> Dict[str, Any]:
+    payload = _monitoring_cache.get_cached()
+    if payload is None:
+        logger.info("Cache de monitoramento vazio. Coletando dados iniciais.")
+        return _refresh_monitoring_cache()
+    if _monitoring_cache.is_expired():
+        logger.warning("Cache de monitoramento expirado. Atualizando dados sob demanda.")
+        return _refresh_monitoring_cache()
+    return payload
+
+
+def _get_health_payload() -> Dict[str, Any]:
+    payload = _health_cache.get_cached()
+    if payload is None:
+        logger.info("Cache de health-check vazio. Coletando dados iniciais.")
+        return _refresh_health_cache()
+    if _health_cache.is_expired():
+        logger.warning("Cache de health-check expirado. Atualizando dados sob demanda.")
+        return _refresh_health_cache()
+    return payload
+
+
+def _refresh_all_caches() -> None:
+    try:
+        _refresh_monitoring_cache()
+    except Exception:
+        logger.exception("Falha ao atualizar o cache de monitoramento")
+    try:
+        _refresh_health_cache()
+    except Exception:
+        logger.exception("Falha ao atualizar o cache de health-check")
+
+
+async def _cache_refresh_loop(stop_event: asyncio.Event) -> None:
+    loop = asyncio.get_running_loop()
+    logger.info(
+        "Atualização periódica de caches iniciada. Intervalo=%ss",
+        CACHE_REFRESH_INTERVAL_SECONDS,
+    )
+    while not stop_event.is_set():
+        started_at = loop.time()
+        try:
+            await asyncio.to_thread(_refresh_all_caches)
+        except Exception:
+            logger.exception("Erro inesperado ao atualizar caches")
+        elapsed = loop.time() - started_at
+        wait_seconds = max(0, CACHE_REFRESH_INTERVAL_SECONDS - elapsed)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=wait_seconds)
+        except asyncio.TimeoutError:
+            continue
+    logger.info("Atualização periódica de caches finalizada")
+
+
+_cache_refresh_task: Optional[asyncio.Task] = None
+_cache_refresh_stop: Optional[asyncio.Event] = None
 
 
 alert_manager = AlertManager(
     CONFIG,
-    fetch_monitoring=_collect_monitoring_payload,
-    fetch_health=_collect_health_payload,
+    fetch_monitoring=_get_monitoring_payload,
+    fetch_health=_get_health_payload,
     logger=logger,
 )
+
+
+async def _start_cache_refresh() -> None:
+    global _cache_refresh_task, _cache_refresh_stop
+    if _cache_refresh_task is not None and not _cache_refresh_task.done():
+        return
+
+    stop_event = asyncio.Event()
+    _cache_refresh_stop = stop_event
+    await asyncio.to_thread(_refresh_all_caches)
+    _cache_refresh_task = asyncio.create_task(_cache_refresh_loop(stop_event))
+
+
+async def _stop_cache_refresh() -> None:
+    global _cache_refresh_task, _cache_refresh_stop
+    task = _cache_refresh_task
+    stop_event = _cache_refresh_stop
+    if task is None:
+        return
+    if stop_event is not None:
+        stop_event.set()
+    try:
+        await task
+    except Exception:
+        logger.exception("Erro ao finalizar a atualização periódica de caches")
+    finally:
+        _cache_refresh_task = None
+        _cache_refresh_stop = None
+
+
+@app.on_event("startup")
+async def _start_cache_manager():
+    await _start_cache_refresh()
 
 
 @app.on_event("startup")
@@ -81,6 +228,11 @@ async def _start_alert_manager():
 @app.on_event("shutdown")
 async def _stop_alert_manager():
     await alert_manager.stop()
+
+
+@app.on_event("shutdown")
+async def _shutdown_cache_manager():
+    await _stop_cache_refresh()
 
 
 @app.middleware("http")
@@ -162,13 +314,13 @@ def get_clients(user: str = Depends(verify_user_required_api)):
 
 @app.get("/api/monitor")
 def get_monitoring(user: str = Depends(verify_user_required_api)):
-    payload = collect_monitoring_data(CONFIG, logger=logger)
+    payload = _get_monitoring_payload()
     return JSONResponse(payload)
 
 
 @app.get("/api/health")
 def get_health(user: str = Depends(verify_user_required_api)):
-    payload = collect_health_data(CONFIG, logger=logger)
+    payload = _get_health_payload()
     return JSONResponse(payload)
 
 @app.exception_handler(AuthenticationError)
