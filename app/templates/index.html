@@ -1013,7 +1013,7 @@
 
       useEffect(() => {
         loadData();
-        const id = setInterval(loadData, 30000);
+        const id = setInterval(loadData, 60000);
         return () => clearInterval(id);
       }, [loadData]);
 
@@ -1131,7 +1131,7 @@
 
       useEffect(() => {
         loadData();
-        const id = setInterval(loadData, 45000);
+        const id = setInterval(loadData, 60000);
         return () => clearInterval(id);
       }, [loadData]);
 
