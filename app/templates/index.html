@@ -192,6 +192,31 @@
       return 'normal';
     }
 
+    function getEpsStatus(epsValue, licenseValue, percentValue) {
+      if (
+        epsValue === null ||
+        epsValue === undefined ||
+        licenseValue === null ||
+        licenseValue === undefined ||
+        Number.isNaN(epsValue) ||
+        Number.isNaN(licenseValue) ||
+        licenseValue <= 0
+      ) {
+        return getSeverityByPercent(percentValue ?? null);
+      }
+
+      const overage = epsValue - licenseValue;
+      if (overage > 100) {
+        return 'critical';
+      }
+      if (overage > 0) {
+        return 'warning';
+      }
+
+      const baseStatus = getSeverityByPercent(percentValue ?? null);
+      return baseStatus === 'critical' ? 'warning' : baseStatus;
+    }
+
     function combineStatuses(statuses) {
       return statuses.reduce((worst, current) => {
         if (!current) return worst;
@@ -456,8 +481,8 @@
         licenseEps !== null && licenseEps > 0 && epsMax !== null
           ? (epsMax / licenseEps) * 100
           : null;
-      const epsDanger = epsPercent !== null && epsPercent > 100;
-      const epsMaxDanger = epsMaxPercent !== null && epsMaxPercent > 100;
+      const epsStatus = getEpsStatus(epsCurrent, licenseEps, epsPercent ?? null);
+      const epsMaxStatus = getEpsStatus(epsMax, licenseEps, epsMaxPercent ?? null);
       const epsCurrentDisplay = formatCompact(environment.eps_current);
       const epsMaxDisplay = formatCompact(environment.eps_max);
       const licenseEpsDisplay = formatCompact(environment.license_eps);
@@ -507,9 +532,6 @@
         }))
       ];
 
-      const epsStatus = getSeverityByPercent(epsPercent ?? null);
-      const epsMaxStatus = getSeverityByPercent(epsMaxPercent ?? null);
-
       const summaryMetrics = [
         {
           key: 'cpu',
@@ -540,7 +562,7 @@
               ? `${epsCurrentDisplay} / ${licenseEpsDisplay}`
               : epsCurrentDisplay,
           percent: epsPercent,
-          status: epsDanger ? 'critical' : epsStatus,
+          status: epsStatus,
           tooltip: epsMaxDisplay !== '—' ? `EPS Máx: ${epsMaxDisplay}` : ''
         },
         {
@@ -558,8 +580,8 @@
 
       const consoleStoragePercent = parseNumberValue(environment.storage);
       const licenseStatuses = [
-        epsDanger ? 'critical' : epsStatus,
-        epsMaxDanger ? 'critical' : epsMaxStatus,
+        epsStatus,
+        epsMaxStatus,
         expirationStatus
       ];
       let overallStatus = combineStatuses([usageStatus, ...licenseStatuses]);
