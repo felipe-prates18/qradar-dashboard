@@ -79,6 +79,7 @@ class AlertManager:
             or alerts_conf.get("teams_webhook")
             or alerts_conf.get("webhook")
         )
+        self.license_webhook_url = alerts_conf.get("license_teams_webhook_url")
         self.interval = int(alerts_conf.get("interval_seconds", 600))
         if self.interval < 60:
             self.interval = 60
@@ -287,38 +288,53 @@ class AlertManager:
             payload.update(extra)
         headers = {"Content-Type": "application/json"}
         body = json.dumps(payload, ensure_ascii=False)
+
+        targets = [("principal", self.webhook_url)] if self.webhook_url else []
+        if category == "license" and self.license_webhook_url:
+            targets.append(("licenca", self.license_webhook_url))
+
+        if not targets:
+            self.logger.warning("Nenhum webhook configurado para envio do alerta '%s'", title)
+            return
+
         try:
-            self.logger.debug(
-                "Enviando webhook para o Microsoft Teams | headers=%s payload=%s",
-                headers,
-                body,
-            )
-            response = requests.post(
-                self.webhook_url,
-                headers=headers,
-                data=body.encode("utf-8"),
-                timeout=10,
-            )
-            self.logger.debug(
-                "Resposta do webhook do Teams | status=%s corpo=%s",
-                getattr(response, "status_code", "desconhecido"),
-                (response.text[:1000] if getattr(response, "text", None) else ""),
-            )
-            response.raise_for_status()
-            self.logger.info("Alerta enviado com sucesso: %s", title)
-        except requests.RequestException as exc:
-            resp = getattr(exc, "response", None)
-            if resp is not None:
-                body = resp.text[:1000] if getattr(resp, "text", None) else ""
-                self.logger.exception(
-                    "Falha ao enviar alerta para o Microsoft Teams | status=%s corpo=%s",
-                    resp.status_code,
-                    body,
-                )
-            else:
-                self.logger.exception(
-                    "Falha ao enviar alerta para o Microsoft Teams sem resposta HTTP"
-                )
+            for label, url in targets:
+                try:
+                    self.logger.debug(
+                        "Enviando webhook (%s) para o Microsoft Teams | headers=%s payload=%s",
+                        label,
+                        headers,
+                        body,
+                    )
+                    response = requests.post(
+                        url,
+                        headers=headers,
+                        data=body.encode("utf-8"),
+                        timeout=10,
+                    )
+                    self.logger.debug(
+                        "Resposta do webhook do Teams (%s) | status=%s corpo=%s",
+                        label,
+                        getattr(response, "status_code", "desconhecido"),
+                        (response.text[:1000] if getattr(response, "text", None) else ""),
+                    )
+                    response.raise_for_status()
+                    self.logger.info("Alerta enviado com sucesso (%s): %s", label, title)
+                except requests.RequestException as exc:
+                    resp = getattr(exc, "response", None)
+                    if resp is not None:
+                        body_resp = resp.text[:1000] if getattr(resp, "text", None) else ""
+                        self.logger.exception(
+                            "Falha ao enviar alerta para o Microsoft Teams (%s) | status=%s corpo=%s",
+                            label,
+                            resp.status_code,
+                            body_resp,
+                        )
+                    else:
+                        self.logger.exception(
+                            "Falha ao enviar alerta para o Microsoft Teams (%s) sem resposta HTTP",
+                            label,
+                        )
         except Exception:
             self.logger.exception("Falha inesperada ao enviar alerta para o Microsoft Teams")
 
