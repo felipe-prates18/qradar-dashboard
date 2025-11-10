@@ -1,6 +1,7 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from requests.exceptions import RequestException
@@ -16,6 +17,12 @@ def _pct(value: Any) -> str:
         return "—"
 
 
+def _determine_workers(total: int, default: int = 4) -> int:
+    if total <= 1:
+        return 1
+    return min(max(1, default), total)
+
+
 def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Logger] = None) -> Dict[str, Any]:
     """Collect monitoring metrics for consoles and appliances."""
 
@@ -24,9 +31,18 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
     zbx = ZabbixClient(zb_conf)
     ssh = SSHClient()
     items_conf = config.get("items", {})
-    data: List[Dict[str, Any]] = []
 
-    for env in config.get("qradar_envs", []):
+    envs = list(config.get("qradar_envs", []))
+    total_envs = len(envs)
+    if total_envs == 0:
+        return {
+            "updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
+            "rows": [],
+        }
+
+    rows: List[Optional[Dict[str, Any]]] = [None] * total_envs
+
+    def _collect_env(idx_env: int, env: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         name = env.get("name")
         env_code = env.get("codigo") or env.get("code") or name or "desconhecido"
         logger.info("Iniciando coleta de métricas para ambiente=%s", env_code)
@@ -44,15 +60,18 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
         )
 
         appliances_out: List[Dict[str, Any]] = []
-        for appliance in env.get("appliances", []):
+
+        appliances = list(env.get("appliances", []) or [])
+
+        def _collect_appliance(appliance_entry: Dict[str, Any]) -> Dict[str, Any]:
             appliance_name = (
-                appliance.get("name")
-                or appliance.get("hostname")
-                or appliance.get("zabbix_host")
+                appliance_entry.get("name")
+                or appliance_entry.get("hostname")
+                or appliance_entry.get("zabbix_host")
                 or "—"
             )
-            appliance_host_hint = appliance.get("hostname") or appliance.get("name") or appliance_name
-            appliance_override = appliance.get("zabbix_host") or appliance.get("zabbix_host_override")
+            appliance_host_hint = appliance_entry.get("hostname") or appliance_entry.get("name") or appliance_name
+            appliance_override = appliance_entry.get("zabbix_host") or appliance_entry.get("zabbix_host_override")
             logger.info(
                 "Iniciando coleta de appliance ambiente=%s appliance=%s host_hint=%s override=%s",
                 env_code,
@@ -73,14 +92,47 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
                 appliance_metrics.get("memory"),
                 appliance_metrics.get("storage"),
             )
-            appliances_out.append(
-                {
-                    "name": appliance_name,
-                    "cpu": _pct(appliance_metrics.get("cpu")),
-                    "memory": _pct(appliance_metrics.get("memory")),
-                    "storage": _pct(appliance_metrics.get("storage")),
-                }
-            )
+            return {
+                "name": appliance_name,
+                "cpu": _pct(appliance_metrics.get("cpu")),
+                "memory": _pct(appliance_metrics.get("memory")),
+                "storage": _pct(appliance_metrics.get("storage")),
+            }
+
+        if appliances:
+            appliance_workers = _determine_workers(len(appliances), default=3)
+            if appliance_workers > 1:
+                with ThreadPoolExecutor(max_workers=appliance_workers) as appliance_executor:
+                    future_to_index = {
+                        appliance_executor.submit(_collect_appliance, appliance): idx
+                        for idx, appliance in enumerate(appliances)
+                    }
+                    appliances_buffer: List[Optional[Dict[str, Any]]] = [None] * len(appliances)
+                    for future in as_completed(future_to_index):
+                        appliance_idx = future_to_index[future]
+                        try:
+                            appliances_buffer[appliance_idx] = future.result()
+                        except Exception:
+                            logger.exception(
+                                "Erro ao coletar métricas do appliance ambiente=%s idx=%s",
+                                env_code,
+                                appliance_idx,
+                            )
+                            appliances_buffer[appliance_idx] = {
+                                "name": (
+                                    appliances[appliance_idx].get("name")
+                                    or appliances[appliance_idx].get("hostname")
+                                    or appliances[appliance_idx].get("zabbix_host")
+                                    or "—"
+                                ),
+                                "cpu": "—",
+                                "memory": "—",
+                                "storage": "—",
+                            }
+                    appliances_out.extend([item for item in appliances_buffer if item])
+            else:
+                for appliance_entry in appliances:
+                    appliances_out.append(_collect_appliance(appliance_entry))
 
         lic_eps, lic_exp = "Erro", "Erro"
         lic_exp_list: List[str] = []
@@ -120,7 +172,8 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
         except Exception:
             logger.exception("Erro ao coletar EPS ambiente=%s", env_code)
 
-        data.append(
+        return (
+            idx_env,
             {
                 "name": name,
                 "code": env.get("codigo") or env.get("code"),
@@ -134,8 +187,37 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
                 "license_exp_list": lic_exp_list,
                 "license_breakdown": lic_breakdown,
                 "appliances": appliances_out,
-            }
+            },
         )
+
+    max_workers = _determine_workers(total_envs, default=4)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {
+            executor.submit(_collect_env, idx, env): idx for idx, env in enumerate(envs)
+        }
+        for future in as_completed(future_to_index):
+            env_idx = future_to_index[future]
+            try:
+                idx_env, payload = future.result()
+                rows[idx_env] = payload
+            except Exception:
+                logger.exception("Erro inesperado na coleta de métricas para idx=%s", env_idx)
+                rows[env_idx] = {
+                    "name": envs[env_idx].get("name"),
+                    "code": envs[env_idx].get("codigo") or envs[env_idx].get("code"),
+                    "cpu": "—",
+                    "memory": "—",
+                    "storage": "—",
+                    "eps_current": "—",
+                    "eps_max": "—",
+                    "license_eps": "Erro",
+                    "license_exp": "Erro",
+                    "license_exp_list": [],
+                    "license_breakdown": [],
+                    "appliances": [],
+                }
+
+    data: List[Dict[str, Any]] = [row for row in rows if row is not None]
 
     return {
         "updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
@@ -376,8 +458,11 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             "error": error_message,
         }
 
-    rows: List[Dict[str, Any]] = []
-    for env in config.get("qradar_envs", []):
+    envs = list(config.get("qradar_envs", []))
+    total_envs = len(envs)
+    rows: List[Optional[Dict[str, Any]]] = [None] * total_envs
+
+    def _collect_env(idx_env: int, env: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         env_name = env.get("name") or env.get("host") or "Ambiente"
         services_result: List[Dict[str, Any]] = []
         connectivity_result: List[Dict[str, Any]] = []
@@ -487,7 +572,8 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
 
         _append_error_from_check(email_check, errors)
 
-        rows.append(
+        return (
+            idx_env,
             {
                 "name": env_name,
                 "code": env.get("codigo") or env.get("code"),
@@ -496,12 +582,47 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "offense_check": offense_check,
                 "email_check": email_check,
                 "errors": errors,
-            }
+            },
         )
+
+    if total_envs:
+        max_workers = _determine_workers(total_envs, default=4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(_collect_env, idx, env): idx for idx, env in enumerate(envs)
+            }
+            for future in as_completed(future_to_index):
+                env_idx = future_to_index[future]
+                try:
+                    idx_env, payload = future.result()
+                    rows[idx_env] = payload
+                except Exception:
+                    logger.exception("Erro inesperado na coleta de health check para idx=%s", env_idx)
+                    rows[env_idx] = {
+                        "name": envs[env_idx].get("name") or envs[env_idx].get("host") or "Ambiente",
+                        "code": envs[env_idx].get("codigo") or envs[env_idx].get("code"),
+                        "services": [],
+                        "connectivity": [],
+                        "offense_check": {
+                            "status": "error",
+                            "message": "Falha inesperada na coleta",
+                            "details": [],
+                            "count": None,
+                            "error": "Falha inesperada na coleta",
+                        },
+                        "email_check": {
+                            "status": "error",
+                            "message": "Falha inesperada na coleta",
+                            "details": [],
+                            "count": None,
+                            "error": "Falha inesperada na coleta",
+                        },
+                        "errors": ["Falha inesperada na coleta"],
+                    }
 
     payload = {
         "updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
-        "rows": rows,
+        "rows": [row for row in rows if row is not None],
         "settings": {
             "latency_warning_ms": health_conf.get("latency_warning_ms", 150),
             "latency_critical_ms": health_conf.get("latency_critical_ms", 300),
