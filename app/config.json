@@ -19,6 +19,7 @@
   },
   "alerts": {
     "teams_webhook_url": "https://default33f70dd65ac04e74a8c47736b9998d.e1.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/340bc84bb10d4e4783ed2c73645ca518/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=jH714QpMLk2iPRvqvbCBI0n_KWK7sVE2fC3E3itB8qg",
+    "license_teams_webhook_url": "https://example.com/license-webhook",
     "interval_seconds": 600
   },
   "health": {
