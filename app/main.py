@@ -366,6 +366,12 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
         {"request": request, "users": mapped, "user": user},
     )
 
+@app.get("/users/admin", response_class=HTMLResponse)
+def legacy_admin_users_page(request: Request, user: str = Depends(verify_user_required_page)):
+    """Mantém compatibilidade com a rota legada /users/admin."""
+    return admin_users_page(request, user)
+
+
 @app.post("/admin/users/create")
 def admin_create_user(request: Request, username: str = Form(...), password: str = Form(...), is_admin_flag: str = Form(None), user: str = Depends(verify_user_required_page)):
     if not is_admin(user):
@@ -389,6 +395,11 @@ def admin_create_user(request: Request, username: str = Form(...), password: str
         con.close()
     return RedirectResponse(url="/admin/users", status_code=302)
 
+@app.post("/users/admin/create")
+def legacy_admin_create_user(request: Request, username: str = Form(...), password: str = Form(...), is_admin_flag: str = Form(None), user: str = Depends(verify_user_required_page)):
+    return admin_create_user(request, username, password, is_admin_flag, user)
+
+
 @app.post("/admin/users/toggle")
 def admin_toggle_user(request: Request, user_id: int = Form(...), field: str = Form(...), user: str = Depends(verify_user_required_page)):
     if not is_admin(user):
@@ -405,6 +416,11 @@ def admin_toggle_user(request: Request, user_id: int = Form(...), field: str = F
     con.commit()
     con.close()
     return RedirectResponse(url="/admin/users", status_code=302)
+
+@app.post("/users/admin/toggle")
+def legacy_admin_toggle_user(request: Request, user_id: int = Form(...), field: str = Form(...), user: str = Depends(verify_user_required_page)):
+    return admin_toggle_user(request, user_id, field, user)
+
 
 @app.get("/api/admin/users")
 def api_admin_list(user: str = Depends(verify_user_required_api)):
