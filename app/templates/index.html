@@ -904,6 +904,9 @@
       if (offenseCheck) {
         coreStatusesForOverall.push(getSimpleCheckSeverity(offenseCheck));
       }
+      if (logSourcesCheck) {
+        statusesForOverall.push(getSimpleCheckSeverity(logSourcesCheck));
+      }
       if (emailCheck) {
         coreStatusesForOverall.push(getSimpleCheckSeverity(emailCheck));
       }
