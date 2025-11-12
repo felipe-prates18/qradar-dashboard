@@ -876,7 +876,31 @@
 
       const serviceSeverities = services.map(getServiceSeverity);
       const connectivitySeverities = connectivity.map(item => getConnectivitySeverity(item, settings));
+      let maxLatency = null;
+      connectivity.forEach(item => {
+        const latency = Number(item && item.latency_ms);
+        if (Number.isFinite(latency)) {
+          if (maxLatency === null || latency > maxLatency) {
+            maxLatency = latency;
+          }
+        }
+      });
+      const warnLatency = Number((settings && settings.latency_warning_ms) !== undefined
+        ? settings && settings.latency_warning_ms
+        : DEFAULT_HEALTH_SETTINGS.latency_warning_ms);
+      const criticalLatency = Number((settings && settings.latency_critical_ms) !== undefined
+        ? settings && settings.latency_critical_ms
+        : DEFAULT_HEALTH_SETTINGS.latency_critical_ms);
+      let latencyStatus = 'normal';
+      if (maxLatency !== null) {
+        if (Number.isFinite(criticalLatency) && maxLatency >= criticalLatency) {
+          latencyStatus = 'critical';
+        } else if (Number.isFinite(warnLatency) && maxLatency >= warnLatency) {
+          latencyStatus = 'warning';
+        }
+      }
       const statusesForOverall = [...serviceSeverities, ...connectivitySeverities];
+      statusesForOverall.push(latencyStatus);
       if (offenseCheck) {
         statusesForOverall.push(getSimpleCheckSeverity(offenseCheck));
       }
@@ -931,27 +955,6 @@
           : '—';
       const logSourcePercent = logSourceRatio !== null ? Math.round(logSourceRatio * 100) : null;
       const logSourceSeverity = logSourcesCheck ? getSimpleCheckSeverity(logSourcesCheck) : 'warning';
-
-      let maxLatency = null;
-      connectivity.forEach(item => {
-        const latency = Number(item && item.latency_ms);
-        if (Number.isFinite(latency)) {
-          if (maxLatency === null || latency > maxLatency) {
-            maxLatency = latency;
-          }
-        }
-      });
-
-      const warnLatency = Number((settings && settings.latency_warning_ms) !== undefined ? settings.latency_warning_ms : DEFAULT_HEALTH_SETTINGS.latency_warning_ms);
-      const criticalLatency = Number((settings && settings.latency_critical_ms) !== undefined ? settings.latency_critical_ms : DEFAULT_HEALTH_SETTINGS.latency_critical_ms);
-      let latencyStatus = 'normal';
-      if (maxLatency !== null) {
-        if (Number.isFinite(criticalLatency) && maxLatency >= criticalLatency) {
-          latencyStatus = 'critical';
-        } else if (Number.isFinite(warnLatency) && maxLatency >= warnLatency) {
-          latencyStatus = 'warning';
-        }
-      }
 
       const summaryMetrics = [
         {

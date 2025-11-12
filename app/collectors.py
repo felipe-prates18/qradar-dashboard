@@ -761,7 +761,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         errors: List[str] = []
 
         log_sources_check = _check_log_sources(env)
-        _append_error_from_check(log_sources_check, errors, ignore_statuses=["warning"])
 
         offense_check = _check_offenses(env)
         _append_error_from_check(offense_check, errors)
