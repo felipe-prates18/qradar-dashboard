@@ -1373,6 +1373,8 @@ textarea:focus {
 .health-item-description {
   font-size: 14px;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .health-item-meta {
@@ -1386,6 +1388,7 @@ textarea:focus {
 .health-item-meta span {
   min-width: 0;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .health-item-error {
