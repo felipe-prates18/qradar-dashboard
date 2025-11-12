@@ -823,7 +823,7 @@
           {message ? <div className="health-item-description">{message}</div> : null}
           <div className="health-item-meta">
             <span>Total avaliados: {total !== null ? total : '—'}</span>
-            <span>Com problema: {count !== null ? count : '—'}</span>
+            <span>Em alerta: {count !== null ? count : '—'}</span>
             {percentLabel ? <span>Percentual: {percentLabel}</span> : null}
           </div>
           {details.length ? (
@@ -837,7 +837,7 @@
           <div className="health-item-actions">
             <button
               type="button"
-              className="download-button"
+              className="btn secondary download-button"
               onClick={handleDownload}
               disabled={downloadDisabled}
             >
@@ -903,9 +903,6 @@
       coreStatusesForOverall.push(latencyStatus);
       if (offenseCheck) {
         coreStatusesForOverall.push(getSimpleCheckSeverity(offenseCheck));
-      }
-      if (logSourcesCheck) {
-        statusesForOverall.push(getSimpleCheckSeverity(logSourcesCheck));
       }
       if (emailCheck) {
         coreStatusesForOverall.push(getSimpleCheckSeverity(emailCheck));

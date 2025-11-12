@@ -1,4 +1,5 @@
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -413,6 +414,26 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             timeout = 20
         version = env.get("api_version") or default_version
 
+        max_duration = env.get("log_sources_timeout_seconds")
+        if max_duration is None:
+            max_duration = api_conf.get("log_sources_timeout_seconds")
+        try:
+            max_duration = int(max_duration)
+        except Exception:
+            max_duration = None
+        if max_duration is not None and max_duration <= 0:
+            max_duration = None
+        if max_duration is None:
+            max_duration = max(30, timeout * 2)
+        deadline = time.monotonic() + max_duration if max_duration else None
+
+        logger.debug(
+            "Iniciando coleta de log sources ambiente=%s timeout=%ss max_duration=%ss",
+            env.get("name") or env.get("host"),
+            timeout,
+            max_duration,
+        )
+
         url = f"{base_url}/config/event_sources/log_source_management/log_sources"
         headers = {
             "SEC": str(token),
@@ -479,8 +500,17 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         skipped_disabled = 0
         items: List[Dict[str, Any]] = []
 
+        timed_out = False
+
         try:
             while True:
+                if deadline and time.monotonic() >= deadline:
+                    timed_out = True
+                    logger.warning(
+                        "Tempo limite atingido na coleta de log sources ambiente=%s",
+                        env.get("name") or env.get("host"),
+                    )
+                    break
                 range_header = f"items={start}-{start + limit - 1}"
                 logger.info(
                     "Consultando log sources via API ambiente=%s range=%s",
@@ -587,25 +617,41 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             }
 
         evaluated_total = enabled_total or 0
-        if evaluated_total:
+        if timed_out:
+            ratio = None
+            healthy = None
+            total_value = None
+        elif evaluated_total:
             healthy = max(evaluated_total - problematic, 0)
             ratio = healthy / evaluated_total
+            total_value = evaluated_total
         else:
             healthy = 0
             ratio = None
+            total_value = evaluated_total
 
-        if problematic:
+        if timed_out:
+            message = "Tempo limite atingido na consulta de log sources do QRadar."
+            status = "warning"
+            error_message = "Coleta de log sources interrompida por tempo limite."
+        elif problematic:
             message = (
                 f"{problematic} log source(s) com erro ou sem eventos há mais de 24h."
             )
             status = "warning"
+            error_message = None
         else:
             message = "Nenhum log source com erro ou atraso superior a 24h."
             status = "ok"
+            error_message = None
 
         details = []
         if skipped_disabled:
             details.append(f"Ignorados (desativados): {skipped_disabled}")
+        if timed_out:
+            details.append(
+                f"Coleta interrompida após {max_duration}s; fontes avaliadas: {enabled_total}"
+            )
         details.append("Limite sem eventos: 24 horas")
         details.append(f"Atualizado em: {_format_dt_label(now)}")
 
@@ -614,11 +660,11 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             "message": message,
             "details": details,
             "count": problematic,
-            "total": evaluated_total,
+            "total": total_value,
             "ratio": ratio,
             "healthy": healthy,
             "generated_at": now.isoformat(),
-            "error": None,
+            "error": error_message,
             "items": items,
         }
 
