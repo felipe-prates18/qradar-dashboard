@@ -5,7 +5,7 @@
   <title>Admin • Usuários</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body class="admin-users-page">
 <div class="wrap">
   <header>
     <div class="brand">
@@ -24,44 +24,95 @@
   {% if error %}<div class="alert error">{{error}}</div>{% endif %}
   {% if success %}<div class="alert ok">{{success}}</div>{% endif %}
 
-  <section class="card">
-    <h3>Cadastrar novo usuário</h3>
-    <form method="post" action="/admin/users/create" class="row">
-      <input type="text" name="username" placeholder="username" required>
-      <input type="password" name="password" placeholder="senha" required>
-      <label><input type="checkbox" name="is_admin"> Admin</label>
-      <button class="btn">Criar</button>
+  <section class="card new-user-card">
+    <div class="card-heading">
+      <div>
+        <h3>Cadastrar novo usuário</h3>
+        <p class="muted">Crie contas rapidamente e defina privilégios administrativos.</p>
+      </div>
+    </div>
+    <form method="post" action="/admin/users/create" class="form-grid">
+      <div class="form-field">
+        <label for="username">Nome de usuário</label>
+        <input type="text" id="username" name="username" placeholder="nome.sobrenome" required>
+      </div>
+      <div class="form-field">
+        <label for="password">Senha inicial</label>
+        <input type="password" id="password" name="password" placeholder="Senha temporária" minlength="6" required>
+      </div>
+      <label class="form-checkbox">
+        <input type="checkbox" name="is_admin">
+        <span>Conceder acesso de administrador</span>
+      </label>
+      <div class="form-actions">
+        <button class="btn" type="submit">Criar usuário</button>
+      </div>
     </form>
   </section>
 
-  <section class="card" style="margin-top:14px">
-    <h3>Usuários</h3>
-    <table>
-      <thead>
-        <tr><th>Usuário</th><th>Ativo</th><th>Admin</th><th>Ações</th></tr>
-      </thead>
-      <tbody>
-      {% for u in users %}
-        <tr>
-          <td>{{u.username}}</td>
-          <td>{{'Sim' if u.is_active else 'Não'}}</td>
-          <td>{{'Sim' if u.is_admin else 'Não'}}</td>
-          <td class="row">
-            <form method="post" action="/admin/users/toggle" style="display:inline">
-              <input type="hidden" name="user_id" value="{{u.id}}">
-              <input type="hidden" name="field" value="is_active">
-              <button class="btn small secondary">Toggle Ativo</button>
-            </form>
-            <form method="post" action="/admin/users/toggle" style="display:inline; margin-left:6px">
-              <input type="hidden" name="user_id" value="{{u.id}}">
-              <input type="hidden" name="field" value="is_admin">
-              <button class="btn small secondary">Toggle Admin</button>
-            </form>
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+  <section class="card users-card">
+    <div class="card-heading">
+      <div>
+        <h3>Usuários</h3>
+        <p class="muted">Gerencie o status, permissões e credenciais das contas existentes.</p>
+      </div>
+    </div>
+    <div class="table-wrapper">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Usuário</th>
+            <th>Status</th>
+            <th>Perfil</th>
+            <th class="actions-col">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for u in users %}
+          <tr>
+            <td>
+              <div class="user-meta">
+                <span class="user-name">{{u.username}}</span>
+              </div>
+            </td>
+            <td>
+              <span class="status-chip {{ 'is-on' if u.is_active else 'is-off' }}">
+                {{ 'Ativo' if u.is_active else 'Inativo' }}
+              </span>
+            </td>
+            <td>
+              <span class="status-chip {{ 'is-on' if u.is_admin else 'is-off' }}">
+                {{ 'Administrador' if u.is_admin else 'Padrão' }}
+              </span>
+            </td>
+            <td>
+              <div class="user-actions">
+                <form method="post" action="/admin/users/toggle" class="inline-form">
+                  <input type="hidden" name="user_id" value="{{u.id}}">
+                  <input type="hidden" name="field" value="is_active">
+                  <button class="btn small secondary" type="submit">Alternar ativo</button>
+                </form>
+                <form method="post" action="/admin/users/toggle" class="inline-form">
+                  <input type="hidden" name="user_id" value="{{u.id}}">
+                  <input type="hidden" name="field" value="is_admin">
+                  <button class="btn small secondary" type="submit">Alternar admin</button>
+                </form>
+                <form method="post" action="/admin/users/reset-password" class="inline-form inline-form--password">
+                  <input type="hidden" name="user_id" value="{{u.id}}">
+                  <input type="password" name="new_password" placeholder="Nova senha" minlength="6" required>
+                  <button class="btn small tertiary" type="submit">Resetar senha</button>
+                </form>
+                <form method="post" action="/admin/users/delete" class="inline-form" onsubmit="return confirm('Tem certeza que deseja excluir {{u.username}}? Esta ação não pode ser desfeita.');">
+                  <input type="hidden" name="user_id" value="{{u.id}}">
+                  <button class="btn small danger" type="submit">Excluir</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </section>
 </div>
 </body>
