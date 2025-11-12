@@ -417,9 +417,54 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         if version:
             headers["Version"] = str(version)
 
-        params = {
-            "fields": "id,name,status,last_event_time,last_event_collected_time,last_event_received_time,last_event_received,enabled,protocol_type_name,description",
-        }
+        field_candidates = [
+            "id,name,status,last_event_time,enabled,protocol_type_id,description",
+            "id,name,status,last_event_time,enabled",
+            None,
+        ]
+        field_index = 0
+
+        def _build_params() -> Dict[str, str]:
+            fields_value = field_candidates[field_index]
+            if fields_value:
+                return {"fields": fields_value}
+            return {}
+
+        def _extract_status_text(status_entry: Any) -> str:
+            if status_entry is None:
+                return ""
+            if isinstance(status_entry, str):
+                return status_entry
+            if isinstance(status_entry, dict):
+                for key in (
+                    "display_value",
+                    "value",
+                    "name",
+                    "status",
+                    "description",
+                ):
+                    value = status_entry.get(key)
+                    if value:
+                        return str(value)
+                messages = status_entry.get("messages")
+                if isinstance(messages, list):
+                    joined = ", ".join(
+                        text for text in (_extract_status_text(item) for item in messages) if text
+                    )
+                    if joined:
+                        return joined
+                return ""
+            if isinstance(status_entry, list):
+                parts = []
+                for item in status_entry:
+                    text = _extract_status_text(item)
+                    if text and text not in parts:
+                        parts.append(text)
+                return ", ".join(parts)
+            try:
+                return str(status_entry)
+            except Exception:
+                return ""
 
         now = datetime.now(timezone.utc)
         stale_threshold = now - timedelta(hours=24)
@@ -438,13 +483,26 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     env.get("name") or env.get("host"),
                     range_header,
                 )
+                current_params = _build_params()
                 response = requests.get(
                     url,
                     headers={**headers, "Range": range_header},
-                    params=params,
+                    params=current_params,
                     timeout=timeout,
                     verify=verify_tls,
                 )
+                if (
+                    response.status_code == 422
+                    and field_index < len(field_candidates) - 1
+                ):
+                    field_index += 1
+                    logger.warning(
+                        "Campos da API de log sources não suportados, tentando conjunto reduzido "
+                        "ambiente=%s campos=%s",
+                        env.get("name") or env.get("host"),
+                        current_params.get("fields", "todos"),
+                    )
+                    continue
                 response.raise_for_status()
                 payload = response.json()
                 if not isinstance(payload, list):
@@ -473,7 +531,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                             break
 
                     last_event_dt = _parse_timestamp(last_event_raw)
-                    status_text = str(entry.get("status") or "").strip()
+                    status_text = _extract_status_text(entry.get("status")).strip()
                     status_key = status_text.lower()
                     has_error_status = "error" in status_key or status_key in (
                         "failed",
@@ -494,7 +552,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                                 "reason": "Sem eventos há mais de 24h"
                                 if is_stale and not has_error_status
                                 else "Erro reportado",
-                                "protocol_type": entry.get("protocol_type_name"),
+                                "protocol_type": entry.get("protocol_type_id"),
                                 "description": entry.get("description"),
                                 "last_event_time": last_event_dt.isoformat()
                                 if last_event_dt
