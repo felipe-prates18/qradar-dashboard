@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import requests
@@ -98,6 +98,7 @@ class AlertManager:
         self._storage_alerts: Dict[Tuple[str, str, str], bool] = {}
         self._eps_state: Dict[str, Dict[str, Any]] = {}
         self._license_state: Dict[str, Dict[str, Any]] = {}
+        self._license_send_time = time(hour=15, minute=0)
         self._email_state: Dict[str, bool] = {}
         self._postfix_state: Dict[str, bool] = {}
         self._offense_state: Dict[str, bool] = {}
@@ -152,7 +153,7 @@ class AlertManager:
                 continue
 
     def _perform_checks(self) -> None:
-        now = datetime.utcnow()
+        now = datetime.now()
         try:
             monitoring = self._fetch_monitoring()
         except Exception:
@@ -520,16 +521,25 @@ class AlertManager:
 
         state = self._license_state.setdefault(
             code,
-            {"info_sent": False, "warning_sent": False, "critical_date": None},
+            {
+                "info_sent": False,
+                "warning_sent": False,
+                "critical_date": None,
+                "info_schedule_date": None,
+                "warning_schedule_date": None,
+            },
         )
 
         self.logger.debug(
             "Licença de %s expira em %d dias (data %s)", env_label, days_until, soonest.date()
         )
 
+        send_time = self._license_send_time
+
         if days_until <= 15:
             last_sent = state.get("critical_date")
-            if last_sent != now.date():
+            send_dt = datetime.combine(now.date(), send_time)
+            if now >= send_dt and last_sent != now.date():
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
@@ -551,8 +561,16 @@ class AlertManager:
                 state["critical_date"] = now.date()
                 state["info_sent"] = True
                 state["warning_sent"] = True
+                state["info_schedule_date"] = None
+                state["warning_schedule_date"] = None
         elif days_until <= 30:
+            state["info_schedule_date"] = None
             if not state.get("warning_sent"):
+                if not state.get("warning_schedule_date"):
+                    state["warning_schedule_date"] = now.date()
+                send_dt = datetime.combine(state["warning_schedule_date"], send_time)
+                if now < send_dt:
+                    return
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
@@ -572,8 +590,15 @@ class AlertManager:
                     env_code=code,
                 )
                 state["warning_sent"] = True
+                state["warning_schedule_date"] = None
         elif days_until <= 45:
+            state["warning_schedule_date"] = None
             if not state.get("info_sent"):
+                if not state.get("info_schedule_date"):
+                    state["info_schedule_date"] = now.date()
+                send_dt = datetime.combine(state["info_schedule_date"], send_time)
+                if now < send_dt:
+                    return
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
