@@ -919,10 +919,15 @@
 
       const logSourceTotal = logSourcesCheck && typeof logSourcesCheck.total === 'number' ? logSourcesCheck.total : null;
       const logSourceProblematic = logSourcesCheck && typeof logSourcesCheck.count === 'number' ? logSourcesCheck.count : null;
+      const logSourceHealthy = logSourcesCheck && typeof logSourcesCheck.healthy === 'number'
+        ? logSourcesCheck.healthy
+        : (logSourceTotal !== null && logSourceProblematic !== null
+          ? Math.max(logSourceTotal - logSourceProblematic, 0)
+          : null);
       const logSourceRatio = logSourcesCheck && typeof logSourcesCheck.ratio === 'number' ? logSourcesCheck.ratio : null;
       const logSourceSummaryValue =
-        logSourceTotal !== null && logSourceProblematic !== null
-          ? `${logSourceProblematic}/${logSourceTotal} com problema`
+        logSourceTotal !== null && logSourceHealthy !== null
+          ? `${logSourceHealthy}/${logSourceTotal} com status OK`
           : '—';
       const logSourcePercent = logSourceRatio !== null ? Math.round(logSourceRatio * 100) : null;
       const logSourceSeverity = logSourcesCheck ? getSimpleCheckSeverity(logSourcesCheck) : 'warning';

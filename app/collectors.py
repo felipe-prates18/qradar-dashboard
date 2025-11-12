@@ -584,8 +584,10 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
 
         evaluated_total = enabled_total or 0
         if evaluated_total:
-            ratio = problematic / evaluated_total
+            healthy = max(evaluated_total - problematic, 0)
+            ratio = healthy / evaluated_total
         else:
+            healthy = 0
             ratio = None
 
         if problematic:
@@ -610,6 +612,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             "count": problematic,
             "total": evaluated_total,
             "ratio": ratio,
+            "healthy": healthy,
             "generated_at": now.isoformat(),
             "error": None,
             "items": items,
