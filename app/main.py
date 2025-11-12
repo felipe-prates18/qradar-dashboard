@@ -3,6 +3,7 @@ import json
 import logging
 import secrets
 import sqlite3
+from urllib.parse import urlencode
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
@@ -332,6 +333,19 @@ def handle_authentication_error(request: Request, exc: AuthenticationError):
     )
 
 
+def _redirect_admin_users(success: Optional[str] = None, error: Optional[str] = None) -> RedirectResponse:
+    params = {}
+    if success:
+        params["success"] = success
+    if error:
+        params["error"] = error
+    query = urlencode(params)
+    url = "/admin/users"
+    if query:
+        url = f"{url}?{query}"
+    return RedirectResponse(url=url, status_code=303)
+
+
 @app.get("/admin/users", response_class=HTMLResponse)
 def admin_users_page(request: Request, user: str = Depends(verify_user_required_page)):
     if not is_admin(user):
@@ -361,9 +375,18 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
         for u in users
     ]
 
+    success_message = request.query_params.get("success")
+    error_message = request.query_params.get("error")
+
     return templates.TemplateResponse(
         "admin_users.html",
-        {"request": request, "users": mapped, "user": user},
+        {
+            "request": request,
+            "users": mapped,
+            "user": user,
+            "success": success_message,
+            "error": error_message,
+        },
     )
 
 @app.get("/users/admin", response_class=HTMLResponse)
@@ -390,10 +413,10 @@ def admin_create_user(request: Request, username: str = Form(...), password: str
         )
         con.commit()
     except sqlite3.IntegrityError:
-        pass
+        return _redirect_admin_users(error="Já existe um usuário com esse nome.")
     finally:
         con.close()
-    return RedirectResponse(url="/admin/users", status_code=302)
+    return _redirect_admin_users(success=f"Usuário {username} criado com sucesso.")
 
 @app.post("/users/admin/create")
 def legacy_admin_create_user(request: Request, username: str = Form(...), password: str = Form(...), is_admin_flag: str = Form(None), user: str = Depends(verify_user_required_page)):
@@ -409,13 +432,96 @@ def admin_toggle_user(request: Request, user_id: int = Form(...), field: str = F
             status_code=403,
         )
     if field not in ("is_active", "is_admin"):
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return _redirect_admin_users(error="Ação inválida para o usuário selecionado.")
     con = _con()
     cur = con.cursor()
-    cur.execute(f"UPDATE users SET {field}=CASE {field} WHEN 1 THEN 0 ELSE 1 END WHERE id=?", (user_id,))
-    con.commit()
-    con.close()
-    return RedirectResponse(url="/admin/users", status_code=302)
+    try:
+        cur.execute(
+            "SELECT username, is_active, COALESCE(is_admin,0) as is_admin FROM users WHERE id=?",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return _redirect_admin_users(error="Usuário não encontrado.")
+        target_username = row["username"]
+        if target_username == user:
+            if field == "is_active" and int(row["is_active"]) == 1:
+                return _redirect_admin_users(error="Você não pode desativar o seu próprio usuário.")
+            if field == "is_admin" and int(row["is_admin"]) == 1:
+                return _redirect_admin_users(error="Você não pode remover suas próprias permissões de administrador.")
+        cur.execute(
+            f"UPDATE users SET {field}=CASE {field} WHEN 1 THEN 0 ELSE 1 END WHERE id=?",
+            (user_id,),
+        )
+        con.commit()
+    finally:
+        con.close()
+    if field == "is_active":
+        return _redirect_admin_users(success=f"Status de atividade atualizado para {target_username}.")
+    return _redirect_admin_users(success=f"Permissão de administrador atualizada para {target_username}.")
+
+
+@app.post("/admin/users/reset-password")
+def admin_reset_user_password(
+    request: Request,
+    user_id: int = Form(...),
+    new_password: str = Form(...),
+    user: str = Depends(verify_user_required_page),
+):
+    if not is_admin(user):
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Somente administradores podem alterar usuários."},
+            status_code=403,
+        )
+    sanitized = new_password.strip()
+    if len(sanitized) < 6:
+        return _redirect_admin_users(error="A nova senha deve ter pelo menos 6 caracteres.")
+    con = _con()
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT username FROM users WHERE id=?", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return _redirect_admin_users(error="Usuário não encontrado.")
+        cur.execute(
+            "UPDATE users SET password_hash=? WHERE id=?",
+            (hash_password(sanitized), user_id),
+        )
+        con.commit()
+        target_username = row["username"]
+    finally:
+        con.close()
+    return _redirect_admin_users(success=f"Senha redefinida para {target_username}.")
+
+
+@app.post("/admin/users/delete")
+def admin_delete_user(
+    request: Request,
+    user_id: int = Form(...),
+    user: str = Depends(verify_user_required_page),
+):
+    if not is_admin(user):
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Somente administradores podem alterar usuários."},
+            status_code=403,
+        )
+    con = _con()
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT username FROM users WHERE id=?", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return _redirect_admin_users(error="Usuário não encontrado.")
+        target_username = row["username"]
+        if target_username == user:
+            return _redirect_admin_users(error="Você não pode excluir o seu próprio usuário.")
+        cur.execute("DELETE FROM users WHERE id=?", (user_id,))
+        con.commit()
+    finally:
+        con.close()
+    return _redirect_admin_users(success=f"Usuário {target_username} removido com sucesso.")
 
 @app.post("/users/admin/toggle")
 def legacy_admin_toggle_user(request: Request, user_id: int = Form(...), field: str = Form(...), user: str = Depends(verify_user_required_page)):
