@@ -1044,6 +1044,7 @@ header {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
   transition: border 0.25s ease, background 0.25s ease;
 }
 
@@ -1121,6 +1122,11 @@ header {
   color: var(--text-muted);
 }
 
+.health-item-meta span {
+  min-width: 0;
+  word-break: break-word;
+}
+
 .health-item-error {
   font-size: 13px;
   color: #ff9f9a;
@@ -1128,6 +1134,22 @@ header {
   border: 1px solid rgba(217, 83, 79, 0.42);
   border-radius: 12px;
   padding: 8px 12px;
+}
+
+.health-item-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.download-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  text-decoration: none;
 }
 
 .health-alert {
@@ -1271,11 +1293,15 @@ header {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--text-muted);
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .summary-metric .metric-value {
   font-size: 1rem;
   font-weight: 600;
+  word-break: break-word;
 }
 
 .summary-metric .metric-value.multiline {

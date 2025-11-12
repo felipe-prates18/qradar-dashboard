@@ -1,4 +1,5 @@
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -264,12 +265,58 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             except Exception:
                 return str(dt_obj)
 
-    def _append_error_from_check(check, bucket):
+    def _parse_timestamp(value):
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            if isinstance(value, (int, float)):
+                # Assume milliseconds when the value is large enough.
+                if abs(value) > 10**12:
+                    return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+                return datetime.fromtimestamp(value, tz=timezone.utc)
+        except Exception:
+            pass
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            try:
+                numeric = int(stripped)
+                return _parse_timestamp(numeric)
+            except Exception:
+                pass
+            iso_candidate = stripped.replace("Z", "+00:00")
+            for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+                try:
+                    dt_obj = datetime.strptime(iso_candidate, fmt)
+                    if dt_obj.tzinfo is None:
+                        dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                    return dt_obj
+                except Exception:
+                    continue
+            try:
+                dt_obj = datetime.fromisoformat(iso_candidate)
+                if dt_obj.tzinfo is None:
+                    dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                return dt_obj
+            except Exception:
+                return None
+
+        return None
+
+    def _append_error_from_check(check, bucket, *, ignore_statuses: Optional[List[str]] = None):
         if not check:
             return
         status = str(check.get("status") or "").lower()
         if status in ("ok", "success"):
             return
+        if ignore_statuses:
+            ignore_set = {str(value).lower() for value in ignore_statuses if value is not None}
+            if status in ignore_set:
+                return
         message = check.get("message") or check.get("error")
         if message and message not in bucket:
             bucket.append(message)
@@ -329,6 +376,297 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         if not host:
             return None
         return f"https://{host}/api"
+
+    def _check_log_sources(env):
+        token = _resolve_api_token(env)
+        if not token:
+            message = "Token da API do QRadar não configurado."
+            return {
+                "status": "error",
+                "message": message,
+                "details": [],
+                "count": None,
+                "total": None,
+                "error": message,
+                "items": [],
+            }
+
+        base_url = _build_api_base_url(env)
+        if not base_url:
+            message = "Host da console não configurado para consulta de log sources."
+            return {
+                "status": "error",
+                "message": message,
+                "details": [],
+                "count": None,
+                "total": None,
+                "error": message,
+                "items": [],
+            }
+
+        verify_tls = _to_bool(env.get("api_verify_tls"), _to_bool(default_verify_tls, False))
+        timeout = env.get("api_timeout")
+        try:
+            timeout = int(timeout)
+        except Exception:
+            timeout = default_timeout
+        if not timeout:
+            timeout = 20
+        version = env.get("api_version") or default_version
+
+        max_duration = env.get("log_sources_timeout_seconds")
+        if max_duration is None:
+            max_duration = api_conf.get("log_sources_timeout_seconds")
+        try:
+            max_duration = int(max_duration)
+        except Exception:
+            max_duration = None
+        if max_duration is not None and max_duration <= 0:
+            max_duration = None
+        if max_duration is None:
+            max_duration = max(30, timeout * 2)
+        deadline = time.monotonic() + max_duration if max_duration else None
+
+        logger.debug(
+            "Iniciando coleta de log sources ambiente=%s timeout=%ss max_duration=%ss",
+            env.get("name") or env.get("host"),
+            timeout,
+            max_duration,
+        )
+
+        url = f"{base_url}/config/event_sources/log_source_management/log_sources"
+        headers = {
+            "SEC": str(token),
+            "Accept": "application/json",
+        }
+        if version:
+            headers["Version"] = str(version)
+
+        field_candidates = [
+            "id,name,status,last_event_time,enabled,protocol_type_id,description",
+            "id,name,status,last_event_time,enabled",
+            None,
+        ]
+        field_index = 0
+
+        def _build_params() -> Dict[str, str]:
+            fields_value = field_candidates[field_index]
+            if fields_value:
+                return {"fields": fields_value}
+            return {}
+
+        def _extract_status_text(status_entry: Any) -> str:
+            if status_entry is None:
+                return ""
+            if isinstance(status_entry, str):
+                return status_entry
+            if isinstance(status_entry, dict):
+                for key in (
+                    "display_value",
+                    "value",
+                    "name",
+                    "status",
+                    "description",
+                ):
+                    value = status_entry.get(key)
+                    if value:
+                        return str(value)
+                messages = status_entry.get("messages")
+                if isinstance(messages, list):
+                    joined = ", ".join(
+                        text for text in (_extract_status_text(item) for item in messages) if text
+                    )
+                    if joined:
+                        return joined
+                return ""
+            if isinstance(status_entry, list):
+                parts = []
+                for item in status_entry:
+                    text = _extract_status_text(item)
+                    if text and text not in parts:
+                        parts.append(text)
+                return ", ".join(parts)
+            try:
+                return str(status_entry)
+            except Exception:
+                return ""
+
+        now = datetime.now(timezone.utc)
+        stale_threshold = now - timedelta(hours=24)
+        limit = 200
+        start = 0
+        enabled_total = 0
+        problematic = 0
+        skipped_disabled = 0
+        items: List[Dict[str, Any]] = []
+
+        timed_out = False
+
+        try:
+            while True:
+                if deadline and time.monotonic() >= deadline:
+                    timed_out = True
+                    logger.warning(
+                        "Tempo limite atingido na coleta de log sources ambiente=%s",
+                        env.get("name") or env.get("host"),
+                    )
+                    break
+                range_header = f"items={start}-{start + limit - 1}"
+                logger.info(
+                    "Consultando log sources via API ambiente=%s range=%s",
+                    env.get("name") or env.get("host"),
+                    range_header,
+                )
+                current_params = _build_params()
+                response = requests.get(
+                    url,
+                    headers={**headers, "Range": range_header},
+                    params=current_params,
+                    timeout=timeout,
+                    verify=verify_tls,
+                )
+                if (
+                    response.status_code == 422
+                    and field_index < len(field_candidates) - 1
+                ):
+                    field_index += 1
+                    logger.warning(
+                        "Campos da API de log sources não suportados, tentando conjunto reduzido "
+                        "ambiente=%s campos=%s",
+                        env.get("name") or env.get("host"),
+                        current_params.get("fields", "todos"),
+                    )
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, list):
+                    raise ValueError("Resposta inesperada da API de log sources")
+                if not payload:
+                    break
+
+                for entry in payload:
+                    if not isinstance(entry, dict):
+                        continue
+                    enabled = _to_bool(entry.get("enabled"), True)
+                    if enabled:
+                        enabled_total += 1
+                    else:
+                        skipped_disabled += 1
+
+                    last_event_raw = None
+                    for key in (
+                        "last_event_time",
+                        "last_event_collected_time",
+                        "last_event_received_time",
+                        "last_event_received",
+                    ):
+                        if entry.get(key) is not None:
+                            last_event_raw = entry.get(key)
+                            break
+
+                    last_event_dt = _parse_timestamp(last_event_raw)
+                    status_text = _extract_status_text(entry.get("status")).strip()
+                    status_key = status_text.lower()
+                    has_error_status = "error" in status_key or status_key in (
+                        "failed",
+                        "misconfigured",
+                    )
+                    is_stale = enabled and (
+                        not last_event_dt or last_event_dt < stale_threshold
+                    )
+
+                    if enabled and (has_error_status or is_stale):
+                        problematic += 1
+                        items.append(
+                            {
+                                "id": entry.get("id"),
+                                "name": entry.get("name"),
+                                "status": status_text or "",
+                                "enabled": enabled,
+                                "reason": "Sem eventos há mais de 24h"
+                                if is_stale and not has_error_status
+                                else "Erro reportado",
+                                "protocol_type": entry.get("protocol_type_id"),
+                                "description": entry.get("description"),
+                                "last_event_time": last_event_dt.isoformat()
+                                if last_event_dt
+                                else None,
+                                "last_event_time_label": _format_dt_label(last_event_dt)
+                                if last_event_dt
+                                else "Nunca",
+                            }
+                        )
+
+                if len(payload) < limit:
+                    break
+                start += limit
+        except (RequestException, ValueError) as exc:
+            message = f"Falha ao consultar log sources do QRadar: {exc}"
+            logger.exception(
+                "Erro na consulta de log sources ambiente=%s",
+                env.get("name") or env.get("host"),
+            )
+            return {
+                "status": "error",
+                "message": message,
+                "details": [],
+                "count": None,
+                "total": None,
+                "error": message,
+                "items": [],
+            }
+
+        evaluated_total = enabled_total or 0
+        if timed_out:
+            ratio = None
+            healthy = None
+            total_value = None
+        elif evaluated_total:
+            healthy = max(evaluated_total - problematic, 0)
+            ratio = healthy / evaluated_total
+            total_value = evaluated_total
+        else:
+            healthy = 0
+            ratio = None
+            total_value = evaluated_total
+
+        if timed_out:
+            message = "Tempo limite atingido na consulta de log sources do QRadar."
+            status = "warning"
+            error_message = "Coleta de log sources interrompida por tempo limite."
+        elif problematic:
+            message = (
+                f"{problematic} log source(s) com erro ou sem eventos há mais de 24h."
+            )
+            status = "warning"
+            error_message = None
+        else:
+            message = "Nenhum log source com erro ou atraso superior a 24h."
+            status = "ok"
+            error_message = None
+
+        details = []
+        if skipped_disabled:
+            details.append(f"Ignorados (desativados): {skipped_disabled}")
+        if timed_out:
+            details.append(
+                f"Coleta interrompida após {max_duration}s; fontes avaliadas: {enabled_total}"
+            )
+        details.append("Limite sem eventos: 24 horas")
+        details.append(f"Atualizado em: {_format_dt_label(now)}")
+
+        return {
+            "status": status,
+            "message": message,
+            "details": details,
+            "count": problematic,
+            "total": total_value,
+            "ratio": ratio,
+            "healthy": healthy,
+            "generated_at": now.isoformat(),
+            "error": error_message,
+            "items": items,
+        }
 
     def _check_offenses(env):
         token = _resolve_api_token(env)
@@ -468,6 +806,8 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         connectivity_result: List[Dict[str, Any]] = []
         errors: List[str] = []
 
+        log_sources_check = _check_log_sources(env)
+
         offense_check = _check_offenses(env)
         _append_error_from_check(offense_check, errors)
 
@@ -579,6 +919,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "code": env.get("codigo") or env.get("code"),
                 "services": services_result,
                 "connectivity": connectivity_result,
+                "log_sources_check": log_sources_check,
                 "offense_check": offense_check,
                 "email_check": email_check,
                 "errors": errors,
