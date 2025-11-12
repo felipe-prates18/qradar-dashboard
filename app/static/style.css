@@ -1134,35 +1134,42 @@ header {
   margin-top: 16px;
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .download-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 16px;
-  border-radius: 6px;
-  border: 1px solid #1f6feb;
-  background: #1f6feb;
-  color: #fff;
-  font-size: 0.9rem;
+  padding: 9px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(29, 157, 111, 0.45);
+  background: rgba(11, 34, 27, 0.92);
+  color: var(--text-primary);
+  font-size: 0.95rem;
   font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease, background 0.2s ease;
 }
 
 .download-button:hover,
 .download-button:focus-visible {
-  background: #1957c2;
-  border-color: #1957c2;
-  color: #fff;
+  border-color: rgba(38, 217, 141, 0.6);
+  box-shadow: 0 10px 20px rgba(29, 157, 111, 0.25);
+  background: rgba(13, 41, 34, 0.96);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+  outline: none;
 }
 
 .download-button[disabled] {
   cursor: not-allowed;
   opacity: 0.6;
-  background: #9fb8f2;
-  border-color: #9fb8f2;
+  background: rgba(9, 28, 22, 0.7);
+  border-color: rgba(29, 157, 111, 0.25);
+  box-shadow: none;
+  transform: none;
 }
 
 .health-alert {
@@ -1306,11 +1313,15 @@ header {
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--text-muted);
+  line-height: 1.25;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .summary-metric .metric-value {
   font-size: 1rem;
   font-weight: 600;
+  word-break: break-word;
 }
 
 .summary-metric .metric-value.multiline {

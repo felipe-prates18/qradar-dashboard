@@ -899,21 +899,26 @@
           latencyStatus = 'warning';
         }
       }
-      const statusesForOverall = [...serviceSeverities, ...connectivitySeverities];
-      statusesForOverall.push(latencyStatus);
+      const coreStatusesForOverall = [...serviceSeverities, ...connectivitySeverities];
+      coreStatusesForOverall.push(latencyStatus);
       if (offenseCheck) {
-        statusesForOverall.push(getSimpleCheckSeverity(offenseCheck));
+        coreStatusesForOverall.push(getSimpleCheckSeverity(offenseCheck));
       }
       if (logSourcesCheck) {
         statusesForOverall.push(getSimpleCheckSeverity(logSourcesCheck));
       }
       if (emailCheck) {
-        statusesForOverall.push(getSimpleCheckSeverity(emailCheck));
+        coreStatusesForOverall.push(getSimpleCheckSeverity(emailCheck));
       }
       if (errorMessages.length) {
-        statusesForOverall.push('critical');
+        coreStatusesForOverall.push('critical');
       }
-      const overallStatus = combineStatuses(statusesForOverall);
+
+      let overallStatus = combineStatuses(coreStatusesForOverall);
+
+      const hasNonNormalCore = coreStatusesForOverall.some(
+        status => status && status in STATUS_RANK && STATUS_RANK[status] > STATUS_RANK.normal
+      );
 
       const totalServices = services.length;
       const serviceCritical = serviceSeverities.filter(status => status === 'critical').length;
@@ -954,7 +959,12 @@
           ? `${logSourceHealthy}/${logSourceTotal}`
           : '—';
       const logSourcePercent = logSourceRatio !== null ? Math.round(logSourceRatio * 100) : null;
-      const logSourceSeverity = logSourcesCheck ? getSimpleCheckSeverity(logSourcesCheck) : 'warning';
+      const logSourceSeverity = logSourcesCheck ? getSimpleCheckSeverity(logSourcesCheck) : 'normal';
+      if (!hasNonNormalCore && logSourcesCheck && logSourceSeverity in STATUS_RANK) {
+        if (STATUS_RANK[logSourceSeverity] > STATUS_RANK.normal) {
+          overallStatus = 'normal';
+        }
+      }
 
       const summaryMetrics = [
         {
