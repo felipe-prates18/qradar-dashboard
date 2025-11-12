@@ -754,6 +754,100 @@
       );
     }
 
+    function LogSourcesCheckItem({ check, environmentName }) {
+      const severity = getSimpleCheckSeverity(check);
+      const statusLabel = getSimpleCheckStatusLabel(check);
+      const message = check && check.message ? check.message : '';
+      const errorMessage = check && check.error ? check.error : '';
+      const details = Array.isArray(check && check.details) ? check.details.filter(Boolean) : [];
+      const items = Array.isArray(check && check.items) ? check.items : [];
+      const total = check && typeof check.total === 'number' ? check.total : null;
+      const count = check && typeof check.count === 'number' ? check.count : null;
+      const ratio = check && typeof check.ratio === 'number' ? check.ratio : null;
+      const percentLabel = ratio !== null ? `${Math.round(ratio * 100)}%` : null;
+      const showError = errorMessage && severity === 'critical' && errorMessage !== message;
+      const downloadDisabled = !items.length;
+
+      const handleDownload = useCallback(() => {
+        if (!items.length) return;
+        const headers = [
+          'ID',
+          'Nome',
+          'Status',
+          'Motivo',
+          'Tipo',
+          'Habilitado',
+          'Último evento',
+        ];
+        const lines = items.map(item => {
+          const enabledLabel = item && item.enabled ? 'Sim' : 'Não';
+          const lastEvent = item && item.last_event_time_label ? item.last_event_time_label : 'Nunca';
+          const raw = [
+            item && item.id ? String(item.id) : '',
+            item && item.name ? String(item.name) : '',
+            item && item.status ? String(item.status) : '',
+            item && item.reason ? String(item.reason) : '',
+            item && item.protocol_type ? String(item.protocol_type) : '',
+            enabledLabel,
+            lastEvent,
+          ];
+          return raw.map(value => {
+            if (value === null || value === undefined) return '';
+            const normalized = String(value).replace(/"/g, '""');
+            return /[";,\n]/.test(normalized) ? `"${normalized}"` : normalized;
+          }).join(';');
+        });
+
+        const csvContent = [headers.join(';'), ...lines].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const baseName = environmentName
+          ? environmentName.toLowerCase().replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '')
+          : 'ambiente';
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `log_sources_${baseName}_${timestamp}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, [items, environmentName]);
+
+      return (
+        <div className={`health-item log-sources-item is-${severity}`}>
+          <div className="health-item-header">
+            <span className="health-item-name">Log sources</span>
+            <span className={`status-pill is-${severity}`}>{statusLabel}</span>
+          </div>
+          {message ? <div className="health-item-description">{message}</div> : null}
+          <div className="health-item-meta">
+            <span>Total avaliados: {total !== null ? total : '—'}</span>
+            <span>Com problema: {count !== null ? count : '—'}</span>
+            {percentLabel ? <span>Percentual: {percentLabel}</span> : null}
+          </div>
+          {details.length ? (
+            <div className="health-item-meta">
+              {details.map((detail, idx) => (
+                <span key={`log-source-detail-${idx}`}>{detail}</span>
+              ))}
+            </div>
+          ) : null}
+          {showError ? <div className="health-item-error">{errorMessage}</div> : null}
+          <div className="health-item-actions">
+            <button
+              type="button"
+              className="download-button"
+              onClick={handleDownload}
+              disabled={downloadDisabled}
+            >
+              Exportar CSV
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     function HealthEnvironmentCard({ environment, settings, isOpen, onToggle }) {
       const detailsRef = useRef(null);
       const [detailsHeight, setDetailsHeight] = useState(0);
@@ -774,6 +868,7 @@
       const services = Array.isArray(environment && environment.services) ? environment.services : [];
       const connectivity = Array.isArray(environment && environment.connectivity) ? environment.connectivity : [];
       const offenseCheck = environment && environment.offense_check ? environment.offense_check : null;
+      const logSourcesCheck = environment && environment.log_sources_check ? environment.log_sources_check : null;
       const emailCheck = environment && environment.email_check ? environment.email_check : null;
       const errorMessages = Array.isArray(environment && environment.errors)
         ? environment.errors.filter(Boolean)
@@ -818,6 +913,21 @@
         ? `${emailCount} ${emailCount === 1 ? 'envio' : 'envios'}`
         : '—';
       const emailSeverity = emailCheck ? getSimpleCheckSeverity(emailCheck) : 'warning';
+
+      const logSourceTotal = logSourcesCheck && typeof logSourcesCheck.total === 'number' ? logSourcesCheck.total : null;
+      const logSourceProblematic = logSourcesCheck && typeof logSourcesCheck.count === 'number' ? logSourcesCheck.count : null;
+      const logSourceHealthy = logSourcesCheck && typeof logSourcesCheck.healthy === 'number'
+        ? logSourcesCheck.healthy
+        : (logSourceTotal !== null && logSourceProblematic !== null
+          ? Math.max(logSourceTotal - logSourceProblematic, 0)
+          : null);
+      const logSourceRatio = logSourcesCheck && typeof logSourcesCheck.ratio === 'number' ? logSourcesCheck.ratio : null;
+      const logSourceSummaryValue =
+        logSourceTotal !== null && logSourceHealthy !== null
+          ? `${logSourceHealthy}/${logSourceTotal}`
+          : '—';
+      const logSourcePercent = logSourceRatio !== null ? Math.round(logSourceRatio * 100) : null;
+      const logSourceSeverity = logSourcesCheck ? getSimpleCheckSeverity(logSourcesCheck) : 'warning';
 
       let maxLatency = null;
       connectivity.forEach(item => {
@@ -875,6 +985,17 @@
           percent: null,
           status: offenseSeverity,
           tooltip: offenseCheck.message || undefined,
+        });
+      }
+
+      if (logSourcesCheck) {
+        summaryMetrics.push({
+          key: 'log-sources',
+          label: 'Log sources',
+          value: logSourceSummaryValue,
+          percent: logSourcePercent,
+          status: logSourceSeverity,
+          tooltip: logSourcesCheck.message || undefined,
         });
       }
 
@@ -963,6 +1084,14 @@
                     <SimpleCheckItem title="Ofensas nas últimas 24 horas" check={offenseCheck} />
                   ) : (
                     <div className="health-empty">Verificação de ofensas não configurada.</div>
+                  )}
+                </div>
+                <div className="health-section">
+                  <h3>Log sources</h3>
+                  {logSourcesCheck ? (
+                    <LogSourcesCheckItem check={logSourcesCheck} environmentName={environment && environment.name} />
+                  ) : (
+                    <div className="health-empty">Verificação de log sources não disponível.</div>
                   )}
                 </div>
                 <div className="health-section">

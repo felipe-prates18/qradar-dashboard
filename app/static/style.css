@@ -1130,6 +1130,41 @@ header {
   padding: 8px 12px;
 }
 
+.health-item-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
+}
+
+.download-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid #1f6feb;
+  background: #1f6feb;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.download-button:hover,
+.download-button:focus-visible {
+  background: #1957c2;
+  border-color: #1957c2;
+  color: #fff;
+}
+
+.download-button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.6;
+  background: #9fb8f2;
+  border-color: #9fb8f2;
+}
+
 .health-alert {
   border: 1px solid rgba(217, 83, 79, 0.5);
   background: rgba(217, 83, 79, 0.18);
