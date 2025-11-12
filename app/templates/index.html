@@ -927,7 +927,7 @@
       const logSourceRatio = logSourcesCheck && typeof logSourcesCheck.ratio === 'number' ? logSourcesCheck.ratio : null;
       const logSourceSummaryValue =
         logSourceTotal !== null && logSourceHealthy !== null
-          ? `${logSourceHealthy}/${logSourceTotal} com status OK`
+          ? `${logSourceHealthy}/${logSourceTotal}`
           : '—';
       const logSourcePercent = logSourceRatio !== null ? Math.round(logSourceRatio * 100) : null;
       const logSourceSeverity = logSourcesCheck ? getSimpleCheckSeverity(logSourcesCheck) : 'warning';

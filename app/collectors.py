@@ -594,7 +594,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             message = (
                 f"{problematic} log source(s) com erro ou sem eventos há mais de 24h."
             )
-            status = "error"
+            status = "warning"
         else:
             message = "Nenhum log source com erro ou atraso superior a 24h."
             status = "ok"
