@@ -306,12 +306,16 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
 
         return None
 
-    def _append_error_from_check(check, bucket):
+    def _append_error_from_check(check, bucket, *, ignore_statuses: Optional[List[str]] = None):
         if not check:
             return
         status = str(check.get("status") or "").lower()
         if status in ("ok", "success"):
             return
+        if ignore_statuses:
+            ignore_set = {str(value).lower() for value in ignore_statuses if value is not None}
+            if status in ignore_set:
+                return
         message = check.get("message") or check.get("error")
         if message and message not in bucket:
             bucket.append(message)
@@ -757,7 +761,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         errors: List[str] = []
 
         log_sources_check = _check_log_sources(env)
-        _append_error_from_check(log_sources_check, errors)
+        _append_error_from_check(log_sources_check, errors, ignore_statuses=["warning"])
 
         offense_check = _check_offenses(env)
         _append_error_from_check(offense_check, errors)
