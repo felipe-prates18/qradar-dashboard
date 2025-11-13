@@ -6,7 +6,7 @@ import logging
 import secrets
 import sqlite3
 from urllib.parse import urlencode
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -39,6 +39,7 @@ from requests.exceptions import RequestException
 from .collectors import collect_monitoring_data, collect_health_data
 from .alerts import AlertManager
 from . import threat_hunting
+from .services import use_case_manager
 
 try:
     from urllib3.exceptions import InsecureRequestWarning
@@ -329,6 +330,28 @@ def _environment_suggestions() -> list[str]:
     return suggestions
 
 
+def _format_use_case_timestamp(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                parsed = datetime.strptime(value, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    try:
+        return parsed.astimezone().strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return parsed.strftime("%d/%m/%Y %H:%M")
+
+
 def _threat_hunting_allowed(username: Optional[str]) -> bool:
     if not username:
         return False
@@ -568,6 +591,23 @@ def threat_hunting_page(
     edit_use_case = None
     edit_param = params.get("edit")
 
+    try:
+        environment_counts, summary_errors = use_case_manager.count_active_use_cases(
+            CONFIG, logger=logger
+        )
+    except Exception:
+        logger.exception("Falha ao consultar totais do Use Case Manager")
+        environment_counts = []
+        summary_errors = [
+            "Não foi possível consultar o QRadar Use Case Manager no momento."
+        ]
+
+    use_cases: List[Dict[str, Any]] = []
+    technology_options: List[str] = []
+    siem_options: List[str] = []
+    environment_options: List[str] = []
+    db_environment_counts: List[Dict[str, int]] = []
+
     con = _con()
     try:
         threat_hunting.ensure_schema(con)
@@ -578,8 +618,11 @@ def threat_hunting_page(
             siem=filters["siem"] or None,
             status=filters["status"] or None,
         )
-        environment_counts = threat_hunting.count_active_by_environment(con)
-        total_active = sum(item["total"] for item in environment_counts)
+        for uc in use_cases:
+            uc["display_created_at"] = _format_use_case_timestamp(uc.get("created_at"))
+            uc["display_updated_at"] = _format_use_case_timestamp(uc.get("updated_at"))
+
+        db_environment_counts = threat_hunting.count_active_by_environment(con)
 
         tech_values = set(THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS)
         tech_values.update(threat_hunting.distinct_values(con, "technology"))
@@ -598,11 +641,37 @@ def threat_hunting_page(
                 edit_use_case = threat_hunting.get_use_case(con, edit_id)
                 if not edit_use_case and not error_message:
                     error_message = "Caso de uso não encontrado."
+                if edit_use_case:
+                    edit_use_case["display_created_at"] = _format_use_case_timestamp(
+                        edit_use_case.get("created_at")
+                    )
+                    edit_use_case["display_updated_at"] = _format_use_case_timestamp(
+                        edit_use_case.get("updated_at")
+                    )
             except ValueError:
                 if not error_message:
                     error_message = "Identificador de caso de uso inválido."
     finally:
         con.close()
+
+    if not environment_counts and db_environment_counts:
+        environment_counts = db_environment_counts
+        summary_errors = list(summary_errors)
+        summary_errors.append(
+            "Nenhum ambiente configurado para consulta na API. Exibindo totais cadastrados na Wiki."
+        )
+        for item in environment_counts:
+            item.setdefault("error", "Dados obtidos do cadastro local.")
+            item["source"] = "local"
+    else:
+        for item in environment_counts:
+            item.setdefault("source", "api")
+
+    total_active = sum(
+        int(item["total"])
+        for item in environment_counts
+        if isinstance(item.get("total"), int)
+    )
 
     context = {
         "request": request,
@@ -614,6 +683,7 @@ def threat_hunting_page(
         "use_cases": use_cases,
         "environment_counts": environment_counts,
         "total_active": total_active,
+        "summary_errors": summary_errors,
         "technology_options": technology_options,
         "siem_options": siem_options,
         "environment_options": environment_options,
@@ -721,6 +791,36 @@ def update_threat_hunting_use_case(
             extra_params={"edit": str(use_case_id)},
         )
     return _redirect_threat_hunting(success=f"Use Case '{payload['name']}' atualizado com sucesso.")
+
+
+@app.post("/threat-hunting/use-cases/{use_case_id}/delete")
+def delete_threat_hunting_use_case(
+    use_case_id: int,
+    _user: str = Depends(_require_threat_hunting_page_access),
+):
+    con = _con()
+    existing_name: Optional[str] = None
+    try:
+        threat_hunting.ensure_schema(con)
+        existing = threat_hunting.get_use_case(con, use_case_id)
+        if not existing:
+            return _redirect_threat_hunting(error="Caso de uso não encontrado para exclusão.")
+        existing_name = existing.get("name") or str(use_case_id)
+        deleted = threat_hunting.delete_use_case(con, use_case_id)
+    except Exception as exc:
+        logger.exception("Falha ao excluir Use Case", exc_info=exc)
+        return _redirect_threat_hunting(
+            error="Erro ao excluir o Use Case. Tente novamente em instantes."
+        )
+    finally:
+        con.close()
+    if not deleted:
+        return _redirect_threat_hunting(
+            error="Não foi possível remover o Use Case informado."
+        )
+    return _redirect_threat_hunting(
+        success=f"Use Case '{existing_name}' removido com sucesso."
+    )
 
 
 @app.get("/threat-hunting/export")

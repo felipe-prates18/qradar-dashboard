@@ -223,6 +223,16 @@ def count_active_by_environment(con: sqlite3.Connection) -> List[Dict[str, int]]
     ]
 
 
+def delete_use_case(con: sqlite3.Connection, use_case_id: int) -> bool:
+    """Remove um Use Case pelo identificador."""
+
+    ensure_schema(con)
+    cur = con.cursor()
+    cur.execute("DELETE FROM use_cases WHERE id=?", (use_case_id,))
+    con.commit()
+    return cur.rowcount > 0
+
+
 def distinct_values(con: sqlite3.Connection, column: str) -> Sequence[str]:
     if column not in _VALID_DISTINCT_COLUMNS:
         raise ValueError("Coluna inválida para consulta distinta")
