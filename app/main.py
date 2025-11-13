@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -159,18 +159,75 @@ def _refresh_health_cache() -> Dict[str, Any]:
 
 def _collect_threat_hunting_counts() -> Dict[str, Any]:
     try:
-        environment_counts, summary_errors = qradar_rules.count_active_use_cases(
-            CONFIG, logger=logger
-        )
+        (
+            environment_counts,
+            _unused_monthly_counts,
+            summary_errors,
+        ) = qradar_rules.collect_rule_statistics(CONFIG, logger=logger)
     except Exception:
         logger.exception("Falha ao consultar totais de regras do QRadar")
         environment_counts = []
         summary_errors = [
             "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
         ]
+    try:
+        (
+            log_source_types,
+            log_source_errors,
+        ) = qradar_rules.collect_log_source_types(CONFIG, logger=logger)
+    except Exception:
+        logger.exception(
+            "Falha ao consultar tecnologias de log source do QRadar"
+        )
+        log_source_types = {}
+        log_source_errors = {}
+    monthly_counts: Dict[str, Dict[str, int]] = {}
+    con: Optional[sqlite3.Connection] = None
+    try:
+        con = _con()
+        threat_hunting.ensure_schema(con)
+        now = datetime.utcnow()
+        if environment_counts:
+            totals_map: Dict[str, int] = {}
+            for item in environment_counts:
+                env_name = item.get("environment")
+                if not env_name:
+                    continue
+                try:
+                    total_value = int(item.get("total"))
+                except Exception:
+                    continue
+                totals_map[str(env_name)] = total_value
+            if (
+                totals_map
+                and threat_hunting.should_record_monthly_snapshot(now)
+            ):
+                month_key = f"{now.year:04d}-{now.month:02d}"
+                try:
+                    threat_hunting.record_monthly_totals(
+                        con,
+                        month_key,
+                        totals_map,
+                        collected_at=now,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Falha ao registrar totais mensais de casos de uso no banco local"
+                    )
+        monthly_counts = threat_hunting.list_monthly_totals(con)
+    except Exception:
+        logger.exception(
+            "Falha ao carregar totais mensais de casos de uso para o Threat Hunting"
+        )
+    finally:
+        if con is not None:
+            con.close()
     return {
         "environment_counts": environment_counts,
+        "monthly_counts": monthly_counts,
         "summary_errors": summary_errors,
+        "log_source_types": log_source_types,
+        "log_source_errors": log_source_errors,
     }
 
 
@@ -417,6 +474,276 @@ def _format_use_case_timestamp(value: Optional[str]) -> Optional[str]:
         return parsed.astimezone().strftime("%d/%m/%Y %H:%M")
     except Exception:
         return parsed.strftime("%d/%m/%Y %H:%M")
+
+
+_MONTH_NAMES_PT = [
+    "Jan",
+    "Fev",
+    "Mar",
+    "Abr",
+    "Mai",
+    "Jun",
+    "Jul",
+    "Ago",
+    "Set",
+    "Out",
+    "Nov",
+    "Dez",
+]
+
+
+def _format_month_label_pt(year: int, month: int) -> str:
+    if 1 <= month <= 12:
+        return f"{_MONTH_NAMES_PT[month - 1]}/{year}"
+    return f"{month:02d}/{year}"
+
+
+def _parse_month_key(value: str) -> Optional[Tuple[int, int]]:
+    parts = str(value or "").split("-", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        year = int(parts[0])
+        month = int(parts[1])
+    except ValueError:
+        return None
+    if month < 1 or month > 12:
+        return None
+    return year, month
+
+
+def _iterate_month_range(
+    start_year: int, start_month: int, end_year: int, end_month: int
+) -> Iterable[Tuple[int, int]]:
+    year, month = start_year, start_month
+    while (year, month) <= (end_year, end_month):
+        yield year, month
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+
+def _stringify_detail_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "Sim" if value else "Não"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(item) for item in value if item not in (None, "")]
+        return ", ".join(parts)
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _humanize_env_key(raw_key: str) -> str:
+    mapping = {
+        "codigo": "Código",
+        "code": "Código",
+        "host": "Host",
+        "collector": "Collector",
+        "ssh_user": "Usuário SSH",
+        "ssh_key": "Chave SSH",
+        "jmx_port": "Porta JMX",
+        "jmx_bean": "JMX Bean",
+        "api_base_url": "API Base URL",
+        "api_timeout": "Timeout da API",
+        "api_version": "Versão da API",
+        "api_verify_tls": "API verifica TLS",
+        "log_sources_timeout_seconds": "Timeout de Log Sources",
+    }
+    key = (raw_key or "").strip()
+    label = mapping.get(key.lower())
+    if label:
+        return label
+    normalized = key.replace("_", " ").replace("-", " ").split()
+    special_tokens = {"api": "API", "ssh": "SSH", "jmx": "JMX", "url": "URL", "id": "ID"}
+    parts = []
+    for token in normalized:
+        lowered = token.lower()
+        parts.append(special_tokens.get(lowered, token.capitalize()))
+    return " ".join(parts) if parts else key
+
+
+def _build_env_detail_entries(env: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    if not isinstance(env, dict):
+        return []
+    details: List[Dict[str, str]] = []
+    for key, value in env.items():
+        if key in {"name", "appliances", "connectivity_targets"}:
+            continue
+        lowered = str(key).lower()
+        if any(token in lowered for token in ("token", "secret", "password")):
+            continue
+        if value in (None, "", [], {}):
+            continue
+        details.append(
+            {
+                "label": _humanize_env_key(str(key)),
+                "value": _stringify_detail_value(value),
+            }
+        )
+    details.sort(key=lambda item: item["label"].lower())
+    return details
+
+
+def _build_env_appliance_entries(env: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(env, dict):
+        return []
+    entries: List[str] = []
+    appliances = env.get("appliances") or []
+    if not isinstance(appliances, list):
+        return entries
+    for appliance in appliances:
+        if not isinstance(appliance, dict):
+            continue
+        name = str(appliance.get("name") or "").strip()
+        host = str(
+            appliance.get("zabbix_host")
+            or appliance.get("host")
+            or appliance.get("target")
+            or ""
+        ).strip()
+        parts = [part for part in (name, host) if part]
+        if parts:
+            entries.append(" · ".join(parts))
+    return entries
+
+
+def _build_env_connectivity_entries(env: Optional[Dict[str, Any]]) -> List[str]:
+    if not isinstance(env, dict):
+        return []
+    entries: List[str] = []
+    targets = env.get("connectivity_targets") or []
+    if not isinstance(targets, list):
+        return entries
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        name = str(target.get("name") or "").strip()
+        address = str(target.get("target") or target.get("host") or "").strip()
+        parts = [part for part in (name, address) if part]
+        if parts:
+            entries.append(": ".join(parts))
+    return entries
+
+
+def _build_environment_config_lookup(
+    env_name_map: Dict[str, str]
+) -> Dict[str, Dict[str, Any]]:
+    lookup: Dict[str, Dict[str, Any]] = {}
+    for env in CONFIG.get("qradar_envs", []) or []:
+        if not isinstance(env, dict):
+            continue
+        keys: set[str] = set()
+        raw_name = env.get("name")
+        normalized_name = _normalize_environment_value(raw_name, env_name_map)
+        if normalized_name:
+            keys.add(normalized_name.lower())
+        for alias_key in ("codigo", "code"):
+            alias_value = env.get(alias_key)
+            if not alias_value:
+                continue
+            alias_text = str(alias_value).strip()
+            if not alias_text:
+                continue
+            keys.add(alias_text.lower())
+            normalized_alias = _normalize_environment_value(alias_text, env_name_map)
+            if normalized_alias:
+                keys.add(normalized_alias.lower())
+        for key in keys:
+            lookup.setdefault(key, env)
+    return lookup
+
+
+def _build_monthly_series(
+    month_counts: Optional[Dict[str, int]], current_year: int, current_month: int
+) -> List[Dict[str, Any]]:
+    if not month_counts:
+        return []
+    parsed = [_parse_month_key(key) for key in month_counts.keys()]
+    valid = [item for item in parsed if item]
+    if not valid:
+        return []
+    start_year, start_month = min(valid)
+    end_year, end_month = max(valid)
+    if (end_year, end_month) < (current_year, current_month):
+        end_year, end_month = current_year, current_month
+    series: List[Dict[str, Any]] = []
+    for year, month in _iterate_month_range(start_year, start_month, end_year, end_month):
+        key = f"{year:04d}-{month:02d}"
+        count = int(month_counts.get(key, 0))
+        series.append(
+            {
+                "month": key,
+                "label": _format_month_label_pt(year, month),
+                "count": count,
+            }
+        )
+    return series
+
+
+def _build_environment_summary(
+    environment_counts: List[Dict[str, Any]],
+    monthly_counts: Dict[str, Dict[str, int]],
+    env_name_map: Dict[str, str],
+    log_source_lookup: Dict[str, List[str]],
+    log_source_errors: Dict[str, str],
+) -> Dict[str, Any]:
+    config_lookup = _build_environment_config_lookup(env_name_map)
+    now = datetime.now()
+    current_year, current_month = now.year, now.month
+    summary: Dict[str, Any] = {}
+    for item in environment_counts:
+        env_name = _normalize_environment_value(item.get("environment"), env_name_map)
+        if not env_name:
+            continue
+        key = env_name.lower()
+        config = config_lookup.get(key)
+        details = _build_env_detail_entries(config)
+        appliances = _build_env_appliance_entries(config)
+        connectivity = _build_env_connectivity_entries(config)
+        log_types = log_source_lookup.get(key, [])
+        month_data = monthly_counts.get(env_name)
+        series = _build_monthly_series(month_data, current_year, current_month)
+        api_total_raw = item.get("total")
+        api_total = None
+        if isinstance(api_total_raw, (int, float)):
+            api_total = int(api_total_raw)
+        notes: List[str] = []
+        source_value = str(item.get("source") or "api").lower()
+        source_label = (
+            "Fonte: Cadastro local" if source_value == "local" else "Fonte: API do QRadar"
+        )
+        notes.append(source_label)
+        if item.get("error"):
+            notes.append(str(item["error"]))
+        if api_total is None:
+            notes.append("Total de casos ativos indisponível na API do QRadar.")
+        log_error = log_source_errors.get(key)
+        if log_error:
+            notes.append(f"Tecnologias: {log_error}")
+        summary[env_name] = {
+            "name": env_name,
+            "code": (
+                config.get("codigo") or config.get("code")
+                if isinstance(config, dict)
+                else None
+            ),
+            "active_use_cases_api": api_total,
+            "details": details,
+            "appliances": appliances,
+            "connectivity_targets": connectivity,
+            "log_source_types": log_types,
+            "use_case_monthly_series": series,
+            "notes": notes,
+            "source": source_value,
+        }
+    return summary
 
 
 def _format_use_case_comments(
@@ -685,7 +1012,7 @@ def threat_hunting_page(
     technology_options: List[str] = []
     siem_options: List[str] = []
     environment_options: List[str] = []
-    db_environment_counts: List[Dict[str, int]] = []
+    monthly_use_case_counts: Dict[str, Dict[str, int]] = {}
     env_name_map = _environment_name_map()
 
     con = _con()
@@ -727,17 +1054,6 @@ def threat_hunting_page(
             ]
 
         use_cases = canonical_use_cases
-
-        db_environment_counts = [
-            {
-                "environment": _normalize_environment_value(
-                    item.get("environment"), env_name_map
-                )
-                or item.get("environment"),
-                "total": item.get("total", 0),
-            }
-            for item in threat_hunting.count_active_by_environment(con)
-        ]
 
         tech_values = set(THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS)
         tech_values.update(threat_hunting.distinct_values(con, "technology"))
@@ -796,6 +1112,83 @@ def threat_hunting_page(
     finally:
         con.close()
 
+    api_monthly_counts_raw = threat_cache_payload.get("monthly_counts") or {}
+    api_monthly_counts: Dict[str, Dict[str, int]] = {}
+    if isinstance(api_monthly_counts_raw, dict):
+        for raw_env, month_map in api_monthly_counts_raw.items():
+            normalized_env = _normalize_environment_value(raw_env, env_name_map)
+            env_key = normalized_env or (str(raw_env).strip() if raw_env else "")
+            if not env_key or not isinstance(month_map, dict):
+                continue
+            target_map = api_monthly_counts.setdefault(env_key, {})
+            for month_key, value in month_map.items():
+                parsed = _parse_month_key(month_key)
+                if not parsed:
+                    parsed = _parse_month_key(str(month_key))
+                if not parsed:
+                    continue
+                year, month = parsed
+                normalized_key = f"{year:04d}-{month:02d}"
+                try:
+                    count_value = int(value)
+                except Exception:
+                    try:
+                        count_value = int(float(value))
+                    except Exception:
+                        continue
+                target_map[normalized_key] = target_map.get(normalized_key, 0) + max(0, count_value)
+
+    monthly_use_case_counts = api_monthly_counts
+
+    def _normalise_env_key(raw_env: Any) -> Optional[str]:
+        normalized_env = _normalize_environment_value(raw_env, env_name_map)
+        if normalized_env:
+            return normalized_env.lower()
+        if isinstance(raw_env, str):
+            stripped = raw_env.strip()
+            if stripped:
+                return stripped.lower()
+        return None
+
+    raw_log_source_types = threat_cache_payload.get("log_source_types") or {}
+    log_source_type_lookup: Dict[str, List[str]] = {}
+    if isinstance(raw_log_source_types, dict):
+        for raw_env, values in raw_log_source_types.items():
+            key = _normalise_env_key(raw_env)
+            if not key:
+                continue
+            collected: List[str] = []
+            if isinstance(values, (list, tuple, set)):
+                for value in values:
+                    try:
+                        text = str(value).strip()
+                    except Exception:
+                        continue
+                    if text and text not in collected:
+                        collected.append(text)
+            elif isinstance(values, str):
+                text = values.strip()
+                if text:
+                    collected.append(text)
+            if collected:
+                log_source_type_lookup[key] = sorted(
+                    collected, key=lambda item: item.lower()
+                )
+
+    raw_log_source_errors = threat_cache_payload.get("log_source_errors") or {}
+    log_source_error_lookup: Dict[str, str] = {}
+    if isinstance(raw_log_source_errors, dict):
+        for raw_env, value in raw_log_source_errors.items():
+            key = _normalise_env_key(raw_env)
+            if not key:
+                continue
+            try:
+                text = str(value).strip()
+            except Exception:
+                continue
+            if text:
+                log_source_error_lookup[key] = text
+
     if filters.get("environment"):
         filters["environment"] = _normalize_environment_value(
             filters["environment"], env_name_map
@@ -803,23 +1196,26 @@ def threat_hunting_page(
     else:
         filters["environment"] = ""
 
-    if not environment_counts and db_environment_counts:
-        environment_counts = db_environment_counts
-        summary_errors = list(summary_errors)
-        summary_errors.append(
-            "Nenhum ambiente configurado para consulta na API. Exibindo totais cadastrados na Wiki."
-        )
-        for item in environment_counts:
-            item.setdefault("error", "Dados obtidos do cadastro local.")
-            item["source"] = "local"
-    else:
+    if environment_counts:
         for item in environment_counts:
             normalized_env = _normalize_environment_value(
                 item.get("environment"), env_name_map
             )
             if normalized_env:
                 item["environment"] = normalized_env
-            item.setdefault("source", "api")
+            source_value = str(item.get("source") or "api").lower()
+            if source_value != "api":
+                source_value = "api"
+            item["source"] = source_value
+
+    environment_summary_data = _build_environment_summary(
+        environment_counts,
+        monthly_use_case_counts,
+        env_name_map,
+        log_source_type_lookup,
+        log_source_error_lookup,
+    )
+    environment_summary_json = json.dumps(environment_summary_data, ensure_ascii=False)
 
     context = {
         "request": request,
@@ -839,6 +1235,7 @@ def threat_hunting_page(
         "view_use_case": view_use_case,
         "view_comments": view_comments,
         "is_admin": is_admin(user),
+        "environment_summary_json": environment_summary_json,
     }
     return templates.TemplateResponse("threat_hunting.html", context)
 
