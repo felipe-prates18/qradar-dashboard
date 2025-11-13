@@ -39,7 +39,7 @@ from requests.exceptions import RequestException
 from .collectors import collect_monitoring_data, collect_health_data
 from .alerts import AlertManager
 from . import threat_hunting
-from .services import use_case_manager
+from .services import qradar_rules
 
 try:
     from urllib3.exceptions import InsecureRequestWarning
@@ -592,14 +592,14 @@ def threat_hunting_page(
     edit_param = params.get("edit")
 
     try:
-        environment_counts, summary_errors = use_case_manager.count_active_use_cases(
+        environment_counts, summary_errors = qradar_rules.count_active_use_cases(
             CONFIG, logger=logger
         )
     except Exception:
-        logger.exception("Falha ao consultar totais do Use Case Manager")
+        logger.exception("Falha ao consultar totais de regras do QRadar")
         environment_counts = []
         summary_errors = [
-            "Não foi possível consultar o QRadar Use Case Manager no momento."
+            "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
         ]
 
     use_cases: List[Dict[str, Any]] = []
