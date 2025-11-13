@@ -146,6 +146,7 @@ class _DataCache:
 
 _monitoring_cache = _DataCache(CACHE_TTL_SECONDS)
 _health_cache = _DataCache(CACHE_TTL_SECONDS)
+_threat_hunting_cache = _DataCache(CACHE_TTL_SECONDS)
 
 
 def _refresh_monitoring_cache() -> Dict[str, Any]:
@@ -154,6 +155,27 @@ def _refresh_monitoring_cache() -> Dict[str, Any]:
 
 def _refresh_health_cache() -> Dict[str, Any]:
     return _health_cache.refresh(lambda: collect_health_data(CONFIG, logger=logger))
+
+
+def _collect_threat_hunting_counts() -> Dict[str, Any]:
+    try:
+        environment_counts, summary_errors = qradar_rules.count_active_use_cases(
+            CONFIG, logger=logger
+        )
+    except Exception:
+        logger.exception("Falha ao consultar totais de regras do QRadar")
+        environment_counts = []
+        summary_errors = [
+            "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
+        ]
+    return {
+        "environment_counts": environment_counts,
+        "summary_errors": summary_errors,
+    }
+
+
+def _refresh_threat_hunting_cache() -> Dict[str, Any]:
+    return _threat_hunting_cache.refresh(_collect_threat_hunting_counts)
 
 
 def _get_monitoring_payload() -> Dict[str, Any]:
@@ -178,6 +200,17 @@ def _get_health_payload() -> Dict[str, Any]:
     return payload
 
 
+def _get_threat_hunting_payload() -> Dict[str, Any]:
+    payload = _threat_hunting_cache.get_cached()
+    if payload is None:
+        logger.info("Cache de Threat Hunting vazio. Coletando dados iniciais.")
+        return _refresh_threat_hunting_cache()
+    if _threat_hunting_cache.is_expired():
+        logger.warning("Cache de Threat Hunting expirado. Atualizando dados sob demanda.")
+        return _refresh_threat_hunting_cache()
+    return payload
+
+
 def _refresh_all_caches() -> None:
     try:
         _refresh_monitoring_cache()
@@ -187,6 +220,10 @@ def _refresh_all_caches() -> None:
         _refresh_health_cache()
     except Exception:
         logger.exception("Falha ao atualizar o cache de health-check")
+    try:
+        _refresh_threat_hunting_cache()
+    except Exception:
+        logger.exception("Falha ao atualizar o cache de Threat Hunting")
 
 
 async def _cache_refresh_loop(stop_event: asyncio.Event) -> None:
@@ -591,16 +628,9 @@ def threat_hunting_page(
     edit_use_case = None
     edit_param = params.get("edit")
 
-    try:
-        environment_counts, summary_errors = qradar_rules.count_active_use_cases(
-            CONFIG, logger=logger
-        )
-    except Exception:
-        logger.exception("Falha ao consultar totais de regras do QRadar")
-        environment_counts = []
-        summary_errors = [
-            "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
-        ]
+    threat_cache_payload = _get_threat_hunting_payload()
+    environment_counts = threat_cache_payload.get("environment_counts") or []
+    summary_errors = threat_cache_payload.get("summary_errors") or []
 
     use_cases: List[Dict[str, Any]] = []
     technology_options: List[str] = []
