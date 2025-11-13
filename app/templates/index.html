@@ -23,16 +23,18 @@
           <div class="sub" id="dashboard-subtitle">Carregando status do monitoramento…</div>
         </div>
       </div>
-      <div class="row">
-        <span class="small">Logado como {{user}}</span>
-        <a class="btn secondary" href="/me/password">Minha conta</a>
-        {% if can_access_threat_hunting %}
-        <a class="btn secondary" href="/threat-hunting">Hunting Wiki</a>
-        {% endif %}
-        {% if is_admin %}
-        <a class="btn secondary" href="/admin/users">Admin</a>
-        {% endif %}
-        <a class="btn secondary" href="/logout">Sair</a>
+      <div class="header-actions">
+        <span class="user-label small">Logado como {{user}}</span>
+        <div class="header-buttons">
+          <a class="btn secondary" href="/me/password">Minha conta</a>
+          {% if can_access_threat_hunting %}
+          <a class="btn secondary" href="/threat-hunting">Hunting Wiki</a>
+          {% endif %}
+          {% if is_admin %}
+          <a class="btn secondary" href="/admin/users">Admin</a>
+          {% endif %}
+          <a class="btn secondary" href="/logout">Sair</a>
+        </div>
       </div>
     </header>
 
@@ -226,6 +228,61 @@
         if (!(current in STATUS_RANK)) return worst;
         return STATUS_RANK[current] > STATUS_RANK[worst] ? current : worst;
       }, 'normal');
+    }
+
+    function getEnvironmentOverallStatus(environment) {
+      if (!environment || typeof environment !== 'object') {
+        return 'normal';
+      }
+
+      const licenseExpRawList = Array.isArray(environment.license_exp_list)
+        ? environment.license_exp_list.filter(Boolean)
+        : [];
+      const expirationCandidatesRaw = licenseExpRawList.length
+        ? licenseExpRawList
+        : environment.license_exp
+        ? [environment.license_exp]
+        : [];
+      const expirationDates = expirationCandidatesRaw
+        .map(parseDateValue)
+        .filter(date => date instanceof Date && !Number.isNaN(date.getTime()));
+      const expirationStatus = getExpirationStatus(expirationDates);
+
+      const epsCurrent = parseNumberValue(environment.eps_current);
+      const epsMax = parseNumberValue(environment.eps_max);
+      const licenseEps = parseNumberValue(environment.license_eps);
+      const epsPercent =
+        licenseEps !== null && licenseEps > 0 && epsCurrent !== null
+          ? (epsCurrent / licenseEps) * 100
+          : null;
+      const epsMaxPercent =
+        licenseEps !== null && licenseEps > 0 && epsMax !== null
+          ? (epsMax / licenseEps) * 100
+          : null;
+      const epsStatus = getEpsStatus(epsCurrent, licenseEps, epsPercent ?? null);
+      const epsMaxStatus = getEpsStatus(epsMax, licenseEps, epsMaxPercent ?? null);
+
+      const usageStatus = getUsageStatus({
+        cpu: environment.cpu,
+        memory: environment.memory,
+        storage: environment.storage,
+      });
+
+      const licenseStatuses = [epsStatus, epsMaxStatus, expirationStatus];
+      let overallStatus = combineStatuses([usageStatus, ...licenseStatuses]);
+
+      const hasLicenseOrExpiryIssue = licenseStatuses.some(
+        status => status === 'warning' || status === 'critical'
+      );
+      const consoleStoragePercent = parseNumberValue(environment.storage);
+      if (!hasLicenseOrExpiryIssue && usageStatus !== 'normal') {
+        overallStatus =
+          consoleStoragePercent !== null && consoleStoragePercent >= 88
+            ? 'critical'
+            : 'warning';
+      }
+
+      return overallStatus;
     }
 
     const SIMPLE_CHECK_STATUS_LABELS = {
@@ -1142,7 +1199,21 @@
           }
           const payload = await response.json();
           const environments = Array.isArray(payload.rows) ? payload.rows : [];
-          setRows(environments);
+          const sortedEnvironments = environments
+            .slice()
+            .sort((a, b) => {
+              const aStatus = getEnvironmentOverallStatus(a);
+              const bStatus = getEnvironmentOverallStatus(b);
+              const aRank = STATUS_RANK[aStatus] ?? 0;
+              const bRank = STATUS_RANK[bStatus] ?? 0;
+              if (aRank !== bRank) {
+                return bRank - aRank;
+              }
+              const aName = a && a.name ? String(a.name) : '';
+              const bName = b && b.name ? String(b.name) : '';
+              return aName.localeCompare(bName, 'pt-BR', { sensitivity: 'base' });
+            });
+          setRows(sortedEnvironments);
           if (payload.updated_at) {
             setUpdatedAt(payload.updated_at);
           } else {
