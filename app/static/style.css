@@ -16,14 +16,19 @@
   --shadow: 0 18px 45px rgba(0, 0, 0, 0.35);
 }
 
-html,
-body {
-  height: 100%;
+html {
+  min-height: 100%;
+  background: #020a07;
 }
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top, #134739 0%, var(--bg-primary) 36%, #071611 100%);
+  min-height: 100vh;
+  background:
+    radial-gradient(140% 120% at 50% -10%, rgba(32, 108, 84, 0.65) 0%, rgba(6, 24, 19, 0) 60%),
+    linear-gradient(180deg, #0a3227 0%, #051912 45%, #020a07 100%);
+  background-repeat: no-repeat, no-repeat;
+  background-attachment: fixed, fixed;
   color: var(--text-primary);
   font: 17px/1.6 "Inter", "Segoe UI", Roboto, Arial, sans-serif;
   position: relative;
@@ -332,31 +337,48 @@ textarea:focus {
   background: rgba(61, 16, 18, 0.55);
 }
 
+
 .user-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: stretch;
 }
 
 .inline-form {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
+  justify-content: center;
 }
 
-.inline-form--permissions {
+.user-actions .inline-form {
+  width: 100%;
+}
+
+.user-actions .inline-form .btn {
+  width: 100%;
+}
+
+.inline-form--permissions,
+.inline-form--password {
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
-  min-width: 200px;
+  gap: 10px;
+  padding: 16px;
+  background: rgba(8, 28, 22, 0.75);
+  border: 1px solid rgba(38, 99, 77, 0.4);
+  border-radius: 18px;
 }
 
 .inline-form--permissions .select-multiple {
-  max-width: 240px;
+  width: 100%;
+  max-width: none;
+  min-height: 120px;
 }
 
 .inline-form--permissions .btn {
-  align-self: flex-end;
+  align-self: stretch;
 }
 
 .chip-row {
@@ -366,11 +388,16 @@ textarea:focus {
 }
 
 .inline-form--password input[type="password"] {
-  min-width: 160px;
+  width: 100%;
+  min-width: 0;
 }
 
 .inline-form input[type="password"] {
-  padding: 8px 12px;
+  padding: 10px 14px;
+}
+
+.user-action-wide {
+  grid-column: span 2;
 }
 
 .alert {
@@ -719,22 +746,12 @@ textarea:focus {
     width: 100%;
   }
 
-  .inline-form--password input[type="password"] {
-    flex: 1;
-  }
-
   .user-actions {
-    flex-direction: column;
-    align-items: stretch;
+    grid-template-columns: 1fr;
   }
 
-  .user-actions .inline-form {
-    width: 100%;
-  }
-
-  .user-actions .inline-form button,
-  .user-actions .inline-form input[type="password"] {
-    width: 100%;
+  .user-action-wide {
+    grid-column: span 1;
   }
 }
 
@@ -779,6 +796,31 @@ textarea:focus {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.user-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.header-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.header-buttons .btn {
+  white-space: nowrap;
 }
 
 .small {
@@ -1402,6 +1444,18 @@ textarea:focus {
   line-height: 1.4;
   outline: none;
   transition: color 0.24s ease;
+}
+
+.login-form input {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.login-form input:focus {
+  box-shadow: none;
+  outline: none;
 }
 
 .field-control input::placeholder {
