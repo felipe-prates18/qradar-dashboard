@@ -667,12 +667,6 @@ def threat_hunting_page(
         for item in environment_counts:
             item.setdefault("source", "api")
 
-    total_active = sum(
-        int(item["total"])
-        for item in environment_counts
-        if isinstance(item.get("total"), int)
-    )
-
     context = {
         "request": request,
         "user": user,
@@ -682,7 +676,6 @@ def threat_hunting_page(
         "filters": filters,
         "use_cases": use_cases,
         "environment_counts": environment_counts,
-        "total_active": total_active,
         "summary_errors": summary_errors,
         "technology_options": technology_options,
         "siem_options": siem_options,

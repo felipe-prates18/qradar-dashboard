@@ -15,6 +15,8 @@ from requests.exceptions import RequestException
 _DEFAULT_BASE_TEMPLATE = (
     "https://{host}/console/plugins/app_proxy/application/UseCaseManager_service/api"
 )
+_MAX_LOG_BODY_LENGTH = 2000
+_MODULE_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -191,14 +193,29 @@ def _session_for(env: _EnvironmentConfig) -> Session:
     return session
 
 
+def _truncate_log_body(body: str) -> str:
+    if len(body) <= _MAX_LOG_BODY_LENGTH:
+        return body
+    return body[: _MAX_LOG_BODY_LENGTH - 1] + "…"
+
+
 def _fetch_active_count(
     env: _EnvironmentConfig,
     *,
     logger: Optional[logging.Logger] = None,
 ) -> Tuple[Optional[int], Optional[str]]:
+    active_logger = logger or _MODULE_LOGGER
     if not env.base_url:
+        if active_logger:
+            active_logger.warning(
+                "Ambiente %s sem URL configurada para o Use Case Manager.", env.name
+            )
         return None, "URL da API não configurada."
     if not env.token:
+        if active_logger:
+            active_logger.warning(
+                "Ambiente %s sem token configurado para o Use Case Manager.", env.name
+            )
         return None, "Token da API não configurado."
 
     session = _session_for(env)
@@ -232,6 +249,14 @@ def _fetch_active_count(
         for method, url, payloads in endpoints:
             for payload in payloads:
                 try:
+                    if active_logger:
+                        active_logger.debug(
+                            "Consultando Use Case Manager (%s %s) para %s com payload=%s",
+                            method,
+                            url,
+                            env.name,
+                            payload,
+                        )
                     if method == "POST":
                         response = session.post(url, json=payload, timeout=env.timeout)
                     else:
@@ -239,15 +264,29 @@ def _fetch_active_count(
                         response = session.get(url, params=params, timeout=env.timeout)
                 except RequestException as exc:
                     last_error = str(exc)
-                    if logger:
-                        logger.warning(
+                    if active_logger:
+                        active_logger.warning(
                             "Falha ao consultar Use Case Manager (%s %s): %s", method, url, exc
                         )
                     continue
 
+                if active_logger:
+                    try:
+                        body_text = _truncate_log_body(response.text or "")
+                    except Exception:
+                        body_text = "<conteúdo não textual>"
+                    active_logger.debug(
+                        "Resposta do Use Case Manager (%s %s) para %s: status=%s corpo=%s",
+                        method,
+                        url,
+                        env.name,
+                        response.status_code,
+                        body_text,
+                    )
+
                 if response.status_code == 404:
-                    if logger:
-                        logger.debug("Endpoint %s não encontrado para %s", url, env.name)
+                    if active_logger:
+                        active_logger.debug("Endpoint %s não encontrado para %s", url, env.name)
                     break
                 if response.status_code == 401:
                     return None, "Token inválido ou sem permissão."
@@ -256,8 +295,8 @@ def _fetch_active_count(
                     response.raise_for_status()
                 except RequestException as exc:
                     last_error = str(exc)
-                    if logger:
-                        logger.warning(
+                    if active_logger:
+                        active_logger.warning(
                             "Resposta inesperada do Use Case Manager (%s %s): %s", method, url, exc
                         )
                     continue
@@ -266,9 +305,17 @@ def _fetch_active_count(
                     data = response.json()
                 except ValueError:
                     last_error = "Resposta inválida do Use Case Manager."
-                    if logger:
-                        logger.warning(
-                            "Não foi possível decodificar JSON da resposta (%s %s)", method, url
+                    if active_logger:
+                        try:
+                            body_text = _truncate_log_body(response.text or "")
+                        except Exception:
+                            body_text = "<conteúdo não textual>"
+                        active_logger.warning(
+                            "Não foi possível decodificar JSON da resposta (%s %s) para %s. Corpo=%s",
+                            method,
+                            url,
+                            env.name,
+                            body_text,
                         )
                     continue
 
@@ -282,6 +329,12 @@ def _fetch_active_count(
                 if total is not None:
                     return total, None
 
+        if active_logger:
+            active_logger.warning(
+                "Não foi possível obter o total de casos ativos para %s: %s",
+                env.name,
+                last_error or "motivo desconhecido",
+            )
         return None, last_error or "Não foi possível obter o total de casos ativos."
     finally:
         session.close()
@@ -301,9 +354,17 @@ def count_active_use_cases(
     results: List[Dict[str, Any]] = []
     warnings: List[str] = []
 
+    active_logger = logger or _MODULE_LOGGER
+
     for env in envs:
         normalised = _normalise_env(env, api_conf=api_conf, tokens_map=tokens_map)
-        count, error = _fetch_active_count(normalised, logger=logger)
+        if active_logger:
+            active_logger.debug(
+                "Iniciando coleta de casos ativos no Use Case Manager para %s (host=%s)",
+                normalised.name,
+                normalised.host,
+            )
+        count, error = _fetch_active_count(normalised, logger=active_logger)
         if error:
             warnings.append(f"{normalised.name}: {error}")
         results.append(
