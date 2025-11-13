@@ -36,6 +36,31 @@ def _connect():
     con.row_factory = sqlite3.Row
     return con
 
+
+def _ensure_user_columns(cur) -> bool:
+    cur.execute("PRAGMA table_info(users)")
+    cols = {row[1] for row in cur.fetchall()}
+    changed = False
+    if "is_admin" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+        changed = True
+    if "can_access_threat_hunting" not in cols:
+        cur.execute(
+            "ALTER TABLE users ADD COLUMN can_access_threat_hunting INTEGER DEFAULT 0"
+        )
+        changed = True
+    return changed
+
+
+def ensure_user_schema() -> None:
+    con = _connect()
+    try:
+        cur = con.cursor()
+        if _ensure_user_columns(cur):
+            con.commit()
+    finally:
+        con.close()
+
 def hash_password(password: str) -> str:
     salt = bcrypt.gensalt(rounds=BCRYPT_COST)
     return bcrypt.hashpw(password.encode(), salt).decode()
@@ -85,12 +110,23 @@ def has_wallboard_token(request: Request) -> bool:
 def get_user(username: str):
     con = _connect()
     cur = con.cursor()
-    cur.execute("PRAGMA table_info(users)")
-    cols = [r[1] for r in cur.fetchall()]
-    if "is_admin" not in cols:
-        cur.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+    if _ensure_user_columns(cur):
         con.commit()
-    cur.execute("SELECT id, username, password_hash, is_active, COALESCE(is_admin,0) as is_admin FROM users WHERE username=? LIMIT 1", (username,))
+    cur.execute(
+        """
+        SELECT
+            id,
+            username,
+            password_hash,
+            is_active,
+            COALESCE(is_admin,0) as is_admin,
+            COALESCE(can_access_threat_hunting,0) as can_access_threat_hunting
+        FROM users
+        WHERE username=?
+        LIMIT 1
+        """,
+        (username,),
+    )
     row = cur.fetchone()
     con.close()
     return row
@@ -192,6 +228,15 @@ def is_admin(username: str) -> bool:
     row = get_user(username)
     return bool(row and int(row["is_admin"]) == 1 and int(row["is_active"]) == 1)
 
+
+def has_threat_hunting_access(username: str) -> bool:
+    row = get_user(username)
+    return bool(
+        row
+        and int(row["is_active"]) == 1
+        and int(row["can_access_threat_hunting"]) == 1
+    )
+
 @auth_router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
@@ -215,16 +260,29 @@ def api_me(user: str = Depends(verify_user_required_api)):
     return {"user": user}
 
 @auth_router.post("/api/admin/users")
-def api_admin_create_user(request: Request, username: str = Form(...), password: str = Form(...), is_admin: str = Form("false"), user: str = Depends(verify_user_required_api)):
+def api_admin_create_user(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    is_admin: str = Form("false"),
+    can_access_threat_hunting: str = Form("false"),
+    user: str = Depends(verify_user_required_api),
+):
     if not is_admin_user(user):
         raise HTTPException(status_code=403, detail="Admin required")
     admin_val = 1 if is_admin.lower() in ("1", "true", "on", "yes") else 0
+    th_val = 1 if can_access_threat_hunting.lower() in ("1", "true", "on", "yes") else 0
     con = _connect()
     cur = con.cursor()
     try:
+        if _ensure_user_columns(cur):
+            con.commit()
         cur.execute(
-            "INSERT INTO users (username, password_hash, is_active, is_admin) VALUES (?,?,1,?)",
-            (username, hash_password(password), admin_val),
+            """
+            INSERT INTO users (username, password_hash, is_active, is_admin, can_access_threat_hunting)
+            VALUES (?,?,1,?,?)
+            """,
+            (username, hash_password(password), admin_val, th_val),
         )
         con.commit()
         return {"detail": "Usuário criado"}
