@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -486,52 +487,163 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     return text
             return ""
 
-        def _collect_log_source_types() -> set[str]:
+        def _extract_protocol_type_id(entry: Any) -> Optional[str]:
+            if not isinstance(entry, dict):
+                return None
+            candidate_keys = (
+                "protocol_type_id",
+                "protocol_type",
+                "type_id",
+                "log_source_type_id",
+            )
+            for key in candidate_keys:
+                if key not in entry:
+                    continue
+                value = entry.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, dict):
+                    for nested_key in ("id", "value", "protocol_type_id", "type_id"):
+                        nested_value = value.get(nested_key)
+                        if nested_value is None:
+                            continue
+                        try:
+                            text = str(nested_value).strip()
+                        except Exception:
+                            continue
+                        if text:
+                            return text
+                    continue
+                try:
+                    text = str(value).strip()
+                except Exception:
+                    continue
+                if text:
+                    return text
+            return None
+
+        def _is_ok_status(status_text: str) -> bool:
+            if not status_text:
+                return False
+            normalized = status_text.strip().lower()
+            if not normalized:
+                return False
+            # Evita corresponder expressões como "not ok" ou "nok".
+            tokens = [
+                token
+                for token in re.split(r"[^a-z0-9]+", normalized)
+                if token
+            ]
+            if not tokens:
+                return False
+            if "not" in tokens and "ok" in tokens:
+                return False
+            if "nok" in tokens:
+                return False
+            return "ok" in tokens
+
+        def _lookup_log_source_type_names(
+            type_ids: set[str],
+        ) -> Tuple[set[str], Optional[str]]:
+            if not type_ids:
+                return set(), None
+
             types_url = (
                 f"{base_url}/config/event_sources/log_source_management/log_source_types"
             )
-            limit = 200
-            start = 0
-            type_field_candidates = [
+            collected_types: set[str] = set()
+            errors: List[str] = []
+            field_candidates = [
                 "id,name,description",
                 "id,name",
                 "name",
                 None,
             ]
-            type_field_index = 0
-            collected_types: set[str] = set()
-            while True:
-                params: Dict[str, str] = {}
-                candidate = type_field_candidates[type_field_index]
-                if candidate:
-                    params["fields"] = candidate
-                range_header = f"items={start}-{start + limit - 1}"
-                response = requests.get(
-                    types_url,
-                    headers={**headers, "Range": range_header},
-                    params=params,
-                    timeout=timeout,
-                    verify=verify_tls,
-                )
-                if (
-                    response.status_code == 422
-                    and type_field_index < len(type_field_candidates) - 1
-                ):
-                    type_field_index += 1
-                    start = 0
+
+            unique_ids: List[str] = []
+            seen_ids: set[str] = set()
+            for raw_id in type_ids:
+                try:
+                    text = str(raw_id).strip()
+                except Exception:
                     continue
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, list) or not payload:
-                    break
-                for entry in payload:
-                    name = _extract_type_name(entry)
+                if not text or text in seen_ids:
+                    continue
+                seen_ids.add(text)
+                unique_ids.append(text)
+
+            for type_id in unique_ids:
+                name_found = False
+                error_message: Optional[str] = None
+                for candidate in field_candidates:
+                    params: Dict[str, str] = {}
+                    if candidate:
+                        params["fields"] = candidate
+                    target_url = f"{types_url}/{type_id}"
+                    try:
+                        response = requests.get(
+                            target_url,
+                            headers=headers,
+                            params=params,
+                            timeout=timeout,
+                            verify=verify_tls,
+                        )
+                    except RequestException as exc:
+                        error_message = str(exc)
+                        break
+
+                    if response.status_code == 404:
+                        error_message = None
+                        name_found = True
+                        break
+                    if response.status_code == 401:
+                        error_message = "Token inválido ou sem permissão."
+                        break
+                    if (
+                        response.status_code == 422
+                        and candidate is not None
+                    ):
+                        # Tenta próximo conjunto de campos.
+                        continue
+                    if response.status_code == 422:
+                        error_message = (
+                            "Campos solicitados não são suportados pela API do QRadar."
+                        )
+                        break
+
+                    try:
+                        response.raise_for_status()
+                    except RequestException as exc:
+                        error_message = str(exc)
+                        break
+
+                    try:
+                        payload = response.json()
+                    except ValueError:
+                        error_message = "Resposta inválida da API do QRadar."
+                        break
+
+                    name = _extract_type_name(payload)
+                    if not name and isinstance(payload, dict):
+                        for fallback_key in ("name", "description"):
+                            value = payload.get(fallback_key)
+                            if value:
+                                try:
+                                    name = str(value).strip()
+                                except Exception:
+                                    name = ""
+                                if name:
+                                    break
                     if name:
                         collected_types.add(name)
-                if len(payload) < limit:
-                    break
-                start += limit
-            return collected_types
+                        name_found = True
+                        error_message = None
+                        break
+                if not name_found and error_message:
+                    errors.append(f"{type_id}: {error_message}")
+
+            combined_error = "; ".join(errors) if errors else None
+            return collected_types, combined_error
 
         def _extract_status_text(status_entry: Any) -> str:
             if status_entry is None:
@@ -617,6 +729,8 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         items: List[Dict[str, Any]] = []
         protocol_types: set[str] = set()
         collected_log_source_types: set[str] = set()
+        type_lookup_error: Optional[str] = None
+        ok_type_ids: set[str] = set()
 
         timed_out = False
 
@@ -703,6 +817,10 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     is_stale = enabled and (
                         not last_event_dt or last_event_dt < stale_threshold
                     )
+                    if enabled and _is_ok_status(status_text):
+                        type_id = _extract_protocol_type_id(entry)
+                        if type_id:
+                            ok_type_ids.add(type_id)
 
                     if enabled and (has_error_status or is_stale):
                         problematic += 1
@@ -729,6 +847,17 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 if len(payload) < limit:
                     break
                 start += limit
+            try:
+                collected_log_source_types, type_lookup_error = _lookup_log_source_type_names(
+                    ok_type_ids
+                )
+            except (RequestException, ValueError) as exc:
+                type_lookup_error = str(exc)
+                logger.warning(
+                    "Falha ao consultar tecnologias de log source ambiente=%s: %s",
+                    env.get("name") or env.get("host"),
+                    exc,
+                )
         except (RequestException, ValueError) as exc:
             message = f"Falha ao consultar log sources do QRadar: {exc}"
             logger.exception(
@@ -787,6 +916,8 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             )
         details.append("Limite sem eventos: 24 horas")
         details.append(f"Atualizado em: {_format_dt_label(now)}")
+        if type_lookup_error:
+            details.append(f"Tecnologias: {type_lookup_error}")
 
         return {
             "status": status,
