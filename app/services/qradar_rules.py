@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -366,6 +367,7 @@ def _collect_rule_statistics_impl(
     }
 
     totals: List[Dict[str, Any]] = []
+    monthly_counts: Dict[str, Dict[str, int]] = {}
     errors: List[str] = []
 
     for env in envs:
@@ -388,6 +390,8 @@ def _collect_rule_statistics_impl(
         if error:
             entry["error"] = error
             errors.append(f"{normalised.name}: {error}")
+        if month_map:
+            monthly_counts[normalised.name] = month_map
         totals.append(entry)
 
     return totals, {}, errors
