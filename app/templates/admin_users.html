@@ -44,6 +44,10 @@
         <input type="checkbox" name="is_admin">
         <span>Conceder acesso de administrador</span>
       </label>
+      <label class="form-checkbox">
+        <input type="checkbox" name="can_access_threat_hunting_flag">
+        <span>Conceder acesso ao módulo de Threat Hunting</span>
+      </label>
       <div class="form-actions">
         <button class="btn" type="submit">Criar usuário</button>
       </div>
@@ -64,6 +68,7 @@
             <th>Usuário</th>
             <th>Status</th>
             <th>Perfil</th>
+            <th>Threat Hunting</th>
             <th class="actions-col">Ações</th>
           </tr>
         </thead>
@@ -86,6 +91,11 @@
               </span>
             </td>
             <td>
+              <span class="status-chip {{ 'is-on' if u.can_access_threat_hunting else 'is-off' }}">
+                {{ 'Liberado' if u.can_access_threat_hunting else 'Restrito' }}
+              </span>
+            </td>
+            <td>
               <div class="user-actions">
                 <form method="post" action="/admin/users/toggle" class="inline-form">
                   <input type="hidden" name="user_id" value="{{u.id}}">
@@ -96,6 +106,11 @@
                   <input type="hidden" name="user_id" value="{{u.id}}">
                   <input type="hidden" name="field" value="is_admin">
                   <button class="btn small secondary" type="submit">Alternar admin</button>
+                </form>
+                <form method="post" action="/admin/users/toggle" class="inline-form">
+                  <input type="hidden" name="user_id" value="{{u.id}}">
+                  <input type="hidden" name="field" value="can_access_threat_hunting">
+                  <button class="btn small secondary" type="submit">Alternar Threat Hunting</button>
                 </form>
                 <form method="post" action="/admin/users/reset-password" class="inline-form inline-form--password">
                   <input type="hidden" name="user_id" value="{{u.id}}">
