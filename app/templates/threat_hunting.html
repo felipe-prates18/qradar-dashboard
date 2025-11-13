@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Threat Hunting</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/favicon.png">
+</head>
+<body class="threat-hunting-page">
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <img src="/static/logo-asper.png" alt="ASPER">
+        <div class="title">
+          <h1>Threat Hunting</h1>
+          <div class="sub">Catálogo colaborativo de Use Cases por ambiente e tecnologia.</div>
+        </div>
+      </div>
+      <div class="row">
+        <span class="small">Logado como {{user}}</span>
+        <a class="btn secondary" href="/">Dashboard</a>
+        <a class="btn secondary" href="/me/password">Minha conta</a>
+        {% if is_admin %}
+        <a class="btn secondary" href="/admin/users">Admin</a>
+        {% endif %}
+        <a class="btn secondary" href="/logout">Sair</a>
+      </div>
+    </header>
+
+    {% if success %}<div class="alert ok">{{success}}</div>{% endif %}
+    {% if error %}<div class="alert error">{{error}}</div>{% endif %}
+
+    <section class="card threat-summary-card">
+      <div class="card-heading">
+        <div>
+          <h3>Resumo de Use Cases ativos</h3>
+          <p class="muted">Distribuição dos casos de uso ativos em cada ambiente monitorado.</p>
+        </div>
+        <div class="summary-total">
+          <span class="summary-total-label">Total ativo</span>
+          <span class="summary-total-value">{{total_active}}</span>
+        </div>
+      </div>
+      {% if environment_counts %}
+      <div class="threat-summary-grid">
+        {% for item in environment_counts %}
+        <div class="summary-chip">
+          <span class="summary-chip-label">{{item.environment}}</span>
+          <span class="summary-chip-value">{{item.total}}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted">Nenhum Use Case ativo cadastrado até o momento.</p>
+      {% endif %}
+    </section>
+
+    <section class="card threat-list-card">
+      <div class="card-heading">
+        <div>
+          <h3>Casos de Uso</h3>
+          <p class="muted">Pesquise, filtre e exporte a base de conhecimento de Threat Hunting.</p>
+        </div>
+        <div class="card-actions">
+          <a class="btn secondary" href="/threat-hunting/export">Exportar CSV</a>
+        </div>
+      </div>
+      <form class="threat-filter-form" method="get" action="/threat-hunting">
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="search">Buscar por nome</label>
+            <input type="search" id="search" name="q" placeholder="Ex.: Lateral Movement" value="{{filters.q}}">
+          </div>
+          <div class="form-field">
+            <label for="technology">Tecnologia</label>
+            <select id="technology" name="technology">
+              <option value="">Todas</option>
+              {% for option in technology_options %}
+              <option value="{{option}}" {% if filters.technology == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="siem">SIEM</label>
+            <select id="siem" name="siem">
+              <option value="">Todos</option>
+              {% for option in siem_options %}
+              <option value="{{option}}" {% if filters.siem == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="status">Status</label>
+            <select id="status" name="status">
+              <option value="" {% if not filters.status %}selected{% endif %}>Todos</option>
+              <option value="active" {% if filters.status == 'active' %}selected{% endif %}>Ativos</option>
+              <option value="inactive" {% if filters.status == 'inactive' %}selected{% endif %}>Inativos</option>
+            </select>
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button class="btn" type="submit">Aplicar filtros</button>
+          <a class="btn tertiary" href="/threat-hunting">Limpar</a>
+        </div>
+      </form>
+      <div class="table-wrapper">
+        <table class="data-table threat-table">
+          <thead>
+            <tr>
+              <th>Use Case</th>
+              <th>Ambiente</th>
+              <th>Tecnologia</th>
+              <th>SIEM</th>
+              <th>Status</th>
+              <th>Atualizado</th>
+              <th class="actions-col">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% if use_cases %}
+            {% for uc in use_cases %}
+            <tr>
+              <td>
+                <div class="use-case-name">{{uc.name}}</div>
+                <div class="use-case-description">{{uc.description}}</div>
+                {% if uc.logic %}
+                <div class="use-case-logic"><span>Lógica:</span> {{uc.logic}}</div>
+                {% endif %}
+              </td>
+              <td>{{uc.environment}}</td>
+              <td>{{uc.technology}}</td>
+              <td>{{uc.siem}}</td>
+              <td>
+                <span class="status-chip {{ 'is-on' if uc.is_active else 'is-off' }}">
+                  {{ 'Ativo' if uc.is_active else 'Inativo' }}
+                </span>
+              </td>
+              <td>{{ uc.updated_at or uc.created_at or '—' }}</td>
+              <td>
+                <div class="user-actions">
+                  <a class="btn small secondary" href="/threat-hunting?edit={{uc.id}}">Editar</a>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="7" class="muted">Nenhum Use Case encontrado com os filtros aplicados.</td>
+            </tr>
+          {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card threat-form-card">
+      <div class="card-heading">
+        <div>
+          <h3>{% if edit_use_case %}Editar Use Case{% else %}Cadastrar novo Use Case{% endif %}</h3>
+          <p class="muted">Preencha os campos obrigatórios para documentar o conhecimento do time.</p>
+        </div>
+      </div>
+      <form method="post" action="{% if edit_use_case %}/threat-hunting/use-cases/{{edit_use_case.id}}{% else %}/threat-hunting/use-cases{% endif %}" class="threat-form">
+        <div class="form-grid threat-basic-grid">
+          <div class="form-field">
+            <label for="name">Nome</label>
+            <input type="text" id="name" name="name" value="{{ edit_use_case.name if edit_use_case else '' }}" required>
+          </div>
+          <div class="form-field">
+            <label for="environment">Ambiente</label>
+            <input type="text" id="environment" name="environment" list="environment-options" value="{{ edit_use_case.environment if edit_use_case else '' }}" required>
+            <datalist id="environment-options">
+              {% for option in environment_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="technology-input">Tecnologia</label>
+            <input type="text" id="technology-input" name="technology" list="technology-options" value="{{ edit_use_case.technology if edit_use_case else '' }}" required>
+            <datalist id="technology-options">
+              {% for option in technology_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="siem-input">SIEM</label>
+            <input type="text" id="siem-input" name="siem" list="siem-options" value="{{ edit_use_case.siem if edit_use_case else '' }}" required>
+            <datalist id="siem-options">
+              {% for option in siem_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+        </div>
+        <div class="form-field">
+          <label for="description">Descrição</label>
+          <textarea id="description" name="description" rows="4" placeholder="Detalhe o objetivo, pré-requisitos e contexto do caso de uso." required>{{ edit_use_case.description if edit_use_case else '' }}</textarea>
+        </div>
+        <div class="form-field">
+          <label for="logic">Lógica (opcional)</label>
+          <textarea id="logic" name="logic" rows="4" placeholder="Inclua consultas, regras de correlação ou pseudocódigo.">{{ edit_use_case.logic if edit_use_case else '' }}</textarea>
+        </div>
+        <label class="form-checkbox">
+          <input type="hidden" name="is_active" value="off">
+          <input type="checkbox" name="is_active" value="on" {% if not edit_use_case or edit_use_case.is_active %}checked{% endif %}>
+          <span>Use Case ativo</span>
+        </label>
+        <div class="form-actions">
+          <button class="btn" type="submit">{% if edit_use_case %}Salvar alterações{% else %}Cadastrar Use Case{% endif %}</button>
+          {% if edit_use_case %}
+          <a class="btn secondary" href="/threat-hunting">Cancelar edição</a>
+          {% endif %}
+        </div>
+      </form>
+    </section>
+  </div>
+</body>
+</html>
