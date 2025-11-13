@@ -161,7 +161,7 @@ def _collect_threat_hunting_counts() -> Dict[str, Any]:
     try:
         (
             environment_counts,
-            monthly_counts,
+            _unused_monthly_counts,
             summary_errors,
         ) = qradar_rules.collect_rule_statistics(CONFIG, logger=logger)
     except Exception:
@@ -171,6 +171,47 @@ def _collect_threat_hunting_counts() -> Dict[str, Any]:
         summary_errors = [
             "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
         ]
+    monthly_counts: Dict[str, Dict[str, int]] = {}
+    con: Optional[sqlite3.Connection] = None
+    try:
+        con = _con()
+        threat_hunting.ensure_schema(con)
+        now = datetime.utcnow()
+        if environment_counts:
+            totals_map: Dict[str, int] = {}
+            for item in environment_counts:
+                env_name = item.get("environment")
+                if not env_name:
+                    continue
+                try:
+                    total_value = int(item.get("total"))
+                except Exception:
+                    continue
+                totals_map[str(env_name)] = total_value
+            if (
+                totals_map
+                and threat_hunting.should_record_monthly_snapshot(now)
+            ):
+                month_key = f"{now.year:04d}-{now.month:02d}"
+                try:
+                    threat_hunting.record_monthly_totals(
+                        con,
+                        month_key,
+                        totals_map,
+                        collected_at=now,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Falha ao registrar totais mensais de casos de uso no banco local"
+                    )
+        monthly_counts = threat_hunting.list_monthly_totals(con)
+    except Exception:
+        logger.exception(
+            "Falha ao carregar totais mensais de casos de uso para o Threat Hunting"
+        )
+    finally:
+        if con is not None:
+            con.close()
     return {
         "environment_counts": environment_counts,
         "monthly_counts": monthly_counts,

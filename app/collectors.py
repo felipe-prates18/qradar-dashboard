@@ -459,6 +459,80 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 return {"fields": fields_value}
             return {}
 
+        def _extract_type_name(entry: Any) -> str:
+            if not isinstance(entry, dict):
+                return ""
+            for key in (
+                "name",
+                "display_name",
+                "displayValue",
+                "description",
+                "protocol_type",
+                "type",
+            ):
+                if key not in entry:
+                    continue
+                value = entry.get(key)
+                if isinstance(value, dict):
+                    nested = _extract_type_name(value)
+                    if nested:
+                        return nested
+                    continue
+                try:
+                    text = str(value).strip()
+                except Exception:
+                    continue
+                if text:
+                    return text
+            return ""
+
+        def _collect_log_source_types() -> set[str]:
+            types_url = (
+                f"{base_url}/config/event_sources/log_source_management/log_source_types"
+            )
+            limit = 200
+            start = 0
+            type_field_candidates = [
+                "id,name,description",
+                "id,name",
+                "name",
+                None,
+            ]
+            type_field_index = 0
+            collected_types: set[str] = set()
+            while True:
+                params: Dict[str, str] = {}
+                candidate = type_field_candidates[type_field_index]
+                if candidate:
+                    params["fields"] = candidate
+                range_header = f"items={start}-{start + limit - 1}"
+                response = requests.get(
+                    types_url,
+                    headers={**headers, "Range": range_header},
+                    params=params,
+                    timeout=timeout,
+                    verify=verify_tls,
+                )
+                if (
+                    response.status_code == 422
+                    and type_field_index < len(type_field_candidates) - 1
+                ):
+                    type_field_index += 1
+                    start = 0
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, list) or not payload:
+                    break
+                for entry in payload:
+                    name = _extract_type_name(entry)
+                    if name:
+                        collected_types.add(name)
+                if len(payload) < limit:
+                    break
+                start += limit
+            return collected_types
+
         def _extract_status_text(status_entry: Any) -> str:
             if status_entry is None:
                 return ""
@@ -542,10 +616,19 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         skipped_disabled = 0
         items: List[Dict[str, Any]] = []
         protocol_types: set[str] = set()
+        collected_log_source_types: set[str] = set()
 
         timed_out = False
 
         try:
+            try:
+                collected_log_source_types = _collect_log_source_types()
+            except (RequestException, ValueError) as exc:
+                logger.warning(
+                    "Falha ao coletar tecnologias de log source ambiente=%s: %s",
+                    env.get("name") or env.get("host"),
+                    exc,
+                )
             while True:
                 if deadline and time.monotonic() >= deadline:
                     timed_out = True
@@ -660,7 +743,10 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "total": None,
                 "error": message,
                 "items": [],
-                "protocol_types": [],
+                "protocol_types": sorted(
+                    collected_log_source_types or protocol_types,
+                    key=lambda item: item.lower(),
+                ),
             }
 
         evaluated_total = enabled_total or 0
@@ -713,7 +799,10 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             "generated_at": now.isoformat(),
             "error": error_message,
             "items": items,
-            "protocol_types": sorted(protocol_types, key=lambda item: item.lower()),
+            "protocol_types": sorted(
+                collected_log_source_types or protocol_types,
+                key=lambda item: item.lower(),
+            ),
         }
 
     def _check_offenses(env):

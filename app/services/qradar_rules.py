@@ -200,102 +200,6 @@ def _is_enabled(item: Any) -> bool:
     return False
 
 
-def _parse_rule_timestamp(value: Any) -> Optional[datetime]:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        if value.tzinfo:
-            return value
-        return value.replace(tzinfo=timezone.utc)
-    if isinstance(value, (int, float)):
-        timestamp = float(value)
-        # Assume millisecond precision for large values.
-        if abs(timestamp) > 10 ** 12:
-            timestamp /= 1000.0
-        try:
-            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
-        except Exception:
-            return None
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        # Try numeric conversion first.
-        try:
-            numeric = float(text)
-            return _parse_rule_timestamp(numeric)
-        except Exception:
-            pass
-        cleaned = text.replace("Z", "+00:00")
-        for fmt in (
-            "%Y-%m-%dT%H:%M:%S.%f%z",
-            "%Y-%m-%dT%H:%M:%S%z",
-            "%Y-%m-%d %H:%M:%S%z",
-            "%Y-%m-%d %H:%M:%S",
-        ):
-            try:
-                dt_obj = datetime.strptime(cleaned, fmt)
-                if dt_obj.tzinfo is None:
-                    dt_obj = dt_obj.replace(tzinfo=timezone.utc)
-                return dt_obj
-            except Exception:
-                continue
-        try:
-            dt_obj = datetime.fromisoformat(cleaned)
-            if dt_obj.tzinfo is None:
-                dt_obj = dt_obj.replace(tzinfo=timezone.utc)
-            return dt_obj
-        except Exception:
-            return None
-    if isinstance(value, dict):
-        candidate_keys = (
-            "timestamp",
-            "time",
-            "millis",
-            "seconds",
-            "value",
-            "date",
-        )
-        for key in candidate_keys:
-            if key not in value:
-                continue
-            dt_obj = _parse_rule_timestamp(value.get(key))
-            if dt_obj:
-                return dt_obj
-    return None
-
-
-def _extract_creation_timestamp(item: Any) -> Optional[datetime]:
-    if not isinstance(item, dict):
-        return None
-    creation_keys = (
-        "creation_date",
-        "creation_time",
-        "creation_timestamp",
-        "creationDate",
-        "creationTime",
-        "created_time",
-        "created_at",
-        "createdTime",
-        "createdAt",
-        "created_date",
-        "date_created",
-        "creation",
-    )
-    for key in creation_keys:
-        if key in item:
-            dt_obj = _parse_rule_timestamp(item.get(key))
-            if dt_obj:
-                return dt_obj
-    for nested_key in ("metadata", "details", "info"):
-        nested = item.get(nested_key)
-        if isinstance(nested, dict):
-            dt_obj = _extract_creation_timestamp(nested)
-            if dt_obj:
-                return dt_obj
-    return None
-
-
 def _fetch_rule_statistics(
     env: _EnvironmentConfig,
     *,
@@ -319,20 +223,13 @@ def _fetch_rule_statistics(
     url = f"{env.base_url.rstrip('/')}/analytics/rules"
     page_size = 200
     field_candidates = [
-        (
-            "id,enabled,creation_date,creation_time,created_time,created_at,"
-            "creation_timestamp"
-        ),
-        "id,enabled,creation_date,creation_time,creation_timestamp",
-        "id,enabled,creation_date,created_time,created_at",
-        "id,enabled,creation_date",
+        "id,enabled",
         None,
     ]
 
     for idx, candidate in enumerate(field_candidates):
         offset = 0
         total_enabled = 0
-        monthly_counts: Dict[str, int] = {}
         max_iterations = 1000
         saw_unsupported_fields = False
 
@@ -425,14 +322,6 @@ def _fetch_rule_statistics(
             for item in batch_items:
                 if _is_enabled(item):
                     enabled_in_batch += 1
-                created_dt = _extract_creation_timestamp(item)
-                if created_dt:
-                    if created_dt.tzinfo is None:
-                        created_dt = created_dt.replace(tzinfo=timezone.utc)
-                    else:
-                        created_dt = created_dt.astimezone(timezone.utc)
-                    key = f"{created_dt.year:04d}-{created_dt.month:02d}"
-                    monthly_counts[key] = monthly_counts.get(key, 0) + 1
             if enabled_in_batch == 0 and batch_items:
                 enabled_in_batch = len(batch_items)
 
@@ -452,13 +341,13 @@ def _fetch_rule_statistics(
                     break
 
         if max_iterations <= 0:
-            return total_enabled, monthly_counts, "Limite de paginação excedido ao consultar a API."
+            return total_enabled, {}, "Limite de paginação excedido ao consultar a API."
 
         if saw_unsupported_fields and idx < len(field_candidates) - 1:
             # Tenta novamente com o próximo conjunto de campos.
             continue
 
-        return total_enabled, monthly_counts, None
+        return total_enabled, {}, None
 
     return None, {}, "Campos solicitados não são suportados pela API do QRadar."
 
@@ -489,7 +378,7 @@ def _collect_rule_statistics_impl(
                 normalised.name,
                 normalised.host,
             )
-        total, month_map, error = _fetch_rule_statistics(
+        total, _month_map, error = _fetch_rule_statistics(
             normalised, logger=active_logger
         )
         entry: Dict[str, Any] = {"environment": normalised.name, "total": None}
@@ -505,7 +394,7 @@ def _collect_rule_statistics_impl(
             monthly_counts[normalised.name] = month_map
         totals.append(entry)
 
-    return totals, monthly_counts, errors
+    return totals, {}, errors
 
 
 def count_active_use_cases(
