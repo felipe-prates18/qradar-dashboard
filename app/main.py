@@ -159,17 +159,21 @@ def _refresh_health_cache() -> Dict[str, Any]:
 
 def _collect_threat_hunting_counts() -> Dict[str, Any]:
     try:
-        environment_counts, summary_errors = qradar_rules.count_active_use_cases(
-            CONFIG, logger=logger
-        )
+        (
+            environment_counts,
+            monthly_counts,
+            summary_errors,
+        ) = qradar_rules.collect_rule_statistics(CONFIG, logger=logger)
     except Exception:
         logger.exception("Falha ao consultar totais de regras do QRadar")
         environment_counts = []
+        monthly_counts = {}
         summary_errors = [
             "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
         ]
     return {
         "environment_counts": environment_counts,
+        "monthly_counts": monthly_counts,
         "summary_errors": summary_errors,
     }
 
@@ -994,6 +998,7 @@ def threat_hunting_page(
     total_use_case_counts: Dict[str, int] = {}
     active_use_case_counts: Dict[str, int] = {}
     monthly_use_case_counts: Dict[str, Dict[str, int]] = {}
+    db_monthly_use_case_counts: Dict[str, Dict[str, int]] = {}
     env_name_map = _environment_name_map()
 
     con = _con()
@@ -1099,7 +1104,7 @@ def threat_hunting_page(
         ]
         total_use_case_counts = total_counts_map
         active_use_case_counts = active_counts_map
-        monthly_use_case_counts = monthly_counts_map
+        db_monthly_use_case_counts = monthly_counts_map
 
         tech_values = set(THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS)
         tech_values.update(threat_hunting.distinct_values(con, "technology"))
@@ -1157,6 +1162,37 @@ def threat_hunting_page(
                     error_message = "Identificador de caso de uso inválido."
     finally:
         con.close()
+
+    api_monthly_counts_raw = threat_cache_payload.get("monthly_counts") or {}
+    api_monthly_counts: Dict[str, Dict[str, int]] = {}
+    if isinstance(api_monthly_counts_raw, dict):
+        for raw_env, month_map in api_monthly_counts_raw.items():
+            normalized_env = _normalize_environment_value(raw_env, env_name_map)
+            env_key = normalized_env or (str(raw_env).strip() if raw_env else "")
+            if not env_key or not isinstance(month_map, dict):
+                continue
+            target_map = api_monthly_counts.setdefault(env_key, {})
+            for month_key, value in month_map.items():
+                parsed = _parse_month_key(month_key)
+                if not parsed:
+                    parsed = _parse_month_key(str(month_key))
+                if not parsed:
+                    continue
+                year, month = parsed
+                normalized_key = f"{year:04d}-{month:02d}"
+                try:
+                    count_value = int(value)
+                except Exception:
+                    try:
+                        count_value = int(float(value))
+                    except Exception:
+                        continue
+                target_map[normalized_key] = target_map.get(normalized_key, 0) + max(0, count_value)
+
+    if api_monthly_counts:
+        monthly_use_case_counts = api_monthly_counts
+    else:
+        monthly_use_case_counts = db_monthly_use_case_counts
 
     if filters.get("environment"):
         filters["environment"] = _normalize_environment_value(
