@@ -122,7 +122,7 @@
                   <input type="hidden" name="field" value="is_admin">
                   <button class="btn small secondary" type="submit">Alternar admin</button>
                 </form>
-                <form method="post" action="/admin/users/permissions" class="inline-form inline-form--permissions">
+                <form method="post" action="/admin/users/permissions" class="inline-form inline-form--permissions user-action-wide">
                   <input type="hidden" name="user_id" value="{{u.id}}">
                   <select name="permissions" multiple class="select-multiple select-multiple--compact" size="{{permission_select_size}}" {% if not available_permissions %}disabled{% endif %}>
                     {% for perm in available_permissions %}
@@ -131,7 +131,7 @@
                   </select>
                   <button class="btn small tertiary" type="submit" {% if not available_permissions %}disabled{% endif %}>Atualizar permissões</button>
                 </form>
-                <form method="post" action="/admin/users/reset-password" class="inline-form inline-form--password">
+                <form method="post" action="/admin/users/reset-password" class="inline-form inline-form--password user-action-wide">
                   <input type="hidden" name="user_id" value="{{u.id}}">
                   <input type="password" name="new_password" placeholder="Nova senha" minlength="6" required>
                   <button class="btn small tertiary" type="submit">Resetar senha</button>
