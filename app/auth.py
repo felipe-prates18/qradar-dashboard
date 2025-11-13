@@ -4,6 +4,7 @@ import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Iterable, List, Optional
 from fastapi import APIRouter, Request, Form, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from starlette.status import HTTP_401_UNAUTHORIZED
@@ -18,6 +19,8 @@ LEGACY_SHA256_REGEX = re.compile(r"^[0-9a-f]{64}$")
 BCRYPT_COST = 12
 SESSION_DURATION = timedelta(hours=12)
 WALLBOARD_COOKIE_NAME = "wallboard_token"
+THREAT_HUNTING_PERMISSION_CODE = "threat_hunting"
+THREAT_HUNTING_PERMISSION_NAME = "Threat Hunting"
 
 with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
@@ -52,14 +55,216 @@ def _ensure_user_columns(cur) -> bool:
     return changed
 
 
+def _ensure_permission_tables(cur) -> bool:
+    changed = False
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS permissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_permissions (
+            user_id INTEGER NOT NULL,
+            permission_id INTEGER NOT NULL,
+            PRIMARY KEY (user_id, permission_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_user_permissions_user
+        ON user_permissions(user_id)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_user_permissions_permission
+        ON user_permissions(permission_id)
+        """
+    )
+    cur.execute(
+        "SELECT id FROM permissions WHERE code=? LIMIT 1",
+        (THREAT_HUNTING_PERMISSION_CODE,),
+    )
+    if cur.fetchone() is None:
+        cur.execute(
+            "INSERT INTO permissions (code, name) VALUES (?, ?)",
+            (THREAT_HUNTING_PERMISSION_CODE, THREAT_HUNTING_PERMISSION_NAME),
+        )
+        changed = True
+    return changed
+
+
+def _migrate_legacy_permission_flags(cur) -> bool:
+    cur.execute(
+        "SELECT id FROM permissions WHERE code=? LIMIT 1",
+        (THREAT_HUNTING_PERMISSION_CODE,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return False
+    permission_id = row[0]
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO user_permissions (user_id, permission_id)
+        SELECT id, ?
+        FROM users
+        WHERE COALESCE(can_access_threat_hunting, 0) = 1
+        """,
+        (permission_id,),
+    )
+    return cur.rowcount > 0
+
+
 def ensure_user_schema() -> None:
     con = _connect()
     try:
         cur = con.cursor()
+        changed = False
         if _ensure_user_columns(cur):
+            changed = True
+        if _ensure_permission_tables(cur):
+            changed = True
+        if _migrate_legacy_permission_flags(cur):
+            changed = True
+        if changed:
             con.commit()
     finally:
         con.close()
+
+
+def list_permissions() -> List[dict]:
+    ensure_user_schema()
+    con = _connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT code, name FROM permissions ORDER BY name COLLATE NOCASE"
+        )
+        rows = cur.fetchall()
+        return [
+            {"code": row["code"], "name": row["name"]}
+            for row in rows
+        ]
+    finally:
+        con.close()
+
+
+def get_user_permission_codes(user_id: int) -> List[str]:
+    ensure_user_schema()
+    con = _connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT p.code
+            FROM user_permissions up
+            JOIN permissions p ON p.id = up.permission_id
+            WHERE up.user_id=?
+            ORDER BY p.name COLLATE NOCASE
+            """,
+            (user_id,),
+        )
+        return [row["code"] for row in cur.fetchall()]
+    finally:
+        con.close()
+
+
+def set_user_permissions(user_id: int, permission_codes: Iterable[str]) -> None:
+    ensure_user_schema()
+    normalized = []
+    for code in permission_codes:
+        if not code:
+            continue
+        normalized_code = str(code).strip()
+        if normalized_code:
+            normalized.append(normalized_code)
+    unique_codes = sorted(set(normalized))
+
+    con = _connect()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT id FROM users WHERE id=?", (user_id,))
+        user_row = cur.fetchone()
+        if not user_row:
+            raise ValueError("Usuário não encontrado")
+
+        if unique_codes:
+            placeholders = ",".join("?" for _ in unique_codes)
+            cur.execute(
+                f"SELECT code, id FROM permissions WHERE code IN ({placeholders})",
+                unique_codes,
+            )
+            code_to_id = {row["code"]: row["id"] for row in cur.fetchall()}
+            missing = [code for code in unique_codes if code not in code_to_id]
+            if missing:
+                raise ValueError(f"Permissões inválidas: {', '.join(missing)}")
+        else:
+            code_to_id = {}
+
+        cur.execute("DELETE FROM user_permissions WHERE user_id=?", (user_id,))
+        if code_to_id:
+            cur.executemany(
+                "INSERT INTO user_permissions (user_id, permission_id) VALUES (?, ?)",
+                [(user_id, perm_id) for perm_id in code_to_id.values()],
+            )
+
+        has_threat_hunting = THREAT_HUNTING_PERMISSION_CODE in code_to_id
+        cur.execute(
+            "UPDATE users SET can_access_threat_hunting=? WHERE id=?",
+            (1 if has_threat_hunting else 0, user_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def has_permission(username: str, permission_code: str) -> bool:
+    ensure_user_schema()
+    con = _connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT id, is_active, COALESCE(can_access_threat_hunting, 0) AS can_access_threat_hunting
+            FROM users
+            WHERE username=?
+            LIMIT 1
+            """,
+            (username,),
+        )
+        row = cur.fetchone()
+        if not row or int(row["is_active"]) != 1:
+            return False
+        user_id = row["id"]
+        cur.execute(
+            """
+            SELECT 1
+            FROM user_permissions up
+            JOIN permissions p ON p.id = up.permission_id
+            WHERE up.user_id=? AND p.code=?
+            LIMIT 1
+            """,
+            (user_id, permission_code),
+        )
+        if cur.fetchone() is not None:
+            return True
+        if (
+            permission_code == THREAT_HUNTING_PERMISSION_CODE
+            and int(row["can_access_threat_hunting"]) == 1
+        ):
+            return True
+        return False
+    finally:
+        con.close()
+
 
 def hash_password(password: str) -> str:
     salt = bcrypt.gensalt(rounds=BCRYPT_COST)
@@ -230,12 +435,7 @@ def is_admin(username: str) -> bool:
 
 
 def has_threat_hunting_access(username: str) -> bool:
-    row = get_user(username)
-    return bool(
-        row
-        and int(row["is_active"]) == 1
-        and int(row["can_access_threat_hunting"]) == 1
-    )
+    return has_permission(username, THREAT_HUNTING_PERMISSION_CODE)
 
 @auth_router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
@@ -266,14 +466,21 @@ def api_admin_create_user(
     password: str = Form(...),
     is_admin: str = Form("false"),
     can_access_threat_hunting: str = Form("false"),
+    permissions: List[str] = Form([]),
     user: str = Depends(verify_user_required_api),
 ):
     if not is_admin_user(user):
         raise HTTPException(status_code=403, detail="Admin required")
     admin_val = 1 if is_admin.lower() in ("1", "true", "on", "yes") else 0
-    th_val = 1 if can_access_threat_hunting.lower() in ("1", "true", "on", "yes") else 0
+    permission_codes = list(permissions)
+    if can_access_threat_hunting.lower() in ("1", "true", "on", "yes"):
+        permission_codes.append(THREAT_HUNTING_PERMISSION_CODE)
+    permission_codes = sorted(set(permission_codes))
+    th_val = 1 if THREAT_HUNTING_PERMISSION_CODE in permission_codes else 0
     con = _connect()
     cur = con.cursor()
+    new_user_id: Optional[int] = None
+    response_payload = {"detail": "Usuário criado"}
     try:
         if _ensure_user_columns(cur):
             con.commit()
@@ -285,11 +492,17 @@ def api_admin_create_user(
             (username, hash_password(password), admin_val, th_val),
         )
         con.commit()
-        return {"detail": "Usuário criado"}
+        new_user_id = int(cur.lastrowid)
     except sqlite3.IntegrityError:
         return JSONResponse({"detail": "Usuário já existe"}, status_code=400)
     finally:
         con.close()
+    if new_user_id is not None:
+        try:
+            set_user_permissions(new_user_id, permission_codes)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+    return response_payload
 
 def is_admin_user(username: str) -> bool:
     return is_admin(username)

@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +28,10 @@ from .auth import (
     wallboard_token_request_allowed,
     has_threat_hunting_access,
     ensure_user_schema,
+    list_permissions,
+    set_user_permissions,
+    get_user_permission_codes,
+    THREAT_HUNTING_PERMISSION_CODE,
 )
 import requests
 from requests.exceptions import RequestException
@@ -459,6 +463,12 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
             status_code=403,
         )
     ensure_user_schema()
+    available_permissions = list_permissions()
+    permission_name_map = {
+        perm["code"]: perm["name"] for perm in available_permissions
+    }
+    permission_select_size = max(1, min(len(available_permissions), 4))
+
     con = _con()
     cur = con.cursor()
     cur.execute(
@@ -470,18 +480,54 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
         """
     )
     users = cur.fetchall()
+    cur.execute(
+        """
+        SELECT up.user_id, p.code, p.name
+        FROM user_permissions up
+        JOIN permissions p ON p.id = up.permission_id
+        """
+    )
+    permission_rows = cur.fetchall()
     con.close()
 
-    mapped = [
-        {
-            "id": u["id"],
-            "username": u["username"],
-            "is_active": int(u["is_active"]) == 1,
-            "is_admin": int(u["is_admin"]) == 1,
-            "can_access_threat_hunting": int(u["can_access_threat_hunting"]) == 1,
-        }
-        for u in users
-    ]
+    permission_map: Dict[int, list[Dict[str, str]]] = {}
+    for row in permission_rows:
+        entry = {"code": row["code"], "name": row["name"]}
+        permission_map.setdefault(row["user_id"], []).append(entry)
+
+    mapped = []
+    for u in users:
+        assigned = list(permission_map.get(u["id"], []))
+        assigned_codes = {item["code"] for item in assigned}
+        has_threat = (
+            THREAT_HUNTING_PERMISSION_CODE in assigned_codes
+            or int(u["can_access_threat_hunting"]) == 1
+        )
+        if has_threat and THREAT_HUNTING_PERMISSION_CODE not in assigned_codes:
+            assigned.append(
+                {
+                    "code": THREAT_HUNTING_PERMISSION_CODE,
+                    "name": permission_name_map.get(
+                        THREAT_HUNTING_PERMISSION_CODE,
+                        "Threat Hunting",
+                    ),
+                }
+            )
+        assigned_sorted = sorted(
+            assigned,
+            key=lambda item: item["name"].lower(),
+        )
+        mapped.append(
+            {
+                "id": u["id"],
+                "username": u["username"],
+                "is_active": int(u["is_active"]) == 1,
+                "is_admin": int(u["is_admin"]) == 1,
+                "can_access_threat_hunting": has_threat,
+                "permission_codes": [item["code"] for item in assigned_sorted],
+                "permission_labels": [item["name"] for item in assigned_sorted],
+            }
+        )
 
     success_message = request.query_params.get("success")
     error_message = request.query_params.get("error")
@@ -494,6 +540,8 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
             "user": user,
             "success": success_message,
             "error": error_message,
+            "available_permissions": available_permissions,
+            "permission_select_size": permission_select_size,
         },
     )
 
@@ -736,6 +784,7 @@ def admin_create_user(
     password: str = Form(...),
     is_admin_flag: str = Form(None),
     can_access_threat_hunting_flag: str = Form(None),
+    permissions: List[str] = Form([]),
     user: str = Depends(verify_user_required_page),
 ):
     if not is_admin(user):
@@ -745,10 +794,17 @@ def admin_create_user(
             status_code=403,
         )
     is_admin_val = 1 if (is_admin_flag in ("on", "true", "1", "yes")) else 0
-    threat_val = 1 if (can_access_threat_hunting_flag in ("on", "true", "1", "yes")) else 0
+    permission_codes = list(permissions)
+    if can_access_threat_hunting_flag in ("on", "true", "1", "yes"):
+        permission_codes.append(THREAT_HUNTING_PERMISSION_CODE)
+    permission_codes = sorted(
+        {code.strip() for code in permission_codes if str(code).strip()}
+    )
+    threat_val = 1 if THREAT_HUNTING_PERMISSION_CODE in permission_codes else 0
     ensure_user_schema()
     con = _con()
     cur = con.cursor()
+    new_user_id: Optional[int] = None
     try:
         cur.execute(
             """
@@ -758,10 +814,16 @@ def admin_create_user(
             (username, hash_password(password), is_admin_val, threat_val),
         )
         con.commit()
+        new_user_id = int(cur.lastrowid)
     except sqlite3.IntegrityError:
         return _redirect_admin_users(error="Já existe um usuário com esse nome.")
     finally:
         con.close()
+    if new_user_id is not None:
+        try:
+            set_user_permissions(new_user_id, permission_codes)
+        except ValueError as exc:
+            return _redirect_admin_users(error=str(exc))
     return _redirect_admin_users(success=f"Usuário {username} criado com sucesso.")
 
 @app.post("/users/admin/create")
@@ -771,6 +833,7 @@ def legacy_admin_create_user(
     password: str = Form(...),
     is_admin_flag: str = Form(None),
     can_access_threat_hunting_flag: str = Form(None),
+    permissions: List[str] = Form([]),
     user: str = Depends(verify_user_required_page),
 ):
     return admin_create_user(
@@ -779,6 +842,7 @@ def legacy_admin_create_user(
         password,
         is_admin_flag,
         can_access_threat_hunting_flag,
+        permissions,
         user,
     )
 
@@ -794,12 +858,14 @@ def admin_toggle_user(request: Request, user_id: int = Form(...), field: str = F
     allowed_fields = {
         "is_active": "Status de atividade atualizado para {username}.",
         "is_admin": "Permissão de administrador atualizada para {username}.",
-        "can_access_threat_hunting": "Permissão de Threat Hunting atualizada para {username}.",
+        "can_access_threat_hunting": "Permissões de Threat Hunting atualizadas para {username}.",
     }
     if field not in allowed_fields:
         return _redirect_admin_users(error="Ação inválida para o usuário selecionado.")
     con = _con()
     cur = con.cursor()
+    new_permission_codes: Optional[Iterable[str]] = None
+    target_username: Optional[str] = None
     try:
         cur.execute(
             """
@@ -820,15 +886,62 @@ def admin_toggle_user(request: Request, user_id: int = Form(...), field: str = F
                 return _redirect_admin_users(error="Você não pode desativar o seu próprio usuário.")
             if field == "is_admin" and int(row["is_admin"]) == 1:
                 return _redirect_admin_users(error="Você não pode remover suas próprias permissões de administrador.")
-        cur.execute(
-            f"UPDATE users SET {field}=CASE {field} WHEN 1 THEN 0 ELSE 1 END WHERE id=?",
-            (user_id,),
-        )
-        con.commit()
+        if field == "can_access_threat_hunting":
+            current_codes = set(get_user_permission_codes(user_id))
+            has_permission = (
+                THREAT_HUNTING_PERMISSION_CODE in current_codes
+                or int(row["can_access_threat_hunting"]) == 1
+            )
+            if has_permission:
+                current_codes.discard(THREAT_HUNTING_PERMISSION_CODE)
+            else:
+                current_codes.add(THREAT_HUNTING_PERMISSION_CODE)
+            new_permission_codes = current_codes
+        else:
+            cur.execute(
+                f"UPDATE users SET {field}=CASE {field} WHEN 1 THEN 0 ELSE 1 END WHERE id=?",
+                (user_id,),
+            )
+            con.commit()
     finally:
         con.close()
+    if field == "can_access_threat_hunting":
+        try:
+            set_user_permissions(user_id, new_permission_codes or [])
+        except ValueError as exc:
+            return _redirect_admin_users(error=str(exc))
     message_template = allowed_fields[field]
-    return _redirect_admin_users(success=message_template.format(username=target_username))
+    return _redirect_admin_users(success=message_template.format(username=target_username or ""))
+
+
+@app.post("/admin/users/permissions")
+def admin_update_user_permissions(
+    request: Request,
+    user_id: int = Form(...),
+    permissions: List[str] = Form([]),
+    user: str = Depends(verify_user_required_page),
+):
+    if not is_admin(user):
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "Somente administradores podem alterar usuários."},
+            status_code=403,
+        )
+    con = _con()
+    cur = con.cursor()
+    try:
+        cur.execute("SELECT username FROM users WHERE id=?", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return _redirect_admin_users(error="Usuário não encontrado.")
+        target_username = row["username"]
+    finally:
+        con.close()
+    try:
+        set_user_permissions(user_id, permissions)
+    except ValueError as exc:
+        return _redirect_admin_users(error=str(exc))
+    return _redirect_admin_users(success=f"Permissões atualizadas para {target_username}.")
 
 
 @app.post("/admin/users/reset-password")
