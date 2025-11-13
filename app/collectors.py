@@ -735,6 +735,14 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         timed_out = False
 
         try:
+            try:
+                collected_log_source_types = _collect_log_source_types()
+            except (RequestException, ValueError) as exc:
+                logger.warning(
+                    "Falha ao coletar tecnologias de log source ambiente=%s: %s",
+                    env.get("name") or env.get("host"),
+                    exc,
+                )
             while True:
                 if deadline and time.monotonic() >= deadline:
                     timed_out = True

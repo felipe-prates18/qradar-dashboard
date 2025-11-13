@@ -686,6 +686,8 @@ def _fetch_rule_statistics(
             batch_count = len(items)
             if batch_count == 0:
                 break
+            if response.status_code == 422:
+                return [], "Campos solicitados não são suportados pela API do QRadar."
 
             batch_items = items[:page_size] if batch_count > page_size else items
 
@@ -776,6 +778,8 @@ def _collect_rule_statistics_impl(
         if error:
             entry["error"] = error
             errors.append(f"{normalised.name}: {error}")
+        if month_map:
+            monthly_counts[normalised.name] = month_map
         totals.append(entry)
 
     return totals, monthly_counts, errors
