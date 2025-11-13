@@ -997,6 +997,7 @@ def threat_hunting_page(
     db_environment_counts: List[Dict[str, int]] = []
     total_use_case_counts: Dict[str, int] = {}
     active_use_case_counts: Dict[str, int] = {}
+    active_counts_lookup: Dict[str, int] = {}
     monthly_use_case_counts: Dict[str, Dict[str, int]] = {}
     db_monthly_use_case_counts: Dict[str, Dict[str, int]] = {}
     env_name_map = _environment_name_map()
@@ -1105,6 +1106,11 @@ def threat_hunting_page(
         total_use_case_counts = total_counts_map
         active_use_case_counts = active_counts_map
         db_monthly_use_case_counts = monthly_counts_map
+        active_counts_lookup = {
+            key.lower(): value
+            for key, value in active_use_case_counts.items()
+            if isinstance(key, str)
+        }
 
         tech_values = set(THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS)
         tech_values.update(threat_hunting.distinct_values(con, "technology"))
@@ -1200,6 +1206,48 @@ def threat_hunting_page(
         )
     else:
         filters["environment"] = ""
+
+    local_totals_used = False
+    if environment_counts:
+        for item in environment_counts:
+            normalized_env = _normalize_environment_value(
+                item.get("environment"), env_name_map
+            )
+            if normalized_env:
+                item["environment"] = normalized_env
+            source_value = str(item.get("source") or "api").lower()
+            if source_value not in {"api", "local"}:
+                source_value = "api"
+            item["source"] = source_value
+            total_value = item.get("total")
+            has_api_total = isinstance(total_value, (int, float))
+            if has_api_total:
+                continue
+            env_key = (normalized_env or "").strip()
+            local_total = None
+            if env_key:
+                local_total = active_use_case_counts.get(env_key)
+                if local_total is None:
+                    lookup_key = env_key.lower()
+                    local_total = active_counts_lookup.get(lookup_key)
+            if local_total is None:
+                continue
+            try:
+                item["total"] = int(local_total)
+            except Exception:
+                item["total"] = local_total
+            item["source"] = "local"
+            if not item.get("error"):
+                item["error"] = (
+                    "Total exibido a partir do cadastro local. Coleta da API indisponível."
+                )
+            local_totals_used = True
+
+    if local_totals_used:
+        summary_errors = list(summary_errors)
+        summary_errors.append(
+            "Alguns ambientes estão exibindo totais locais devido a erros na API do QRadar."
+        )
 
     if not environment_counts and db_environment_counts:
         environment_counts = db_environment_counts

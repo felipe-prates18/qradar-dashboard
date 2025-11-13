@@ -317,124 +317,150 @@ def _fetch_rule_statistics(
 
     session = _session_for(env)
     url = f"{env.base_url.rstrip('/')}/analytics/rules"
-    offset = 0
     page_size = 200
-    total_enabled = 0
-    monthly_counts: Dict[str, int] = {}
-    max_iterations = 1000
+    field_candidates = [
+        (
+            "id,enabled,creation_date,creation_time,created_time,created_at,"
+            "creation_timestamp"
+        ),
+        "id,enabled,creation_date,creation_time,creation_timestamp",
+        "id,enabled,creation_date,created_time,created_at",
+        "id,enabled,creation_date",
+        None,
+    ]
 
-    while max_iterations > 0:
-        headers = {"Range": f"items={offset}-{offset + page_size - 1}"}
-        params = {
-            "fields": (
-                "id,enabled,creation_date,creation_time,created_time,created_at,"
-                "creation_timestamp"
-            )
-        }
-        try:
-            if active_logger:
-                active_logger.debug(
-                    "Consultando QRadar Analytics Rules (%s) para %s com params=%s headers=%s",
-                    url,
-                    env.name,
-                    params,
-                    headers,
-                )
-            response = session.get(url, params=params, headers=headers, timeout=env.timeout)
-        except RequestException as exc:
-            if active_logger:
-                active_logger.warning(
-                    "Falha ao consultar QRadar Analytics Rules para %s: %s", env.name, exc
-                )
-            return None, {}, str(exc)
+    for idx, candidate in enumerate(field_candidates):
+        offset = 0
+        total_enabled = 0
+        monthly_counts: Dict[str, int] = {}
+        max_iterations = 1000
+        saw_unsupported_fields = False
 
-        if active_logger:
+        while max_iterations > 0:
+            headers = {"Range": f"items={offset}-{offset + page_size - 1}"}
+            params = {"fields": candidate} if candidate else {}
             try:
-                body_text = _truncate_log_body(response.text or "")
-            except Exception:
-                body_text = "<conteúdo não textual>"
-            active_logger.debug(
-                "Resposta do QRadar Analytics Rules para %s: status=%s content-range=%s corpo=%s",
-                env.name,
-                response.status_code,
-                response.headers.get("Content-Range"),
-                body_text,
-            )
-
-        if response.status_code == 204:
-            break
-
-        if response.status_code == 401:
-            return None, {}, "Token inválido ou sem permissão."
-        if response.status_code == 404:
-            return None, {}, "Endpoint /analytics/rules não encontrado."
-        if response.status_code == 416:
-            break
-
-        try:
-            response.raise_for_status()
-        except RequestException as exc:
-            if active_logger:
-                active_logger.warning(
-                    "Resposta inesperada da API do QRadar para %s: %s", env.name, exc
+                if active_logger:
+                    active_logger.debug(
+                        "Consultando QRadar Analytics Rules (%s) para %s com params=%s headers=%s",
+                        url,
+                        env.name,
+                        params,
+                        headers,
+                    )
+                response = session.get(
+                    url, params=params, headers=headers, timeout=env.timeout
                 )
-            return None, {}, str(exc)
+            except RequestException as exc:
+                if active_logger:
+                    active_logger.warning(
+                        "Falha ao consultar QRadar Analytics Rules para %s: %s", env.name, exc
+                    )
+                return None, {}, str(exc)
 
-        try:
-            data = response.json()
-        except ValueError:
             if active_logger:
-                active_logger.warning(
-                    "Não foi possível decodificar JSON da resposta do QRadar para %s.",
+                try:
+                    body_text = _truncate_log_body(response.text or "")
+                except Exception:
+                    body_text = "<conteúdo não textual>"
+                active_logger.debug(
+                    "Resposta do QRadar Analytics Rules para %s: status=%s content-range=%s corpo=%s",
                     env.name,
+                    response.status_code,
+                    response.headers.get("Content-Range"),
+                    body_text,
                 )
-            return None, {}, "Resposta inválida da API do QRadar."
 
-        items = _extract_items(data)
-        if items is None:
-            return None, {}, "Formato de resposta inesperado da API do QRadar."
-
-        batch_count = len(items)
-        if batch_count == 0:
-            break
-
-        if batch_count > page_size:
-            batch_items = items[:page_size]
-        else:
-            batch_items = items
-
-        enabled_in_batch = 0
-        for item in batch_items:
-            if _is_enabled(item):
-                enabled_in_batch += 1
-            created_dt = _extract_creation_timestamp(item)
-            if created_dt:
-                if created_dt.tzinfo is None:
-                    created_dt = created_dt.replace(tzinfo=timezone.utc)
-                else:
-                    created_dt = created_dt.astimezone(timezone.utc)
-                key = f"{created_dt.year:04d}-{created_dt.month:02d}"
-                monthly_counts[key] = monthly_counts.get(key, 0) + 1
-        if enabled_in_batch == 0 and batch_items:
-            enabled_in_batch = len(batch_items)
-
-        total_enabled += enabled_in_batch
-
-        offset += batch_count
-        total_items = _parse_total_from_content_range(response.headers.get("Content-Range"))
-        max_iterations -= 1
-
-        if total_items is not None:
-            if offset >= total_items:
-                break
-        else:
-            if batch_count < page_size:
+            if response.status_code == 204:
                 break
 
-    if max_iterations <= 0:
-        return total_enabled, monthly_counts, "Limite de paginação excedido ao consultar a API."
+            if response.status_code == 401:
+                return None, {}, "Token inválido ou sem permissão."
+            if response.status_code == 404:
+                return None, {}, "Endpoint /analytics/rules não encontrado."
+            if response.status_code == 416:
+                break
+            if response.status_code == 422 and idx < len(field_candidates) - 1:
+                if active_logger:
+                    active_logger.warning(
+                        "Campos não suportados pela API do QRadar para %s. Tentando conjunto reduzido (campos=%s).",
+                        env.name,
+                        candidate or "todos",
+                    )
+                saw_unsupported_fields = True
+                break
+            if response.status_code == 422:
+                return None, {}, "Campos solicitados não são suportados pela API do QRadar."
 
-    return total_enabled, monthly_counts, None
+            try:
+                response.raise_for_status()
+            except RequestException as exc:
+                if active_logger:
+                    active_logger.warning(
+                        "Resposta inesperada da API do QRadar para %s: %s", env.name, exc
+                    )
+                return None, {}, str(exc)
+
+            try:
+                data = response.json()
+            except ValueError:
+                if active_logger:
+                    active_logger.warning(
+                        "Não foi possível decodificar JSON da resposta do QRadar para %s.",
+                        env.name,
+                    )
+                return None, {}, "Resposta inválida da API do QRadar."
+
+            items = _extract_items(data)
+            if items is None:
+                return None, {}, "Formato de resposta inesperado da API do QRadar."
+
+            batch_count = len(items)
+            if batch_count == 0:
+                break
+
+            batch_items = items[:page_size] if batch_count > page_size else items
+
+            enabled_in_batch = 0
+            for item in batch_items:
+                if _is_enabled(item):
+                    enabled_in_batch += 1
+                created_dt = _extract_creation_timestamp(item)
+                if created_dt:
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        created_dt = created_dt.astimezone(timezone.utc)
+                    key = f"{created_dt.year:04d}-{created_dt.month:02d}"
+                    monthly_counts[key] = monthly_counts.get(key, 0) + 1
+            if enabled_in_batch == 0 and batch_items:
+                enabled_in_batch = len(batch_items)
+
+            total_enabled += enabled_in_batch
+
+            offset += batch_count
+            total_items = _parse_total_from_content_range(
+                response.headers.get("Content-Range")
+            )
+            max_iterations -= 1
+
+            if total_items is not None:
+                if offset >= total_items:
+                    break
+            else:
+                if batch_count < page_size:
+                    break
+
+        if max_iterations <= 0:
+            return total_enabled, monthly_counts, "Limite de paginação excedido ao consultar a API."
+
+        if saw_unsupported_fields and idx < len(field_candidates) - 1:
+            # Tenta novamente com o próximo conjunto de campos.
+            continue
+
+        return total_enabled, monthly_counts, None
+
+    return None, {}, "Campos solicitados não são suportados pela API do QRadar."
 
 
 def _collect_rule_statistics_impl(
