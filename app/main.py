@@ -167,6 +167,7 @@ def _collect_threat_hunting_counts() -> Dict[str, Any]:
     except Exception:
         logger.exception("Falha ao consultar totais de regras do QRadar")
         environment_counts = []
+        monthly_counts = {}
         summary_errors = [
             "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
         ]
@@ -1181,6 +1182,15 @@ def threat_hunting_page(
 
     environment_summary_data = _build_environment_summary(
         environment_counts,
+        monthly_use_case_counts,
+        env_name_map,
+    )
+    environment_summary_json = json.dumps(environment_summary_data, ensure_ascii=False)
+
+    environment_summary_data = _build_environment_summary(
+        environment_counts,
+        total_use_case_counts,
+        active_use_case_counts,
         monthly_use_case_counts,
         env_name_map,
     )
