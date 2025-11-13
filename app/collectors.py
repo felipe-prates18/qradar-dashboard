@@ -389,6 +389,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "total": None,
                 "error": message,
                 "items": [],
+                "protocol_types": [],
             }
 
         base_url = _build_api_base_url(env)
@@ -402,6 +403,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "total": None,
                 "error": message,
                 "items": [],
+                "protocol_types": [],
             }
 
         verify_tls = _to_bool(env.get("api_verify_tls"), _to_bool(default_verify_tls, False))
@@ -443,6 +445,8 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             headers["Version"] = str(version)
 
         field_candidates = [
+            "id,name,status,last_event_time,enabled,protocol_type,protocol_type_id,protocol_type_name,description",
+            "id,name,status,last_event_time,enabled,protocol_type,protocol_type_id,description",
             "id,name,status,last_event_time,enabled,protocol_type_id,description",
             "id,name,status,last_event_time,enabled",
             None,
@@ -491,6 +495,44 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             except Exception:
                 return ""
 
+        def _extract_protocol_label(entry: Any) -> str:
+            if not isinstance(entry, dict):
+                return ""
+            candidate_keys = (
+                "protocol_type",
+                "protocol_type_id",
+                "protocol_type_name",
+                "protocol",
+                "protocol_id",
+            )
+            for key in candidate_keys:
+                if key not in entry:
+                    continue
+                value = entry.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, dict):
+                    for nested_key in (
+                        "display_value",
+                        "name",
+                        "value",
+                        "label",
+                        "description",
+                    ):
+                        nested_value = value.get(nested_key)
+                        if nested_value:
+                            text = str(nested_value).strip()
+                            if text:
+                                return text
+                    continue
+                try:
+                    text = str(value).strip()
+                except Exception:
+                    continue
+                if text:
+                    return text
+            return ""
+
         now = datetime.now(timezone.utc)
         stale_threshold = now - timedelta(hours=24)
         limit = 200
@@ -499,6 +541,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         problematic = 0
         skipped_disabled = 0
         items: List[Dict[str, Any]] = []
+        protocol_types: set[str] = set()
 
         timed_out = False
 
@@ -547,6 +590,9 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 for entry in payload:
                     if not isinstance(entry, dict):
                         continue
+                    protocol_label = _extract_protocol_label(entry)
+                    if protocol_label:
+                        protocol_types.add(protocol_label)
                     enabled = _to_bool(entry.get("enabled"), True)
                     if enabled:
                         enabled_total += 1
@@ -614,6 +660,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "total": None,
                 "error": message,
                 "items": [],
+                "protocol_types": [],
             }
 
         evaluated_total = enabled_total or 0
@@ -666,6 +713,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             "generated_at": now.isoformat(),
             "error": error_message,
             "items": items,
+            "protocol_types": sorted(protocol_types, key=lambda item: item.lower()),
         }
 
     def _check_offenses(env):
