@@ -378,7 +378,7 @@ def _collect_rule_statistics_impl(
                 normalised.name,
                 normalised.host,
             )
-        total, _month_map, error = _fetch_rule_statistics(
+        total, month_map, error = _fetch_rule_statistics(
             normalised, logger=active_logger
         )
         entry: Dict[str, Any] = {"environment": normalised.name, "total": None}
@@ -387,6 +387,21 @@ def _collect_rule_statistics_impl(
                 entry["total"] = int(total)
             except Exception:
                 entry["total"] = None
+        if month_map:
+            sanitized_months: Dict[str, int] = {}
+            for raw_key, raw_value in month_map.items():
+                key = str(raw_key).strip()
+                if not key:
+                    continue
+                try:
+                    sanitized_months[key] = int(raw_value)
+                except Exception:
+                    try:
+                        sanitized_months[key] = int(float(raw_value))
+                    except Exception:
+                        continue
+            if sanitized_months:
+                monthly_counts[normalised.name] = sanitized_months
         if error:
             entry["error"] = error
             errors.append(f"{normalised.name}: {error}")
@@ -394,7 +409,7 @@ def _collect_rule_statistics_impl(
             monthly_counts[normalised.name] = month_map
         totals.append(entry)
 
-    return totals, {}, errors
+    return totals, monthly_counts, errors
 
 
 def count_active_use_cases(

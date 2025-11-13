@@ -714,8 +714,6 @@ def _build_monthly_series(
 
 def _build_environment_summary(
     environment_counts: List[Dict[str, Any]],
-    total_counts: Dict[str, int],
-    active_counts: Dict[str, int],
     monthly_counts: Dict[str, Dict[str, int]],
     env_name_map: Dict[str, str],
 ) -> Dict[str, Any]:
@@ -748,6 +746,8 @@ def _build_environment_summary(
         notes.append(source_label)
         if item.get("error"):
             notes.append(str(item["error"]))
+        if api_total is None:
+            notes.append("Total de casos ativos indisponível na API do QRadar.")
         summary[env_name] = {
             "name": env_name,
             "code": (
@@ -756,8 +756,6 @@ def _build_environment_summary(
                 else None
             ),
             "active_use_cases_api": api_total,
-            "local_active_use_cases": active_counts.get(env_name, 0),
-            "total_use_cases": total_counts.get(env_name, 0),
             "details": details,
             "appliances": appliances,
             "connectivity_targets": connectivity,
@@ -1035,12 +1033,7 @@ def threat_hunting_page(
     technology_options: List[str] = []
     siem_options: List[str] = []
     environment_options: List[str] = []
-    db_environment_counts: List[Dict[str, int]] = []
-    total_use_case_counts: Dict[str, int] = {}
-    active_use_case_counts: Dict[str, int] = {}
-    active_counts_lookup: Dict[str, int] = {}
     monthly_use_case_counts: Dict[str, Dict[str, int]] = {}
-    db_monthly_use_case_counts: Dict[str, Dict[str, int]] = {}
     env_name_map = _environment_name_map()
 
     con = _con()
@@ -1082,76 +1075,6 @@ def threat_hunting_page(
             ]
 
         use_cases = canonical_use_cases
-
-        total_counts_map: Dict[str, int] = {}
-        for entry in threat_hunting.count_total_by_environment(con):
-            raw_env = entry.get("environment") if isinstance(entry, dict) else None
-            normalized_env = _normalize_environment_value(raw_env, env_name_map)
-            env_key = normalized_env or (str(raw_env).strip() if raw_env else "")
-            if not env_key:
-                continue
-            value = entry.get("total") if isinstance(entry, dict) else None
-            try:
-                count_value = int(value)
-            except Exception:
-                try:
-                    count_value = int(float(value))
-                except Exception:
-                    count_value = 0
-            total_counts_map[env_key] = total_counts_map.get(env_key, 0) + count_value
-
-        active_counts_map: Dict[str, int] = {}
-        for entry in threat_hunting.count_active_by_environment(con):
-            raw_env = entry.get("environment") if isinstance(entry, dict) else None
-            normalized_env = _normalize_environment_value(raw_env, env_name_map)
-            env_key = normalized_env or (str(raw_env).strip() if raw_env else "")
-            if not env_key:
-                continue
-            value = entry.get("total") if isinstance(entry, dict) else None
-            try:
-                count_value = int(value)
-            except Exception:
-                try:
-                    count_value = int(float(value))
-                except Exception:
-                    count_value = 0
-            active_counts_map[env_key] = active_counts_map.get(env_key, 0) + count_value
-
-        monthly_counts_map: Dict[str, Dict[str, int]] = {}
-        monthly_raw = threat_hunting.count_creations_by_month(con)
-        for raw_env, month_map in monthly_raw.items():
-            normalized_env = _normalize_environment_value(raw_env, env_name_map)
-            env_key = normalized_env or (str(raw_env).strip() if raw_env else "")
-            if not env_key or not isinstance(month_map, dict):
-                continue
-            target_map = monthly_counts_map.setdefault(env_key, {})
-            for month_key, count_value in month_map.items():
-                parsed_month = _parse_month_key(month_key)
-                if not parsed_month:
-                    continue
-                year, month = parsed_month
-                normalized_key = f"{year:04d}-{month:02d}"
-                try:
-                    month_total = int(count_value)
-                except Exception:
-                    try:
-                        month_total = int(float(count_value))
-                    except Exception:
-                        continue
-                target_map[normalized_key] = target_map.get(normalized_key, 0) + month_total
-
-        db_environment_counts = [
-            {"environment": env, "total": total}
-            for env, total in sorted(active_counts_map.items(), key=lambda item: item[0].lower())
-        ]
-        total_use_case_counts = total_counts_map
-        active_use_case_counts = active_counts_map
-        db_monthly_use_case_counts = monthly_counts_map
-        active_counts_lookup = {
-            key.lower(): value
-            for key, value in active_use_case_counts.items()
-            if isinstance(key, str)
-        }
 
         tech_values = set(THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS)
         tech_values.update(threat_hunting.distinct_values(con, "technology"))
@@ -1236,10 +1159,7 @@ def threat_hunting_page(
                         continue
                 target_map[normalized_key] = target_map.get(normalized_key, 0) + max(0, count_value)
 
-    if api_monthly_counts:
-        monthly_use_case_counts = api_monthly_counts
-    else:
-        monthly_use_case_counts = db_monthly_use_case_counts
+    monthly_use_case_counts = api_monthly_counts
 
     if filters.get("environment"):
         filters["environment"] = _normalize_environment_value(
@@ -1248,7 +1168,6 @@ def threat_hunting_page(
     else:
         filters["environment"] = ""
 
-    local_totals_used = False
     if environment_counts:
         for item in environment_counts:
             normalized_env = _normalize_environment_value(
@@ -1257,56 +1176,16 @@ def threat_hunting_page(
             if normalized_env:
                 item["environment"] = normalized_env
             source_value = str(item.get("source") or "api").lower()
-            if source_value not in {"api", "local"}:
+            if source_value != "api":
                 source_value = "api"
             item["source"] = source_value
-            total_value = item.get("total")
-            has_api_total = isinstance(total_value, (int, float))
-            if has_api_total:
-                continue
-            env_key = (normalized_env or "").strip()
-            local_total = None
-            if env_key:
-                local_total = active_use_case_counts.get(env_key)
-                if local_total is None:
-                    lookup_key = env_key.lower()
-                    local_total = active_counts_lookup.get(lookup_key)
-            if local_total is None:
-                continue
-            try:
-                item["total"] = int(local_total)
-            except Exception:
-                item["total"] = local_total
-            item["source"] = "local"
-            if not item.get("error"):
-                item["error"] = (
-                    "Total exibido a partir do cadastro local. Coleta da API indisponível."
-                )
-            local_totals_used = True
 
-    if local_totals_used:
-        summary_errors = list(summary_errors)
-        summary_errors.append(
-            "Alguns ambientes estão exibindo totais locais devido a erros na API do QRadar."
-        )
-
-    if not environment_counts and db_environment_counts:
-        environment_counts = db_environment_counts
-        summary_errors = list(summary_errors)
-        summary_errors.append(
-            "Nenhum ambiente configurado para consulta na API. Exibindo totais cadastrados na Wiki."
-        )
-        for item in environment_counts:
-            item.setdefault("error", "Dados obtidos do cadastro local.")
-            item["source"] = "local"
-    else:
-        for item in environment_counts:
-            normalized_env = _normalize_environment_value(
-                item.get("environment"), env_name_map
-            )
-            if normalized_env:
-                item["environment"] = normalized_env
-            item.setdefault("source", "api")
+    environment_summary_data = _build_environment_summary(
+        environment_counts,
+        monthly_use_case_counts,
+        env_name_map,
+    )
+    environment_summary_json = json.dumps(environment_summary_data, ensure_ascii=False)
 
     environment_summary_data = _build_environment_summary(
         environment_counts,

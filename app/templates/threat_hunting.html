@@ -822,26 +822,13 @@
       }
 
       function buildMetaText(data) {
-        const parts = [];
-        const total = Number.isFinite(Number(data && data.total_use_cases))
-          ? Number(data.total_use_cases)
-          : null;
-        const activeLocal = Number.isFinite(Number(data && data.local_active_use_cases))
-          ? Number(data.local_active_use_cases)
-          : null;
         const activeApi = Number.isFinite(Number(data && data.active_use_cases_api))
           ? Number(data.active_use_cases_api)
           : null;
-        if (total !== null) {
-          parts.push(`Cadastrados: ${total}`);
+        if (activeApi === null) {
+          return 'Ativos (QRadar): —';
         }
-        if (activeLocal !== null) {
-          parts.push(`Ativos (Wiki): ${activeLocal}`);
-        }
-        if (activeApi !== null) {
-          parts.push(`Ativos (QRadar): ${activeApi}`);
-        }
-        return parts.join(' · ');
+        return `Ativos (QRadar): ${activeApi}`;
       }
 
       function openEnvironmentModal(envName) {
