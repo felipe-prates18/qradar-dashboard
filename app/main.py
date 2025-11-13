@@ -171,6 +171,17 @@ def _collect_threat_hunting_counts() -> Dict[str, Any]:
         summary_errors = [
             "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
         ]
+    try:
+        (
+            log_source_types,
+            log_source_errors,
+        ) = qradar_rules.collect_log_source_types(CONFIG, logger=logger)
+    except Exception:
+        logger.exception(
+            "Falha ao consultar tecnologias de log source do QRadar"
+        )
+        log_source_types = {}
+        log_source_errors = {}
     monthly_counts: Dict[str, Dict[str, int]] = {}
     con: Optional[sqlite3.Connection] = None
     try:
@@ -216,6 +227,8 @@ def _collect_threat_hunting_counts() -> Dict[str, Any]:
         "environment_counts": environment_counts,
         "monthly_counts": monthly_counts,
         "summary_errors": summary_errors,
+        "log_source_types": log_source_types,
+        "log_source_errors": log_source_errors,
     }
 
 
@@ -648,43 +661,6 @@ def _build_environment_config_lookup(
     return lookup
 
 
-def _build_log_source_type_lookup(
-    env_name_map: Dict[str, str]
-) -> Dict[str, List[str]]:
-    mapping: Dict[str, List[str]] = {}
-    try:
-        monitoring_payload = _get_monitoring_payload()
-    except Exception:
-        monitoring_payload = {}
-        logger.exception(
-            "Falha ao carregar dados de log sources para o resumo de ambientes"
-        )
-    rows = monitoring_payload.get("rows") if isinstance(monitoring_payload, dict) else None
-    if not isinstance(rows, list):
-        return mapping
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        env_name = row.get("name")
-        normalized = _normalize_environment_value(env_name, env_name_map)
-        if not normalized:
-            continue
-        log_sources = row.get("log_sources_check")
-        if not isinstance(log_sources, dict):
-            continue
-        raw_types = log_sources.get("protocol_types") or []
-        if not isinstance(raw_types, list):
-            continue
-        collected: List[str] = []
-        for item in raw_types:
-            text = str(item).strip()
-            if text and text not in collected:
-                collected.append(text)
-        if collected:
-            mapping[normalized.lower()] = collected
-    return mapping
-
-
 def _build_monthly_series(
     month_counts: Optional[Dict[str, int]], current_year: int, current_month: int
 ) -> List[Dict[str, Any]]:
@@ -716,9 +692,10 @@ def _build_environment_summary(
     environment_counts: List[Dict[str, Any]],
     monthly_counts: Dict[str, Dict[str, int]],
     env_name_map: Dict[str, str],
+    log_source_lookup: Dict[str, List[str]],
+    log_source_errors: Dict[str, str],
 ) -> Dict[str, Any]:
     config_lookup = _build_environment_config_lookup(env_name_map)
-    log_source_lookup = _build_log_source_type_lookup(env_name_map)
     now = datetime.now()
     current_year, current_month = now.year, now.month
     summary: Dict[str, Any] = {}
@@ -748,6 +725,9 @@ def _build_environment_summary(
             notes.append(str(item["error"]))
         if api_total is None:
             notes.append("Total de casos ativos indisponível na API do QRadar.")
+        log_error = log_source_errors.get(key)
+        if log_error:
+            notes.append(f"Tecnologias: {log_error}")
         summary[env_name] = {
             "name": env_name,
             "code": (
@@ -1161,6 +1141,55 @@ def threat_hunting_page(
 
     monthly_use_case_counts = api_monthly_counts
 
+    def _normalise_env_key(raw_env: Any) -> Optional[str]:
+        normalized_env = _normalize_environment_value(raw_env, env_name_map)
+        if normalized_env:
+            return normalized_env.lower()
+        if isinstance(raw_env, str):
+            stripped = raw_env.strip()
+            if stripped:
+                return stripped.lower()
+        return None
+
+    raw_log_source_types = threat_cache_payload.get("log_source_types") or {}
+    log_source_type_lookup: Dict[str, List[str]] = {}
+    if isinstance(raw_log_source_types, dict):
+        for raw_env, values in raw_log_source_types.items():
+            key = _normalise_env_key(raw_env)
+            if not key:
+                continue
+            collected: List[str] = []
+            if isinstance(values, (list, tuple, set)):
+                for value in values:
+                    try:
+                        text = str(value).strip()
+                    except Exception:
+                        continue
+                    if text and text not in collected:
+                        collected.append(text)
+            elif isinstance(values, str):
+                text = values.strip()
+                if text:
+                    collected.append(text)
+            if collected:
+                log_source_type_lookup[key] = sorted(
+                    collected, key=lambda item: item.lower()
+                )
+
+    raw_log_source_errors = threat_cache_payload.get("log_source_errors") or {}
+    log_source_error_lookup: Dict[str, str] = {}
+    if isinstance(raw_log_source_errors, dict):
+        for raw_env, value in raw_log_source_errors.items():
+            key = _normalise_env_key(raw_env)
+            if not key:
+                continue
+            try:
+                text = str(value).strip()
+            except Exception:
+                continue
+            if text:
+                log_source_error_lookup[key] = text
+
     if filters.get("environment"):
         filters["environment"] = _normalize_environment_value(
             filters["environment"], env_name_map
@@ -1184,15 +1213,8 @@ def threat_hunting_page(
         environment_counts,
         monthly_use_case_counts,
         env_name_map,
-    )
-    environment_summary_json = json.dumps(environment_summary_data, ensure_ascii=False)
-
-    environment_summary_data = _build_environment_summary(
-        environment_counts,
-        total_use_case_counts,
-        active_use_case_counts,
-        monthly_use_case_counts,
-        env_name_map,
+        log_source_type_lookup,
+        log_source_error_lookup,
     )
     environment_summary_json = json.dumps(environment_summary_data, ensure_ascii=False)
 
