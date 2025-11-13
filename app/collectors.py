@@ -732,6 +732,12 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
         type_lookup_error: Optional[str] = None
         ok_type_ids: set[str] = set()
 
+        def _collect_active_type_names() -> Tuple[set[str], Optional[str]]:
+            """Resolve the names for the active log source type IDs."""
+            if not ok_type_ids:
+                return set(), None
+            return _lookup_log_source_type_names(ok_type_ids)
+
         timed_out = False
 
         try:
@@ -848,9 +854,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     break
                 start += limit
             try:
-                collected_log_source_types, type_lookup_error = _lookup_log_source_type_names(
-                    ok_type_ids
-                )
+                collected_log_source_types, type_lookup_error = _collect_active_type_names()
             except (RequestException, ValueError) as exc:
                 type_lookup_error = str(exc)
                 logger.warning(
