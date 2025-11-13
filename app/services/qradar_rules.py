@@ -199,140 +199,328 @@ def _is_enabled(item: Any) -> bool:
     return False
 
 
-def _fetch_enabled_count(
+def _extract_log_source_type_name(entry: Any) -> str:
+    if isinstance(entry, dict):
+        for key in (
+            "name",
+            "display_name",
+            "displayValue",
+            "description",
+            "protocol_type",
+            "type",
+        ):
+            if key not in entry:
+                continue
+            value = entry.get(key)
+            if isinstance(value, dict):
+                nested = _extract_log_source_type_name(value)
+                if nested:
+                    return nested
+                continue
+            try:
+                text = str(value).strip()
+            except Exception:
+                continue
+            if text:
+                return text
+    elif entry is not None:
+        try:
+            text = str(entry).strip()
+            if text:
+                return text
+        except Exception:
+            return ""
+    return ""
+
+
+def _fetch_rule_statistics(
     env: _EnvironmentConfig,
     *,
     logger: Optional[logging.Logger] = None,
-) -> Tuple[Optional[int], Optional[str]]:
+) -> Tuple[Optional[int], Dict[str, int], Optional[str]]:
     active_logger = logger or _MODULE_LOGGER
     if not env.base_url:
         if active_logger:
             active_logger.warning(
                 "Ambiente %s sem URL configurada para a API do QRadar.", env.name
             )
-        return None, "URL da API não configurada."
+        return None, {}, "URL da API não configurada."
     if not env.token:
         if active_logger:
             active_logger.warning(
                 "Ambiente %s sem token configurado para a API do QRadar.", env.name
             )
-        return None, "Token da API não configurado."
+        return None, {}, "Token da API não configurado."
 
     session = _session_for(env)
     url = f"{env.base_url.rstrip('/')}/analytics/rules"
-    offset = 0
     page_size = 200
-    total_enabled = 0
-    max_iterations = 1000
+    field_candidates = [
+        "id,enabled",
+        None,
+    ]
 
-    while max_iterations > 0:
-        headers = {"Range": f"items={offset}-{offset + page_size - 1}"}
-        params = {"fields": "id,enabled"}
-        try:
-            if active_logger:
-                active_logger.debug(
-                    "Consultando QRadar Analytics Rules (%s) para %s com params=%s headers=%s",
-                    url,
-                    env.name,
-                    params,
-                    headers,
-                )
-            response = session.get(url, params=params, headers=headers, timeout=env.timeout)
-        except RequestException as exc:
-            if active_logger:
-                active_logger.warning(
-                    "Falha ao consultar QRadar Analytics Rules para %s: %s", env.name, exc
-                )
-            return None, str(exc)
+    for idx, candidate in enumerate(field_candidates):
+        offset = 0
+        total_enabled = 0
+        max_iterations = 1000
+        saw_unsupported_fields = False
 
-        if active_logger:
+        while max_iterations > 0:
+            headers = {"Range": f"items={offset}-{offset + page_size - 1}"}
+            params = {"fields": candidate} if candidate else {}
             try:
-                body_text = _truncate_log_body(response.text or "")
-            except Exception:
-                body_text = "<conteúdo não textual>"
-            active_logger.debug(
-                "Resposta do QRadar Analytics Rules para %s: status=%s content-range=%s corpo=%s",
-                env.name,
-                response.status_code,
-                response.headers.get("Content-Range"),
-                body_text,
+                if active_logger:
+                    active_logger.debug(
+                        "Consultando QRadar Analytics Rules (%s) para %s com params=%s headers=%s",
+                        url,
+                        env.name,
+                        params,
+                        headers,
+                    )
+                response = session.get(
+                    url, params=params, headers=headers, timeout=env.timeout
+                )
+            except RequestException as exc:
+                if active_logger:
+                    active_logger.warning(
+                        "Falha ao consultar QRadar Analytics Rules para %s: %s", env.name, exc
+                    )
+                return None, {}, str(exc)
+
+            if active_logger:
+                try:
+                    body_text = _truncate_log_body(response.text or "")
+                except Exception:
+                    body_text = "<conteúdo não textual>"
+                active_logger.debug(
+                    "Resposta do QRadar Analytics Rules para %s: status=%s content-range=%s corpo=%s",
+                    env.name,
+                    response.status_code,
+                    response.headers.get("Content-Range"),
+                    body_text,
+                )
+
+            if response.status_code == 204:
+                break
+
+            if response.status_code == 401:
+                return None, {}, "Token inválido ou sem permissão."
+            if response.status_code == 404:
+                return None, {}, "Endpoint /analytics/rules não encontrado."
+            if response.status_code == 416:
+                break
+            if response.status_code == 422 and idx < len(field_candidates) - 1:
+                if active_logger:
+                    active_logger.warning(
+                        "Campos não suportados pela API do QRadar para %s. Tentando conjunto reduzido (campos=%s).",
+                        env.name,
+                        candidate or "todos",
+                    )
+                saw_unsupported_fields = True
+                break
+            if response.status_code == 422:
+                return None, {}, "Campos solicitados não são suportados pela API do QRadar."
+
+            try:
+                response.raise_for_status()
+            except RequestException as exc:
+                if active_logger:
+                    active_logger.warning(
+                        "Resposta inesperada da API do QRadar para %s: %s", env.name, exc
+                    )
+                return None, {}, str(exc)
+
+            try:
+                data = response.json()
+            except ValueError:
+                if active_logger:
+                    active_logger.warning(
+                        "Não foi possível decodificar JSON da resposta do QRadar para %s.",
+                        env.name,
+                    )
+                return None, {}, "Resposta inválida da API do QRadar."
+
+            items = _extract_items(data)
+            if items is None:
+                return None, {}, "Formato de resposta inesperado da API do QRadar."
+
+            batch_count = len(items)
+            if batch_count == 0:
+                break
+
+            batch_items = items[:page_size] if batch_count > page_size else items
+
+            enabled_in_batch = 0
+            for item in batch_items:
+                if _is_enabled(item):
+                    enabled_in_batch += 1
+            if enabled_in_batch == 0 and batch_items:
+                enabled_in_batch = len(batch_items)
+
+            total_enabled += enabled_in_batch
+
+            offset += batch_count
+            total_items = _parse_total_from_content_range(
+                response.headers.get("Content-Range")
+            )
+            max_iterations -= 1
+
+            if total_items is not None:
+                if offset >= total_items:
+                    break
+            else:
+                if batch_count < page_size:
+                    break
+
+        if max_iterations <= 0:
+            return total_enabled, {}, "Limite de paginação excedido ao consultar a API."
+
+        if saw_unsupported_fields and idx < len(field_candidates) - 1:
+            # Tenta novamente com o próximo conjunto de campos.
+            continue
+
+        return total_enabled, {}, None
+
+    return None, {}, "Campos solicitados não são suportados pela API do QRadar."
+
+
+def _fetch_log_source_types(
+    env: _EnvironmentConfig,
+    *,
+    logger: Optional[logging.Logger] = None,
+) -> Tuple[List[str], Optional[str]]:
+    active_logger = logger or _MODULE_LOGGER
+    if not env.base_url:
+        return [], "URL da API não configurada."
+    if not env.token:
+        return [], "Token da API não configurado."
+
+    session = _session_for(env)
+    url = (
+        f"{env.base_url.rstrip('/')}/config/event_sources/log_source_management/log_source_types"
+    )
+    page_size = 200
+    field_candidates = [
+        "id,name,description",
+        "id,name",
+        "name",
+        None,
+    ]
+
+    for idx, candidate in enumerate(field_candidates):
+        offset = 0
+        max_iterations = 1000
+        types: set[str] = set()
+        saw_unsupported_fields = False
+
+        while max_iterations > 0:
+            headers = {"Range": f"items={offset}-{offset + page_size - 1}"}
+            params = {"fields": candidate} if candidate else {}
+            try:
+                if active_logger:
+                    active_logger.debug(
+                        "Consultando log source types do QRadar (%s) para %s com params=%s headers=%s",
+                        url,
+                        env.name,
+                        params,
+                        headers,
+                    )
+                response = session.get(
+                    url, params=params, headers=headers, timeout=env.timeout
+                )
+            except RequestException as exc:
+                if active_logger:
+                    active_logger.warning(
+                        "Falha ao consultar log source types do QRadar para %s: %s",
+                        env.name,
+                        exc,
+                    )
+                return [], str(exc)
+
+            if response.status_code == 204:
+                break
+            if response.status_code == 401:
+                return [], "Token inválido ou sem permissão."
+            if response.status_code == 404:
+                return [], "Endpoint de log source types não encontrado."
+            if response.status_code == 416:
+                break
+            if response.status_code == 422 and idx < len(field_candidates) - 1:
+                if active_logger:
+                    active_logger.warning(
+                        "Campos de log source types não suportados para %s. Tentando conjunto reduzido (campos=%s).",
+                        env.name,
+                        candidate or "todos",
+                    )
+                saw_unsupported_fields = True
+                break
+            if response.status_code == 422:
+                return [], "Campos solicitados não são suportados pela API do QRadar."
+
+            try:
+                response.raise_for_status()
+            except RequestException as exc:
+                if active_logger:
+                    active_logger.warning(
+                        "Resposta inesperada da API de log source types para %s: %s",
+                        env.name,
+                        exc,
+                    )
+                return [], str(exc)
+
+            try:
+                data = response.json()
+            except ValueError:
+                return [], "Resposta inválida da API do QRadar."
+
+            items = _extract_items(data)
+            if items is None and isinstance(data, list):
+                items = data
+            if items is None:
+                return [], "Formato de resposta inesperado da API do QRadar."
+
+            if not items:
+                break
+
+            for entry in items:
+                name = _extract_log_source_type_name(entry)
+                if name:
+                    types.add(name)
+
+            batch_count = len(items)
+            offset += batch_count
+            total_items = _parse_total_from_content_range(
+                response.headers.get("Content-Range")
+            )
+            max_iterations -= 1
+
+            if total_items is not None:
+                if offset >= total_items:
+                    break
+            else:
+                if batch_count < page_size:
+                    break
+
+        if max_iterations <= 0:
+            return (
+                sorted(types, key=lambda item: item.lower()),
+                "Limite de paginação excedido ao consultar a API.",
             )
 
-        if response.status_code == 204:
-            break
+        if saw_unsupported_fields and idx < len(field_candidates) - 1:
+            continue
 
-        if response.status_code == 401:
-            return None, "Token inválido ou sem permissão."
-        if response.status_code == 404:
-            return None, "Endpoint /analytics/rules não encontrado."
-        if response.status_code == 416:
-            break
+        return sorted(types, key=lambda item: item.lower()), None
 
-        try:
-            response.raise_for_status()
-        except RequestException as exc:
-            if active_logger:
-                active_logger.warning(
-                    "Resposta inesperada da API do QRadar para %s: %s", env.name, exc
-                )
-            return None, str(exc)
-
-        try:
-            data = response.json()
-        except ValueError:
-            if active_logger:
-                active_logger.warning(
-                    "Não foi possível decodificar JSON da resposta do QRadar para %s.",
-                    env.name,
-                )
-            return None, "Resposta inválida da API do QRadar."
-
-        items = _extract_items(data)
-        if items is None:
-            return None, "Formato de resposta inesperado da API do QRadar."
-
-        batch_count = len(items)
-        if batch_count == 0:
-            break
-
-        if batch_count > page_size:
-            batch_items = items[:page_size]
-        else:
-            batch_items = items
-
-        enabled_in_batch = 0
-        for item in batch_items:
-            if _is_enabled(item):
-                enabled_in_batch += 1
-        if enabled_in_batch == 0 and batch_items:
-            enabled_in_batch = len(batch_items)
-
-        total_enabled += enabled_in_batch
-
-        offset += batch_count
-        total_items = _parse_total_from_content_range(response.headers.get("Content-Range"))
-        max_iterations -= 1
-
-        if total_items is not None:
-            if offset >= total_items:
-                break
-        else:
-            if batch_count < page_size:
-                break
-
-    if max_iterations <= 0:
-        return total_enabled, "Limite de paginação excedido ao consultar a API."
-
-    return total_enabled, None
+    return [], "Campos solicitados não são suportados pela API do QRadar."
 
 
-def count_active_use_cases(
+def _collect_rule_statistics_impl(
     config: Dict[str, Any],
     *,
     logger: Optional[logging.Logger] = None,
-) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Count enabled QRadar analytics rules per environment."""
-
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, int]], List[str]]:
     active_logger = logger or _MODULE_LOGGER
     envs = config.get("qradar_envs") or []
     api_conf = config.get("qradar_api", {}) or {}
@@ -343,6 +531,7 @@ def count_active_use_cases(
     }
 
     totals: List[Dict[str, Any]] = []
+    monthly_counts: Dict[str, Dict[str, int]] = {}
     errors: List[str] = []
 
     for env in envs:
@@ -353,16 +542,86 @@ def count_active_use_cases(
                 normalised.name,
                 normalised.host,
             )
-        total, error = _fetch_enabled_count(normalised, logger=active_logger)
+        total, month_map, error = _fetch_rule_statistics(
+            normalised, logger=active_logger
+        )
         entry: Dict[str, Any] = {"environment": normalised.name, "total": None}
         if total is not None:
             try:
                 entry["total"] = int(total)
             except Exception:
                 entry["total"] = None
+        if month_map:
+            sanitized_months: Dict[str, int] = {}
+            for raw_key, raw_value in month_map.items():
+                key = str(raw_key).strip()
+                if not key:
+                    continue
+                try:
+                    sanitized_months[key] = int(raw_value)
+                except Exception:
+                    try:
+                        sanitized_months[key] = int(float(raw_value))
+                    except Exception:
+                        continue
+            if sanitized_months:
+                monthly_counts[normalised.name] = sanitized_months
         if error:
             entry["error"] = error
             errors.append(f"{normalised.name}: {error}")
         totals.append(entry)
 
+    return totals, monthly_counts, errors
+
+
+def count_active_use_cases(
+    config: Dict[str, Any],
+    *,
+    logger: Optional[logging.Logger] = None,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    totals, _monthly_counts, errors = _collect_rule_statistics_impl(
+        config, logger=logger
+    )
     return totals, errors
+
+
+def collect_rule_statistics(
+    config: Dict[str, Any],
+    *,
+    logger: Optional[logging.Logger] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, int]], List[str]]:
+    return _collect_rule_statistics_impl(config, logger=logger)
+
+
+def collect_log_source_types(
+    config: Dict[str, Any],
+    *,
+    logger: Optional[logging.Logger] = None,
+) -> Tuple[Dict[str, List[str]], Dict[str, str]]:
+    active_logger = logger or _MODULE_LOGGER
+    envs = config.get("qradar_envs") or []
+    api_conf = config.get("qradar_api", {}) or {}
+    tokens_map = {
+        str(key): str(value)
+        for key, value in (api_conf.get("tokens") or {}).items()
+        if key is not None and value is not None
+    }
+
+    results: Dict[str, List[str]] = {}
+    errors: Dict[str, str] = {}
+
+    for env in envs:
+        normalised = _normalise_env(env, api_conf=api_conf, tokens_map=tokens_map)
+        if active_logger:
+            active_logger.debug(
+                "Iniciando coleta de log source types para %s (host=%s)",
+                normalised.name,
+                normalised.host,
+            )
+        types, error = _fetch_log_source_types(normalised, logger=active_logger)
+        if types:
+            results[normalised.name] = types
+        if error:
+            errors[normalised.name] = error
+
+    return results, errors

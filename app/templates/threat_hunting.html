@@ -6,6 +6,7 @@
   <title>Threat Hunting</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="icon" href="/static/favicon.png">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js" defer></script>
 </head>
 <body class="threat-hunting-page">
   <div class="wrap">
@@ -41,7 +42,7 @@
       {% if environment_counts %}
       <div class="threat-summary-grid">
         {% for item in environment_counts %}
-        <div class="summary-chip{% if item.error %} has-warning{% endif %}{% if item.source == 'local' %} is-local{% endif %}" {% if item.error %}title="{{item.error}}"{% endif %}>
+        <button type="button" class="summary-chip{% if item.error %} has-warning{% endif %}{% if item.source == 'local' %} is-local{% endif %}" data-environment-summary="{{ item.environment }}" {% if item.error %}title="{{item.error}}"{% endif %}>
           <div class="summary-chip-text">
             <span class="summary-chip-label">{{item.environment}}</span>
             {% if item.source == 'local' %}
@@ -51,7 +52,7 @@
             {% endif %}
           </div>
           <span class="summary-chip-value">{{ item.total if item.total is not none else '—' }}</span>
-        </div>
+        </button>
         {% endfor %}
       </div>
       {% else %}
@@ -380,7 +381,51 @@
       {% endif %}
     </div>
   </div>
+  <div id="environment-summary-modal" class="modal">
+    <div class="modal-overlay" data-close-environment></div>
+    <div class="modal-content environment-summary-content">
+      <header class="modal-header">
+        <div>
+          <h3 data-environment-title>Resumo do ambiente</h3>
+          <p class="modal-meta" data-environment-meta></p>
+        </div>
+        <button class="modal-close" type="button" data-close-environment aria-label="Fechar">×</button>
+      </header>
+      <div class="environment-summary-body">
+        <p class="environment-summary-note muted" data-environment-note hidden></p>
+        <section class="environment-summary-section">
+          <h4>Informações do cliente</h4>
+          <dl class="environment-summary-details" data-environment-details></dl>
+          <p class="muted small" data-environment-no-details hidden>Nenhuma informação cadastrada para este ambiente.</p>
+          <div class="environment-summary-subsection" data-environment-appliances-container hidden>
+            <h5>Appliances</h5>
+            <ul class="environment-summary-list" data-environment-appliances></ul>
+          </div>
+          <div class="environment-summary-subsection" data-environment-connectivity-container hidden>
+            <h5>Alvos de conectividade</h5>
+            <ul class="environment-summary-list" data-environment-connectivity></ul>
+          </div>
+        </section>
+        <section class="environment-summary-section">
+          <h4>Tecnologias de Log Source</h4>
+          <p class="muted small" data-environment-no-tech hidden>Nenhuma tecnologia encontrada para este ambiente.</p>
+          <ul class="environment-summary-tags" data-environment-tech-list></ul>
+        </section>
+        <section class="environment-summary-section">
+          <h4>Evolução mensal de Use Cases</h4>
+          <div class="environment-summary-chart">
+            <canvas data-environment-chart></canvas>
+          </div>
+          <p class="muted small" data-environment-chart-empty hidden>Nenhum registro de criação de Use Cases para este ambiente.</p>
+        </section>
+      </div>
+      <div class="modal-actions modal-actions--end">
+        <button class="btn secondary" type="button" data-close-environment>Fechar</button>
+      </div>
+    </div>
+  </div>
   <script>
+    const environmentSummaryData = {{ environment_summary_json | default('{}') | safe }};
     document.addEventListener('DOMContentLoaded', function () {
       const modal = document.getElementById('use-case-modal');
       if (!modal) {
@@ -574,6 +619,268 @@
       } else if (hasContent && window.location.hash === '#use-case-view-modal') {
         openViewModal();
       }
+    });
+    document.addEventListener('DOMContentLoaded', function () {
+      const summaryData = (typeof environmentSummaryData === 'object' && environmentSummaryData) ? environmentSummaryData : {};
+      const modal = document.getElementById('environment-summary-modal');
+      if (!modal) {
+        return;
+      }
+      const overlay = modal.querySelector('.modal-overlay');
+      const closeButtons = modal.querySelectorAll('[data-close-environment]');
+      const titleEl = modal.querySelector('[data-environment-title]');
+      const metaEl = modal.querySelector('[data-environment-meta]');
+      const noteEl = modal.querySelector('[data-environment-note]');
+      const detailsEl = modal.querySelector('[data-environment-details]');
+      const noDetailsEl = modal.querySelector('[data-environment-no-details]');
+      const appliancesContainer = modal.querySelector('[data-environment-appliances-container]');
+      const appliancesList = modal.querySelector('[data-environment-appliances]');
+      const connectivityContainer = modal.querySelector('[data-environment-connectivity-container]');
+      const connectivityList = modal.querySelector('[data-environment-connectivity]');
+      const techList = modal.querySelector('[data-environment-tech-list]');
+      const noTechEl = modal.querySelector('[data-environment-no-tech]');
+      const chartCanvas = modal.querySelector('[data-environment-chart]');
+      const chartEmptyEl = modal.querySelector('[data-environment-chart-empty]');
+      const summaryButtons = document.querySelectorAll('[data-environment-summary]');
+      let chartInstance = null;
+
+      function clearElement(element) {
+        if (!element) {
+          return;
+        }
+        while (element.firstChild) {
+          element.removeChild(element.firstChild);
+        }
+      }
+
+      function closeModal() {
+        if (chartInstance) {
+          try {
+            chartInstance.destroy();
+          } catch (err) {
+            /* noop */
+          }
+          chartInstance = null;
+        }
+        modal.classList.remove('is-visible');
+      }
+
+      function renderNotes(notes) {
+        if (!noteEl) {
+          return;
+        }
+        const valid = Array.isArray(notes) ? notes.filter(Boolean) : [];
+        if (!valid.length) {
+          noteEl.hidden = true;
+          noteEl.textContent = '';
+          return;
+        }
+        noteEl.hidden = false;
+        noteEl.textContent = valid.join(' · ');
+      }
+
+      function renderDetails(details) {
+        if (!detailsEl || !noDetailsEl) {
+          return;
+        }
+        clearElement(detailsEl);
+        const valid = Array.isArray(details)
+          ? details.filter(item => item && item.label && item.value)
+          : [];
+        if (!valid.length) {
+          noDetailsEl.hidden = false;
+          return;
+        }
+        noDetailsEl.hidden = true;
+        valid.forEach(item => {
+          const dt = document.createElement('dt');
+          dt.textContent = item.label;
+          const dd = document.createElement('dd');
+          dd.textContent = item.value;
+          detailsEl.appendChild(dt);
+          detailsEl.appendChild(dd);
+        });
+      }
+
+      function renderSimpleList(container, listEl, items) {
+        if (!container || !listEl) {
+          return;
+        }
+        clearElement(listEl);
+        const valid = Array.isArray(items) ? items.filter(Boolean) : [];
+        if (!valid.length) {
+          container.hidden = true;
+          return;
+        }
+        container.hidden = false;
+        valid.forEach(text => {
+          const li = document.createElement('li');
+          li.textContent = text;
+          listEl.appendChild(li);
+        });
+      }
+
+      function renderTechnologies(items) {
+        if (!techList || !noTechEl) {
+          return;
+        }
+        clearElement(techList);
+        const valid = Array.isArray(items) ? items.filter(Boolean) : [];
+        if (!valid.length) {
+          noTechEl.hidden = false;
+          return;
+        }
+        noTechEl.hidden = true;
+        valid.forEach(label => {
+          const tag = document.createElement('li');
+          tag.className = 'environment-summary-tag';
+          tag.textContent = label;
+          techList.appendChild(tag);
+        });
+      }
+
+      function renderChart(series) {
+        if (!chartCanvas || !chartEmptyEl) {
+          return;
+        }
+        if (chartInstance) {
+          try {
+            chartInstance.destroy();
+          } catch (err) {
+            /* noop */
+          }
+          chartInstance = null;
+        }
+        const points = Array.isArray(series)
+          ? series.filter(item => item && (item.label || item.month))
+          : [];
+        if (!points.length) {
+          chartCanvas.style.display = 'none';
+          chartEmptyEl.hidden = false;
+          chartEmptyEl.textContent = 'Nenhum registro de criação de Use Cases para este ambiente.';
+          return;
+        }
+        if (typeof window.Chart === 'undefined') {
+          chartCanvas.style.display = 'none';
+          chartEmptyEl.hidden = false;
+          chartEmptyEl.textContent = 'Não foi possível carregar o gráfico no momento.';
+          return;
+        }
+        chartEmptyEl.hidden = true;
+        chartCanvas.style.display = 'block';
+        const labels = points.map(item => item.label || item.month || '');
+        const dataPoints = points.map(item => {
+          const value = Number(item.count);
+          return Number.isFinite(value) ? value : 0;
+        });
+        const target = chartCanvas.getContext ? chartCanvas.getContext('2d') : chartCanvas;
+        chartInstance = new window.Chart(target, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              {
+                label: 'Use Cases criados',
+                data: dataPoints,
+                backgroundColor: 'rgba(38, 217, 141, 0.45)',
+                borderColor: 'rgba(38, 217, 141, 1)',
+                borderWidth: 1,
+                borderRadius: 6,
+                maxBarThickness: 48,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  precision: 0,
+                },
+              },
+            },
+            plugins: {
+              legend: {
+                display: false,
+              },
+              tooltip: {
+                callbacks: {
+                  label(context) {
+                    const value = context.parsed && typeof context.parsed.y === 'number'
+                      ? context.parsed.y
+                      : 0;
+                    const plural = value === 1 ? '' : 's';
+                    return `${value} Use Case${plural}`;
+                  },
+                },
+              },
+            },
+          },
+        });
+      }
+
+      function buildMetaText(data) {
+        const activeApi = Number.isFinite(Number(data && data.active_use_cases_api))
+          ? Number(data.active_use_cases_api)
+          : null;
+        if (activeApi === null) {
+          return 'Ativos (QRadar): —';
+        }
+        return `Ativos (QRadar): ${activeApi}`;
+      }
+
+      function openEnvironmentModal(envName) {
+        if (!envName) {
+          return;
+        }
+        const data = summaryData && typeof summaryData === 'object' ? summaryData[envName] : null;
+        if (!data) {
+          return;
+        }
+        if (titleEl) {
+          titleEl.textContent = data.name || envName;
+        }
+        if (metaEl) {
+          metaEl.textContent = buildMetaText(data);
+        }
+        renderNotes(data.notes);
+        renderDetails(data.details);
+        renderSimpleList(appliancesContainer, appliancesList, data.appliances);
+        renderSimpleList(connectivityContainer, connectivityList, data.connectivity_targets);
+        renderTechnologies(data.log_source_types);
+        renderChart(data.use_case_monthly_series);
+        modal.classList.add('is-visible');
+      }
+
+      summaryButtons.forEach(button => {
+        button.addEventListener('click', function (event) {
+          event.preventDefault();
+          const envName = this.dataset.environmentSummary;
+          openEnvironmentModal(envName);
+        });
+      });
+
+      closeButtons.forEach(button => {
+        button.addEventListener('click', function (event) {
+          event.preventDefault();
+          closeModal();
+        });
+      });
+
+      if (overlay) {
+        overlay.addEventListener('click', function (event) {
+          event.preventDefault();
+          closeModal();
+        });
+      }
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && modal.classList.contains('is-visible')) {
+          closeModal();
+        }
+      });
     });
   </script>
 </body>
