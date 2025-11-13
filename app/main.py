@@ -355,20 +355,46 @@ def _prepare_threat_hunting_schema() -> None:
         con.close()
 
 
-def _environment_suggestions() -> list[str]:
+def _environment_name_map() -> Dict[str, str]:
     envs = CONFIG.get("qradar_envs", []) or []
-    seen = set()
-    suggestions: list[str] = []
+    mapping: Dict[str, str] = {}
     for env in envs:
-        for candidate in (env.get("name"), env.get("codigo"), env.get("code")):
-            if not candidate:
+        raw_name = env.get("name")
+        if not raw_name:
+            continue
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        lowered_name = name.lower()
+        mapping[lowered_name] = name
+        for key in ("codigo", "code"):
+            alias = env.get(key)
+            if not alias:
                 continue
-            normalized = str(candidate).strip()
-            if normalized and normalized not in seen:
-                suggestions.append(normalized)
-                seen.add(normalized)
-    suggestions.sort(key=lambda value: value.lower())
-    return suggestions
+            alias_text = str(alias).strip()
+            if not alias_text:
+                continue
+            mapping[alias_text.lower()] = name
+    return mapping
+
+
+def _normalize_environment_value(
+    value: Optional[str],
+    mapping: Optional[Dict[str, str]] = None,
+) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    lookup = (mapping or _environment_name_map()).get(text.lower())
+    if lookup:
+        return lookup
+    return text
+
+
+def _environment_suggestions() -> list[str]:
+    mapping = _environment_name_map()
+    names = {value for value in mapping.values() if value}
+    return sorted(names, key=str.lower)
 
 
 def _format_use_case_timestamp(value: Optional[str]) -> Optional[str]:
@@ -639,6 +665,7 @@ def threat_hunting_page(
         "q": (params.get("q") or "").strip(),
         "technology": (params.get("technology") or "").strip(),
         "siem": (params.get("siem") or "").strip(),
+        "environment": (params.get("environment") or "").strip(),
         "status": (params.get("status") or "").strip(),
     }
     success_message = params.get("success")
@@ -659,10 +686,16 @@ def threat_hunting_page(
     siem_options: List[str] = []
     environment_options: List[str] = []
     db_environment_counts: List[Dict[str, int]] = []
+    env_name_map = _environment_name_map()
 
     con = _con()
     try:
         threat_hunting.ensure_schema(con)
+        normalized_filter_env = (
+            _normalize_environment_value(filters["environment"], env_name_map)
+            if filters["environment"]
+            else ""
+        )
         use_cases = threat_hunting.list_use_cases(
             con,
             search=filters["q"] or None,
@@ -670,11 +703,41 @@ def threat_hunting_page(
             siem=filters["siem"] or None,
             status=filters["status"] or None,
         )
+        canonical_use_cases: List[Dict[str, Any]] = []
         for uc in use_cases:
-            uc["display_created_at"] = _format_use_case_timestamp(uc.get("created_at"))
-            uc["display_updated_at"] = _format_use_case_timestamp(uc.get("updated_at"))
+            normalized_env = _normalize_environment_value(
+                uc.get("environment"), env_name_map
+            )
+            if normalized_env:
+                uc["environment"] = normalized_env
+            uc["display_created_at"] = _format_use_case_timestamp(
+                uc.get("created_at")
+            )
+            uc["display_updated_at"] = _format_use_case_timestamp(
+                uc.get("updated_at")
+            )
+            canonical_use_cases.append(uc)
 
-        db_environment_counts = threat_hunting.count_active_by_environment(con)
+        if normalized_filter_env:
+            canonical_use_cases = [
+                uc
+                for uc in canonical_use_cases
+                if (uc.get("environment") or "").lower()
+                == normalized_filter_env.lower()
+            ]
+
+        use_cases = canonical_use_cases
+
+        db_environment_counts = [
+            {
+                "environment": _normalize_environment_value(
+                    item.get("environment"), env_name_map
+                )
+                or item.get("environment"),
+                "total": item.get("total", 0),
+            }
+            for item in threat_hunting.count_active_by_environment(con)
+        ]
 
         tech_values = set(THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS)
         tech_values.update(threat_hunting.distinct_values(con, "technology"))
@@ -682,6 +745,11 @@ def threat_hunting_page(
         siem_values.update(threat_hunting.distinct_values(con, "siem"))
         env_suggestions = set(_environment_suggestions())
         env_suggestions.update(threat_hunting.distinct_values(con, "environment"))
+        env_suggestions = {
+            _normalize_environment_value(value, env_name_map)
+            for value in env_suggestions
+            if value
+        }
 
         technology_options = sorted(filter(None, tech_values), key=str.lower)
         siem_options = sorted(filter(None, siem_values), key=str.lower)
@@ -728,6 +796,13 @@ def threat_hunting_page(
     finally:
         con.close()
 
+    if filters.get("environment"):
+        filters["environment"] = _normalize_environment_value(
+            filters["environment"], env_name_map
+        )
+    else:
+        filters["environment"] = ""
+
     if not environment_counts and db_environment_counts:
         environment_counts = db_environment_counts
         summary_errors = list(summary_errors)
@@ -739,6 +814,11 @@ def threat_hunting_page(
             item["source"] = "local"
     else:
         for item in environment_counts:
+            normalized_env = _normalize_environment_value(
+                item.get("environment"), env_name_map
+            )
+            if normalized_env:
+                item["environment"] = normalized_env
             item.setdefault("source", "api")
 
     context = {
@@ -776,12 +856,13 @@ def _build_use_case_payload(
     normalized_active = (
         str(is_active_value).strip().lower() in ("1", "true", "on", "yes")
     )
+    env_mapping = _environment_name_map()
     return {
         "name": name.strip(),
         "description": description.strip(),
         "technology": technology.strip(),
         "siem": siem.strip(),
-        "environment": environment.strip(),
+        "environment": _normalize_environment_value(environment, env_mapping),
         "logic": logic.strip(),
         "is_active": "1" if normalized_active else "0",
         "created_by": created_by,
@@ -973,6 +1054,12 @@ def export_threat_hunting_use_cases(
         records = threat_hunting.list_active_use_cases(con)
     finally:
         con.close()
+
+    env_name_map = _environment_name_map()
+    for row in records:
+        row["environment"] = _normalize_environment_value(
+            row.get("environment"), env_name_map
+        )
 
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";", lineterminator="\n")

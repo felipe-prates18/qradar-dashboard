@@ -85,6 +85,15 @@
             <input type="search" id="search" name="q" placeholder="Ex.: Lateral Movement" value="{{filters.q}}">
           </div>
           <div class="form-field">
+            <label for="environment-filter">Ambiente</label>
+            <select id="environment-filter" name="environment">
+              <option value="">Todos</option>
+              {% for option in environment_options %}
+              <option value="{{option}}" {% if filters.environment == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
             <label for="technology">Tecnologia</label>
             <select id="technology" name="technology">
               <option value="">Todas</option>
