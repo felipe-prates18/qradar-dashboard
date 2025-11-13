@@ -437,24 +437,29 @@ textarea:focus {
   background: rgba(18, 60, 47, 0.45);
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
 }
 
 .summary-chip-label {
   font-weight: 600;
+  word-break: break-word;
+  line-height: 1.3;
 }
 
 .summary-chip-value {
   font-size: 20px;
   font-weight: 700;
   color: var(--green-strong);
+  flex-shrink: 0;
 }
 
 .summary-chip-text {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .summary-chip-note {
@@ -517,25 +522,20 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
-.threat-table .use-case-name {
-  font-weight: 600;
+.threat-table th,
+.threat-table td {
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
-.threat-table .use-case-description {
-  color: var(--text-muted);
-  margin-top: 6px;
+.threat-table td {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.threat-table .use-case-logic {
-  margin-top: 8px;
-  font-size: 14px;
-  color: var(--text-muted);
-}
-
-.threat-table .use-case-logic span {
-  font-weight: 600;
-  color: var(--green-strong);
-  margin-right: 4px;
+.threat-table td:first-child {
+  max-width: 320px;
 }
 
 .threat-form-card .form-field textarea {
@@ -559,7 +559,142 @@ textarea:focus {
 }
 
 .threat-table .actions-col {
-  width: 160px;
+  width: 180px;
+  white-space: nowrap;
+}
+
+.use-case-link {
+  color: var(--green-strong);
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.use-case-link:hover,
+.use-case-link:focus {
+  text-decoration: underline;
+}
+
+.use-case-details {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.use-case-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 18px 24px;
+}
+
+.use-case-detail-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.use-case-detail-grid dt {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.use-case-detail-grid dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.use-case-detail-grid .full-row {
+  grid-column: 1 / -1;
+}
+
+.use-case-logic-block {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(4, 12, 9, 0.85);
+  border: 1px solid rgba(38, 99, 77, 0.55);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Fira Code', 'Source Code Pro', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.comment-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.comment-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.comment-section-header h4 {
+  margin: 0;
+}
+
+.comment-count {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.comment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.comment-item {
+  border: 1px solid rgba(38, 99, 77, 0.45);
+  border-radius: 16px;
+  background: rgba(11, 36, 28, 0.8);
+  padding: 14px 16px;
+}
+
+.comment-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.comment-author {
+  font-weight: 600;
+  color: var(--green-strong);
+}
+
+.comment-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.comment-form textarea {
+  min-height: 100px;
+}
+
+.comment-form .form-actions {
+  justify-content: flex-end;
+}
+
+.modal-actions--end {
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 @media (max-width: 720px) {
@@ -679,7 +814,8 @@ textarea:focus {
 }
 
 .threat-table .actions-col {
-  width: 200px;
+  width: 180px;
+  white-space: nowrap;
 }
 
 .modal {

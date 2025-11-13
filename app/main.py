@@ -340,6 +340,10 @@ async def restrict_wallboard_token_scope(request: Request, call_next):
 def _con():
     con = sqlite3.connect(str(DB_PATH))
     con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA foreign_keys = ON")
+    except sqlite3.DatabaseError:
+        pass
     return con
 
 
@@ -387,6 +391,20 @@ def _format_use_case_timestamp(value: Optional[str]) -> Optional[str]:
         return parsed.astimezone().strftime("%d/%m/%Y %H:%M")
     except Exception:
         return parsed.strftime("%d/%m/%Y %H:%M")
+
+
+def _format_use_case_comments(
+    entries: Iterable[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    formatted: List[Dict[str, Any]] = []
+    for entry in entries:
+        mapped = dict(entry)
+        mapped["display_created_at"] = _format_use_case_timestamp(
+            entry.get("created_at")
+        )
+        mapped.setdefault("created_by", entry.get("created_by") or "—")
+        formatted.append(mapped)
+    return formatted
 
 
 def _threat_hunting_allowed(username: Optional[str]) -> bool:
@@ -625,8 +643,12 @@ def threat_hunting_page(
     }
     success_message = params.get("success")
     error_message = params.get("error")
-    edit_use_case = None
+    edit_use_case: Optional[Dict[str, Any]] = None
+    view_use_case: Optional[Dict[str, Any]] = None
+    edit_comments: List[Dict[str, Any]] = []
+    view_comments: List[Dict[str, Any]] = []
     edit_param = params.get("edit")
+    view_param = params.get("view")
 
     threat_cache_payload = _get_threat_hunting_payload()
     environment_counts = threat_cache_payload.get("environment_counts") or []
@@ -678,6 +700,28 @@ def threat_hunting_page(
                     edit_use_case["display_updated_at"] = _format_use_case_timestamp(
                         edit_use_case.get("updated_at")
                     )
+                    edit_comments = _format_use_case_comments(
+                        threat_hunting.list_comments(con, edit_id)
+                    )
+            except ValueError:
+                if not error_message:
+                    error_message = "Identificador de caso de uso inválido."
+        if view_param:
+            try:
+                view_id = int(view_param)
+                view_use_case = threat_hunting.get_use_case(con, view_id)
+                if not view_use_case and not error_message:
+                    error_message = "Caso de uso não encontrado."
+                if view_use_case:
+                    view_use_case["display_created_at"] = _format_use_case_timestamp(
+                        view_use_case.get("created_at")
+                    )
+                    view_use_case["display_updated_at"] = _format_use_case_timestamp(
+                        view_use_case.get("updated_at")
+                    )
+                    view_comments = _format_use_case_comments(
+                        threat_hunting.list_comments(con, view_id)
+                    )
             except ValueError:
                 if not error_message:
                     error_message = "Identificador de caso de uso inválido."
@@ -711,6 +755,9 @@ def threat_hunting_page(
         "siem_options": siem_options,
         "environment_options": environment_options,
         "edit_use_case": edit_use_case,
+        "edit_comments": edit_comments,
+        "view_use_case": view_use_case,
+        "view_comments": view_comments,
         "is_admin": is_admin(user),
     }
     return templates.TemplateResponse("threat_hunting.html", context)
@@ -750,6 +797,7 @@ def create_threat_hunting_use_case(
     siem: str = Form(...),
     environment: str = Form(...),
     logic: str = Form(""),
+    comment: str = Form(""),
     is_active: str = Form("on"),
     user: str = Depends(_require_threat_hunting_page_access),
 ):
@@ -763,10 +811,25 @@ def create_threat_hunting_use_case(
         is_active,
         user,
     )
+    comment_text = (comment or "").strip()
     try:
         con = _con()
         try:
-            threat_hunting.create_use_case(con, payload)
+            new_id = threat_hunting.create_use_case(con, payload)
+            logger.info(
+                "Use Case '%s' (ID %s) criado por %s",
+                payload["name"],
+                new_id,
+                user,
+            )
+            if comment_text:
+                threat_hunting.add_comment(con, new_id, comment_text, user)
+                logger.info(
+                    "Comentário registrado no Use Case '%s' (ID %s) por %s",
+                    payload["name"],
+                    new_id,
+                    user,
+                )
         finally:
             con.close()
     except ValueError as exc:
@@ -784,6 +847,7 @@ def update_threat_hunting_use_case(
     siem: str = Form(...),
     environment: str = Form(...),
     logic: str = Form(""),
+    comment: str = Form(""),
     is_active: str = Form("off"),
     user: str = Depends(_require_threat_hunting_page_access),
 ):
@@ -797,10 +861,26 @@ def update_threat_hunting_use_case(
         is_active,
         user,
     )
+    comment_text = (comment or "").strip()
     try:
         con = _con()
         try:
             updated = threat_hunting.update_use_case(con, use_case_id, payload)
+            if updated:
+                logger.info(
+                    "Use Case '%s' (ID %s) atualizado por %s",
+                    payload["name"],
+                    use_case_id,
+                    user,
+                )
+                if comment_text:
+                    threat_hunting.add_comment(con, use_case_id, comment_text, user)
+                    logger.info(
+                        "Comentário registrado no Use Case '%s' (ID %s) por %s",
+                        payload["name"],
+                        use_case_id,
+                        user,
+                    )
         finally:
             con.close()
     except ValueError as exc:
@@ -814,6 +894,44 @@ def update_threat_hunting_use_case(
             extra_params={"edit": str(use_case_id)},
         )
     return _redirect_threat_hunting(success=f"Use Case '{payload['name']}' atualizado com sucesso.")
+
+
+@app.post("/threat-hunting/use-cases/{use_case_id}/comments")
+def add_use_case_comment(
+    use_case_id: int,
+    comment: str = Form(...),
+    user: str = Depends(_require_threat_hunting_page_access),
+):
+    text = (comment or "").strip()
+    if not text:
+        return _redirect_threat_hunting(
+            error="O comentário não pode estar vazio.",
+            extra_params={"view": str(use_case_id)},
+        )
+    try:
+        con = _con()
+        try:
+            use_case = threat_hunting.get_use_case(con, use_case_id)
+            if not use_case:
+                raise ValueError("Caso de uso não encontrado.")
+            threat_hunting.add_comment(con, use_case_id, text, user)
+            logger.info(
+                "Comentário registrado no Use Case '%s' (ID %s) por %s",
+                use_case.get("name") or use_case_id,
+                use_case_id,
+                user,
+            )
+        finally:
+            con.close()
+    except ValueError as exc:
+        return _redirect_threat_hunting(
+            error=str(exc),
+            extra_params={"view": str(use_case_id)},
+        )
+    return _redirect_threat_hunting(
+        success="Comentário registrado com sucesso.",
+        extra_params={"view": str(use_case_id)},
+    )
 
 
 @app.post("/threat-hunting/use-cases/{use_case_id}/delete")

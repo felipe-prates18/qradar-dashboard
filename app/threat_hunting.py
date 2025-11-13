@@ -33,6 +33,18 @@ def ensure_schema(con: sqlite3.Connection) -> None:
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS use_case_comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            use_case_id INTEGER NOT NULL,
+            comment TEXT NOT NULL,
+            created_by TEXT,
+            created_at TEXT,
+            FOREIGN KEY (use_case_id) REFERENCES use_cases(id) ON DELETE CASCADE
+        )
+        """
+    )
     cur.execute("PRAGMA table_info(use_cases)")
     columns = {row[1] for row in cur.fetchall()}
     altered = False
@@ -62,6 +74,16 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Optional[str]]:
         "created_by": row["created_by"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+    }
+
+
+def _comment_row_to_dict(row: sqlite3.Row) -> Dict[str, Optional[str]]:
+    return {
+        "id": row["id"],
+        "use_case_id": row["use_case_id"],
+        "comment": row["comment"],
+        "created_by": row["created_by"],
+        "created_at": row["created_at"],
     }
 
 
@@ -115,6 +137,47 @@ def get_use_case(con: sqlite3.Connection, use_case_id: int) -> Optional[Dict[str
     )
     row = cur.fetchone()
     return _row_to_dict(row) if row else None
+
+
+def list_comments(con: sqlite3.Connection, use_case_id: int) -> List[Dict[str, Optional[str]]]:
+    ensure_schema(con)
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT id, use_case_id, comment, created_by, created_at
+        FROM use_case_comments
+        WHERE use_case_id = ?
+        ORDER BY datetime(created_at) ASC, id ASC
+        """,
+        (use_case_id,),
+    )
+    return [_comment_row_to_dict(row) for row in cur.fetchall()]
+
+
+def add_comment(
+    con: sqlite3.Connection,
+    use_case_id: int,
+    comment: str,
+    created_by: Optional[str],
+) -> int:
+    ensure_schema(con)
+    text = (comment or "").strip()
+    if not text:
+        raise ValueError("O comentário não pode estar vazio.")
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM use_cases WHERE id = ?", (use_case_id,))
+    if not cur.fetchone():
+        raise ValueError("Caso de uso não encontrado para comentar.")
+    timestamp = _utc_now_iso()
+    cur.execute(
+        """
+        INSERT INTO use_case_comments (use_case_id, comment, created_by, created_at)
+        VALUES (?,?,?,?)
+        """,
+        (use_case_id, text, created_by, timestamp),
+    )
+    con.commit()
+    return int(cur.lastrowid)
 
 
 def _sanitize_payload(payload: Dict[str, str]) -> Dict[str, str]:
@@ -228,6 +291,7 @@ def delete_use_case(con: sqlite3.Connection, use_case_id: int) -> bool:
 
     ensure_schema(con)
     cur = con.cursor()
+    cur.execute("DELETE FROM use_case_comments WHERE use_case_id = ?", (use_case_id,))
     cur.execute("DELETE FROM use_cases WHERE id=?", (use_case_id,))
     con.commit()
     return cur.rowcount > 0
