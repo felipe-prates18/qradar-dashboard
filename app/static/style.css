@@ -489,6 +489,26 @@ textarea:focus {
   gap: 10px;
 }
 
+button.summary-chip {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+}
+
+button.summary-chip:hover {
+  border-color: rgba(38, 217, 141, 0.55);
+}
+
+button.summary-chip.has-warning:hover {
+  border-color: rgba(240, 173, 78, 0.75);
+}
+
+button.summary-chip:focus-visible {
+  outline: 2px solid var(--green-strong);
+  outline-offset: 2px;
+}
+
 .summary-chip-label {
   font-weight: 600;
   word-break: break-word;
@@ -912,6 +932,111 @@ textarea:focus {
   max-height: 92vh;
   overflow-y: auto;
   box-shadow: var(--shadow);
+}
+
+.environment-summary-content {
+  width: min(860px, 94vw);
+}
+
+.environment-summary-body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.environment-summary-note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.environment-summary-section {
+  background: rgba(11, 36, 28, 0.65);
+  border: 1px solid rgba(38, 99, 77, 0.35);
+  border-radius: 18px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.environment-summary-section h4 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.environment-summary-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.environment-summary-subsection h5 {
+  margin: 0;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.environment-summary-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+}
+
+.environment-summary-details dt {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.environment-summary-details dd {
+  margin: 4px 0 0 0;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.environment-summary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.environment-summary-tags {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.environment-summary-tag {
+  background: rgba(38, 217, 141, 0.12);
+  border: 1px solid rgba(38, 217, 141, 0.45);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  color: var(--green-strong);
+}
+
+.environment-summary-chart {
+  position: relative;
+  min-height: 240px;
+}
+
+.environment-summary-chart canvas {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .modal-header {
