@@ -738,6 +738,19 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 return set(), None
             return _lookup_log_source_type_names(ok_type_ids)
 
+        def _collect_log_source_types() -> Tuple[set[str], Optional[str]]:
+            """Backward-compatible wrapper for the legacy helper name.
+
+            Older versions of the health-check collector invoked
+            ``_collect_log_source_types`` directly.  When the logic was
+            refactored to gather active IDs first the helper was renamed but
+            the call sites in some deployments were not updated, leading to a
+            ``NameError`` at runtime.  Keeping this thin wrapper ensures both
+            the new and legacy entry points map to the same implementation.
+            """
+
+            return _collect_active_type_names()
+
         timed_out = False
 
         try:
