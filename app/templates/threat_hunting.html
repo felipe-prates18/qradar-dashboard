@@ -394,19 +394,6 @@
       <div class="environment-summary-body">
         <p class="environment-summary-note muted" data-environment-note hidden></p>
         <section class="environment-summary-section">
-          <h4>Informações do cliente</h4>
-          <dl class="environment-summary-details" data-environment-details></dl>
-          <p class="muted small" data-environment-no-details hidden>Nenhuma informação cadastrada para este ambiente.</p>
-          <div class="environment-summary-subsection" data-environment-appliances-container hidden>
-            <h5>Appliances</h5>
-            <ul class="environment-summary-list" data-environment-appliances></ul>
-          </div>
-          <div class="environment-summary-subsection" data-environment-connectivity-container hidden>
-            <h5>Alvos de conectividade</h5>
-            <ul class="environment-summary-list" data-environment-connectivity></ul>
-          </div>
-        </section>
-        <section class="environment-summary-section">
           <h4>Tecnologias de Log Source</h4>
           <p class="muted small" data-environment-no-tech hidden>Nenhuma tecnologia encontrada para este ambiente.</p>
           <ul class="environment-summary-tags" data-environment-tech-list></ul>
@@ -631,12 +618,6 @@
       const titleEl = modal.querySelector('[data-environment-title]');
       const metaEl = modal.querySelector('[data-environment-meta]');
       const noteEl = modal.querySelector('[data-environment-note]');
-      const detailsEl = modal.querySelector('[data-environment-details]');
-      const noDetailsEl = modal.querySelector('[data-environment-no-details]');
-      const appliancesContainer = modal.querySelector('[data-environment-appliances-container]');
-      const appliancesList = modal.querySelector('[data-environment-appliances]');
-      const connectivityContainer = modal.querySelector('[data-environment-connectivity-container]');
-      const connectivityList = modal.querySelector('[data-environment-connectivity]');
       const techList = modal.querySelector('[data-environment-tech-list]');
       const noTechEl = modal.querySelector('[data-environment-no-tech]');
       const chartCanvas = modal.querySelector('[data-environment-chart]');
@@ -677,47 +658,6 @@
         }
         noteEl.hidden = false;
         noteEl.textContent = valid.join(' · ');
-      }
-
-      function renderDetails(details) {
-        if (!detailsEl || !noDetailsEl) {
-          return;
-        }
-        clearElement(detailsEl);
-        const valid = Array.isArray(details)
-          ? details.filter(item => item && item.label && item.value)
-          : [];
-        if (!valid.length) {
-          noDetailsEl.hidden = false;
-          return;
-        }
-        noDetailsEl.hidden = true;
-        valid.forEach(item => {
-          const dt = document.createElement('dt');
-          dt.textContent = item.label;
-          const dd = document.createElement('dd');
-          dd.textContent = item.value;
-          detailsEl.appendChild(dt);
-          detailsEl.appendChild(dd);
-        });
-      }
-
-      function renderSimpleList(container, listEl, items) {
-        if (!container || !listEl) {
-          return;
-        }
-        clearElement(listEl);
-        const valid = Array.isArray(items) ? items.filter(Boolean) : [];
-        if (!valid.length) {
-          container.hidden = true;
-          return;
-        }
-        container.hidden = false;
-        valid.forEach(text => {
-          const li = document.createElement('li');
-          li.textContent = text;
-          listEl.appendChild(li);
-        });
       }
 
       function renderTechnologies(items) {
@@ -846,9 +786,6 @@
           metaEl.textContent = buildMetaText(data);
         }
         renderNotes(data.notes);
-        renderDetails(data.details);
-        renderSimpleList(appliancesContainer, appliancesList, data.appliances);
-        renderSimpleList(connectivityContainer, connectivityList, data.connectivity_targets);
         renderTechnologies(data.log_source_types);
         renderChart(data.use_case_monthly_series);
         modal.classList.add('is-visible');
