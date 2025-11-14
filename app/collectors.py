@@ -493,10 +493,14 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             if not isinstance(entry, dict):
                 return None
             candidate_keys = (
-                "protocol_type_id",
-                "protocol_type",
                 "type_id",
                 "log_source_type_id",
+                "typeId",
+                "logSourceTypeId",
+                "protocol_type_id",
+                "protocol_type",
+                "type",
+                "log_source_type",
             )
             for key in candidate_keys:
                 if key not in entry:
@@ -505,7 +509,15 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 if value is None:
                     continue
                 if isinstance(value, dict):
-                    for nested_key in ("id", "value", "protocol_type_id", "type_id"):
+                    for nested_key in (
+                        "type_id",
+                        "log_source_type_id",
+                        "typeId",
+                        "logSourceTypeId",
+                        "id",
+                        "value",
+                        "protocol_type_id",
+                    ):
                         nested_value = value.get(nested_key)
                         if nested_value is None:
                             continue
@@ -513,14 +525,14 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                             text = str(nested_value).strip()
                         except Exception:
                             continue
-                        if text:
+                        if text and text.isdigit():
                             return text
                     continue
                 try:
                     text = str(value).strip()
                 except Exception:
                     continue
-                if text:
+                if text and text.isdigit():
                     return text
             return None
 

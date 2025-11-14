@@ -309,7 +309,12 @@ def _extract_log_source_type_id(entry: Any) -> Optional[str]:
             return None
         return text or None
 
-    for key in ("type_id", "log_source_type_id"):
+    for key in (
+        "type_id",
+        "log_source_type_id",
+        "typeId",
+        "logSourceTypeId",
+    ):
         if key in entry:
             text = _normalise(entry.get(key))
             if text:
@@ -318,10 +323,21 @@ def _extract_log_source_type_id(entry: Any) -> Optional[str]:
     for key in ("type", "log_source_type"):
         value = entry.get(key)
         if isinstance(value, dict):
-            for nested_key in ("type_id", "log_source_type_id", "id", "value"):
+            for nested_key in (
+                "type_id",
+                "log_source_type_id",
+                "typeId",
+                "logSourceTypeId",
+                "id",
+                "value",
+            ):
                 text = _normalise(value.get(nested_key))
                 if text:
                     return text
+        else:
+            text = _normalise(value)
+            if text and text.isdigit():
+                return text
 
     return None
 
@@ -341,9 +357,13 @@ def _fetch_log_source_type_ids(
     url = f"{env.base_url.rstrip('/')}/config/event_sources/log_source_management/log_sources"
     page_size = 200
     field_candidates = [
-        "id,status,enabled,type_id,protocol_type_id,protocol_type",
-        "id,status,enabled,type_id,protocol_type_id",
+        "id,status,enabled,type_id,log_source_type_id,typeId,logSourceTypeId,protocol_type_id,type,log_source_type",
+        "id,status,enabled,type_id,log_source_type_id,protocol_type_id",
+        "id,status,enabled,typeId,logSourceTypeId,protocol_type_id",
+        "id,status,enabled,type_id,log_source_type_id",
+        "id,status,enabled,typeId,logSourceTypeId",
         "id,status,enabled,type_id",
+        "id,status,enabled,typeId",
         "id,status,enabled",
         None,
     ]
