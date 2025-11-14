@@ -471,8 +471,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             headers["Version"] = str(version)
 
         field_candidates = [
-            "id,name,status,last_event_time,enabled,protocol_type,protocol_type_id,protocol_type_name,description",
-            "id,name,status,last_event_time,enabled,protocol_type,protocol_type_id,description",
             "id,name,status,last_event_time,enabled,protocol_type_id,description",
             "id,name,status,last_event_time,enabled",
             None,
