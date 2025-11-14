@@ -188,6 +188,19 @@ def _collect_threat_hunting_counts() -> Dict[str, Any]:
         con = _con()
         threat_hunting.ensure_schema(con)
         now = datetime.utcnow()
+        month_key = f"{now.year:04d}-{now.month:02d}"
+        snapshot_required = threat_hunting.should_record_monthly_snapshot(now)
+        if not snapshot_required:
+            try:
+                snapshot_required = not threat_hunting.month_snapshot_exists(
+                    con, month_key
+                )
+            except Exception:
+                logger.exception(
+                    "Falha ao verificar existência de totais mensais para %s",
+                    month_key,
+                )
+                snapshot_required = True
         if environment_counts:
             totals_map: Dict[str, int] = {}
             for item in environment_counts:
@@ -199,11 +212,7 @@ def _collect_threat_hunting_counts() -> Dict[str, Any]:
                 except Exception:
                     continue
                 totals_map[str(env_name)] = total_value
-            if (
-                totals_map
-                and threat_hunting.should_record_monthly_snapshot(now)
-            ):
-                month_key = f"{now.year:04d}-{now.month:02d}"
+            if totals_map and snapshot_required:
                 try:
                     threat_hunting.record_monthly_totals(
                         con,
@@ -525,114 +534,6 @@ def _iterate_month_range(
             year += 1
 
 
-def _stringify_detail_value(value: Any) -> str:
-    if isinstance(value, bool):
-        return "Sim" if value else "Não"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, (list, tuple, set)):
-        parts = [str(item) for item in value if item not in (None, "")]
-        return ", ".join(parts)
-    if isinstance(value, dict):
-        try:
-            return json.dumps(value, ensure_ascii=False)
-        except Exception:
-            return str(value)
-    return str(value)
-
-
-def _humanize_env_key(raw_key: str) -> str:
-    mapping = {
-        "codigo": "Código",
-        "code": "Código",
-        "host": "Host",
-        "collector": "Collector",
-        "ssh_user": "Usuário SSH",
-        "ssh_key": "Chave SSH",
-        "jmx_port": "Porta JMX",
-        "jmx_bean": "JMX Bean",
-        "api_base_url": "API Base URL",
-        "api_timeout": "Timeout da API",
-        "api_version": "Versão da API",
-        "api_verify_tls": "API verifica TLS",
-        "log_sources_timeout_seconds": "Timeout de Log Sources",
-    }
-    key = (raw_key or "").strip()
-    label = mapping.get(key.lower())
-    if label:
-        return label
-    normalized = key.replace("_", " ").replace("-", " ").split()
-    special_tokens = {"api": "API", "ssh": "SSH", "jmx": "JMX", "url": "URL", "id": "ID"}
-    parts = []
-    for token in normalized:
-        lowered = token.lower()
-        parts.append(special_tokens.get(lowered, token.capitalize()))
-    return " ".join(parts) if parts else key
-
-
-def _build_env_detail_entries(env: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
-    if not isinstance(env, dict):
-        return []
-    details: List[Dict[str, str]] = []
-    for key, value in env.items():
-        if key in {"name", "appliances", "connectivity_targets"}:
-            continue
-        lowered = str(key).lower()
-        if any(token in lowered for token in ("token", "secret", "password")):
-            continue
-        if value in (None, "", [], {}):
-            continue
-        details.append(
-            {
-                "label": _humanize_env_key(str(key)),
-                "value": _stringify_detail_value(value),
-            }
-        )
-    details.sort(key=lambda item: item["label"].lower())
-    return details
-
-
-def _build_env_appliance_entries(env: Optional[Dict[str, Any]]) -> List[str]:
-    if not isinstance(env, dict):
-        return []
-    entries: List[str] = []
-    appliances = env.get("appliances") or []
-    if not isinstance(appliances, list):
-        return entries
-    for appliance in appliances:
-        if not isinstance(appliance, dict):
-            continue
-        name = str(appliance.get("name") or "").strip()
-        host = str(
-            appliance.get("zabbix_host")
-            or appliance.get("host")
-            or appliance.get("target")
-            or ""
-        ).strip()
-        parts = [part for part in (name, host) if part]
-        if parts:
-            entries.append(" · ".join(parts))
-    return entries
-
-
-def _build_env_connectivity_entries(env: Optional[Dict[str, Any]]) -> List[str]:
-    if not isinstance(env, dict):
-        return []
-    entries: List[str] = []
-    targets = env.get("connectivity_targets") or []
-    if not isinstance(targets, list):
-        return entries
-    for target in targets:
-        if not isinstance(target, dict):
-            continue
-        name = str(target.get("name") or "").strip()
-        address = str(target.get("target") or target.get("host") or "").strip()
-        parts = [part for part in (name, address) if part]
-        if parts:
-            entries.append(": ".join(parts))
-    return entries
-
-
 def _build_environment_config_lookup(
     env_name_map: Dict[str, str]
 ) -> Dict[str, Dict[str, Any]]:
@@ -705,9 +606,9 @@ def _build_environment_summary(
             continue
         key = env_name.lower()
         config = config_lookup.get(key)
-        details = _build_env_detail_entries(config)
-        appliances = _build_env_appliance_entries(config)
-        connectivity = _build_env_connectivity_entries(config)
+        code_value = None
+        if isinstance(config, dict):
+            code_value = config.get("codigo") or config.get("code")
         log_types = log_source_lookup.get(key, [])
         month_data = monthly_counts.get(env_name)
         series = _build_monthly_series(month_data, current_year, current_month)
@@ -730,15 +631,8 @@ def _build_environment_summary(
             notes.append(f"Tecnologias: {log_error}")
         summary[env_name] = {
             "name": env_name,
-            "code": (
-                config.get("codigo") or config.get("code")
-                if isinstance(config, dict)
-                else None
-            ),
+            "code": code_value,
             "active_use_cases_api": api_total,
-            "details": details,
-            "appliances": appliances,
-            "connectivity_targets": connectivity,
             "log_source_types": log_types,
             "use_case_monthly_series": series,
             "notes": notes,

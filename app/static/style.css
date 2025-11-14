@@ -2050,6 +2050,38 @@ button.summary-chip:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.health-item-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.health-item-tags-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.health-tag-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.health-tag {
+  background: rgba(38, 217, 141, 0.12);
+  border: 1px solid rgba(38, 217, 141, 0.4);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--green-strong);
+}
+
 .health-item-error {
   font-size: 13px;
   color: #ff9f9a;
