@@ -299,35 +299,30 @@ def _is_status_ok(status_text: str) -> bool:
 def _extract_log_source_type_id(entry: Any) -> Optional[str]:
     if not isinstance(entry, dict):
         return None
-    for key in (
-        "protocol_type_id",
-        "protocol_type",
-        "type_id",
-        "log_source_type_id",
-    ):
-        if key not in entry:
-            continue
-        value = entry.get(key)
+
+    def _normalise(value: Any) -> Optional[str]:
         if value is None:
-            continue
-        if isinstance(value, dict):
-            for nested_key in ("id", "value", "protocol_type_id", "type_id"):
-                nested_value = value.get(nested_key)
-                if nested_value is None:
-                    continue
-                try:
-                    text = str(nested_value).strip()
-                except Exception:
-                    continue
-                if text:
-                    return text
-            continue
+            return None
         try:
             text = str(value).strip()
         except Exception:
-            continue
-        if text:
-            return text
+            return None
+        return text or None
+
+    for key in ("type_id", "log_source_type_id"):
+        if key in entry:
+            text = _normalise(entry.get(key))
+            if text:
+                return text
+
+    for key in ("type", "log_source_type"):
+        value = entry.get(key)
+        if isinstance(value, dict):
+            for nested_key in ("type_id", "log_source_type_id", "id", "value"):
+                text = _normalise(value.get(nested_key))
+                if text:
+                    return text
+
     return None
 
 
@@ -346,9 +341,9 @@ def _fetch_log_source_type_ids(
     url = f"{env.base_url.rstrip('/')}/config/event_sources/log_source_management/log_sources"
     page_size = 200
     field_candidates = [
-        "id,status,enabled,protocol_type_id,protocol_type",
-        "id,status,enabled,protocol_type_id",
-        "id,status,enabled,protocol_type",
+        "id,status,enabled,type_id,protocol_type_id,protocol_type",
+        "id,status,enabled,type_id,protocol_type_id",
+        "id,status,enabled,type_id",
         "id,status,enabled",
         None,
     ]
