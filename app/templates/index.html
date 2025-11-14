@@ -825,6 +825,11 @@
       const count = check && typeof check.count === 'number' ? check.count : null;
       const ratio = check && typeof check.ratio === 'number' ? check.ratio : null;
       const percentLabel = ratio !== null ? `${Math.round(ratio * 100)}%` : null;
+      const logSourceTypes = Array.isArray(check && check.log_source_types)
+        ? check.log_source_types.filter(Boolean)
+        : Array.isArray(check && check.protocol_types)
+        ? check.protocol_types.filter(Boolean)
+        : [];
       const showError = errorMessage && severity === 'critical' && errorMessage !== message;
       const downloadDisabled = !items.length;
 
@@ -891,6 +896,16 @@
               {details.map((detail, idx) => (
                 <span key={`log-source-detail-${idx}`}>{detail}</span>
               ))}
+            </div>
+          ) : null}
+          {logSourceTypes.length ? (
+            <div className="health-item-tags">
+              <span className="health-item-tags-label">Tecnologias identificadas</span>
+              <ul className="health-tag-list">
+                {logSourceTypes.map((label, idx) => (
+                  <li key={`log-source-type-${idx}`} className="health-tag">{label}</li>
+                ))}
+              </ul>
             </div>
           ) : null}
           {showError ? <div className="health-item-error">{errorMessage}</div> : null}
