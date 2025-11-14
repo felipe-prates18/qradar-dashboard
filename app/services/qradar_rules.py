@@ -281,53 +281,101 @@ def _extract_log_source_status_text(entry: Any) -> str:
 
 
 def _is_status_ok(status_text: str) -> bool:
+    """Return ``True`` when the log source status indicates a healthy state."""
+
     if not status_text:
-        return False
+        # Some QRadar versions omit the status field for healthy log sources.
+        # In that scenario we should consider the source as eligible.
+        return True
+
     normalized = status_text.strip().lower()
     if not normalized:
-        return False
+        return True
+
     tokens = [token for token in re.split(r"[^a-z0-9]+", normalized) if token]
     if not tokens:
+        return True
+
+    negative_tokens = {
+        "error",
+        "erro",
+        "fail",
+        "failed",
+        "failure",
+        "parado",
+        "stopped",
+        "offline",
+        "critical",
+        "danger",
+        "alert",
+        "warning",
+        "warn",
+        "not",
+    }
+    positive_tokens = {
+        "ok",
+        "success",
+        "sucesso",
+        "normal",
+        "online",
+    }
+
+    if "nok" in tokens:
         return False
     if "not" in tokens and "ok" in tokens:
         return False
-    if "nok" in tokens:
+    if any(token in negative_tokens for token in tokens):
         return False
-    return "ok" in tokens
+    if any(token in positive_tokens for token in tokens):
+        return True
+
+    # Default to healthy when the status does not explicitly indicate an error.
+    return True
 
 
 def _extract_log_source_type_id(entry: Any) -> Optional[str]:
     if not isinstance(entry, dict):
         return None
-    for key in (
-        "protocol_type_id",
-        "protocol_type",
-        "type_id",
-        "log_source_type_id",
-    ):
-        if key not in entry:
-            continue
-        value = entry.get(key)
+
+    def _normalise(value: Any) -> Optional[str]:
         if value is None:
-            continue
-        if isinstance(value, dict):
-            for nested_key in ("id", "value", "protocol_type_id", "type_id"):
-                nested_value = value.get(nested_key)
-                if nested_value is None:
-                    continue
-                try:
-                    text = str(nested_value).strip()
-                except Exception:
-                    continue
-                if text:
-                    return text
-            continue
+            return None
         try:
             text = str(value).strip()
         except Exception:
-            continue
-        if text:
-            return text
+            return None
+        return text or None
+
+    for key in (
+        "type_id",
+        "log_source_type_id",
+        "typeId",
+        "logSourceTypeId",
+    ):
+        if key in entry:
+            text = _normalise(entry.get(key))
+            if text:
+                return text
+
+    for key in ("type", "log_source_type"):
+        value = entry.get(key)
+        if isinstance(value, dict):
+            for nested_key in (
+                "type_id",
+                "log_source_type_id",
+                "typeId",
+                "logSourceTypeId",
+                "id",
+                "value",
+            ):
+                text = _normalise(value.get(nested_key))
+                if text:
+                    return text
+        else:
+            text = _normalise(value)
+            if text and text.isdigit():
+                return text
+
     return None
 
 
@@ -346,9 +394,13 @@ def _fetch_log_source_type_ids(
     url = f"{env.base_url.rstrip('/')}/config/event_sources/log_source_management/log_sources"
     page_size = 200
     field_candidates = [
-        "id,status,enabled,protocol_type_id,protocol_type",
-        "id,status,enabled,protocol_type_id",
-        "id,status,enabled,protocol_type",
+        "id,status,enabled,type_id,log_source_type_id,typeId,logSourceTypeId,protocol_type_id,type,log_source_type",
+        "id,status,enabled,type_id,log_source_type_id,protocol_type_id",
+        "id,status,enabled,typeId,logSourceTypeId,protocol_type_id",
+        "id,status,enabled,type_id,log_source_type_id",
+        "id,status,enabled,typeId,logSourceTypeId",
+        "id,status,enabled,type_id",
+        "id,status,enabled,typeId",
         "id,status,enabled",
         None,
     ]
