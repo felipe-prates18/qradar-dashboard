@@ -281,19 +281,56 @@ def _extract_log_source_status_text(entry: Any) -> str:
 
 
 def _is_status_ok(status_text: str) -> bool:
+    """Return ``True`` when the log source status indicates a healthy state."""
+
     if not status_text:
-        return False
+        # Some QRadar versions omit the status field for healthy log sources.
+        # In that scenario we should consider the source as eligible.
+        return True
+
     normalized = status_text.strip().lower()
     if not normalized:
-        return False
+        return True
+
     tokens = [token for token in re.split(r"[^a-z0-9]+", normalized) if token]
     if not tokens:
+        return True
+
+    negative_tokens = {
+        "error",
+        "erro",
+        "fail",
+        "failed",
+        "failure",
+        "parado",
+        "stopped",
+        "offline",
+        "critical",
+        "danger",
+        "alert",
+        "warning",
+        "warn",
+        "not",
+    }
+    positive_tokens = {
+        "ok",
+        "success",
+        "sucesso",
+        "normal",
+        "online",
+    }
+
+    if "nok" in tokens:
         return False
     if "not" in tokens and "ok" in tokens:
         return False
-    if "nok" in tokens:
+    if any(token in negative_tokens for token in tokens):
         return False
-    return "ok" in tokens
+    if any(token in positive_tokens for token in tokens):
+        return True
+
+    # Default to healthy when the status does not explicitly indicate an error.
+    return True
 
 
 def _extract_log_source_type_id(entry: Any) -> Optional[str]:
