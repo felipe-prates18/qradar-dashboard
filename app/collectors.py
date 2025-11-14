@@ -930,9 +930,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     collected_log_source_types or protocol_types,
                     key=lambda item: item.lower(),
                 ),
-                "log_source_types": _filter_console_log_source_types(
-                    collected_log_source_types or protocol_types
-                ),
+                "log_source_types": [],
             }
 
         evaluated_total = enabled_total or 0
@@ -991,9 +989,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 collected_log_source_types or protocol_types,
                 key=lambda item: item.lower(),
             ),
-            "log_source_types": _filter_console_log_source_types(
-                collected_log_source_types or protocol_types
-            ),
+            "log_source_types": [],
         }
 
     def _check_offenses(env):
