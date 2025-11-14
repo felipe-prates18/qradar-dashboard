@@ -391,6 +391,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "error": message,
                 "items": [],
                 "protocol_types": [],
+                "log_source_types": [],
             }
 
         base_url = _build_api_base_url(env)
@@ -405,6 +406,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "error": message,
                 "items": [],
                 "protocol_types": [],
+                "log_source_types": [],
             }
 
         verify_tls = _to_bool(env.get("api_verify_tls"), _to_bool(default_verify_tls, False))
@@ -755,7 +757,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
 
         try:
             try:
-                collected_log_source_types = _collect_log_source_types()
+                _collect_log_source_types()
             except (RequestException, ValueError) as exc:
                 logger.warning(
                     "Falha ao coletar tecnologias de log source ambiente=%s: %s",
@@ -893,6 +895,10 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     collected_log_source_types or protocol_types,
                     key=lambda item: item.lower(),
                 ),
+                "log_source_types": sorted(
+                    collected_log_source_types or protocol_types,
+                    key=lambda item: item.lower(),
+                ),
             }
 
         evaluated_total = enabled_total or 0
@@ -948,6 +954,10 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             "error": error_message,
             "items": items,
             "protocol_types": sorted(
+                collected_log_source_types or protocol_types,
+                key=lambda item: item.lower(),
+            ),
+            "log_source_types": sorted(
                 collected_log_source_types or protocol_types,
                 key=lambda item: item.lower(),
             ),
