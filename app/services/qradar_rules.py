@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import requests
 from requests import Session
 from requests.exceptions import RequestException
+
+from ..constants import QRADAR_CONSOLE_INTERNAL_LOG_SOURCE_TYPES
 
 _DEFAULT_BASE_TEMPLATE = "https://{host}/api"
 _MAX_LOG_BODY_LENGTH = 2000
@@ -53,6 +55,28 @@ def _parse_timeout(value: Any, default: int) -> int:
         return int(str(value))
     except Exception:
         return int(default)
+
+
+def _filter_console_log_source_types(values: Iterable[str]) -> List[str]:
+    filtered: List[str] = []
+    seen: Set[str] = set()
+    for raw in values or []:
+        if raw is None:
+            continue
+        try:
+            text = str(raw).strip()
+        except Exception:
+            continue
+        if not text:
+            continue
+        normalized = text.lower()
+        if normalized in QRADAR_CONSOLE_INTERNAL_LOG_SOURCE_TYPES:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        filtered.append(text)
+    return sorted(filtered, key=lambda item: item.lower())
 
 
 def _resolve_token(env: Dict[str, Any], tokens_map: Dict[str, str]) -> Optional[str]:
@@ -620,7 +644,7 @@ def _fetch_log_source_type_names(
             errors.append(f"{type_id}: {error}")
 
     error_message = "; ".join(errors) if errors else None
-    return sorted(collected, key=lambda item: item.lower()), error_message
+    return _filter_console_log_source_types(collected), error_message
 
 
 def _fetch_rule_statistics(

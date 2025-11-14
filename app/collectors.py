@@ -3,13 +3,36 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 from requests.exceptions import RequestException
 
+from .constants import QRADAR_CONSOLE_INTERNAL_LOG_SOURCE_TYPES
 from .services.zabbix_client import ZabbixClient
 from .services.ssh_client import SSHClient
+
+
+def _filter_console_log_source_types(values: Iterable[str]) -> List[str]:
+    filtered: List[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        if raw is None:
+            continue
+        try:
+            text = str(raw).strip()
+        except Exception:
+            continue
+        if not text:
+            continue
+        normalized = text.lower()
+        if normalized in QRADAR_CONSOLE_INTERNAL_LOG_SOURCE_TYPES:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        filtered.append(text)
+    return sorted(filtered, key=lambda item: item.lower())
 
 
 def _pct(value: Any) -> str:
@@ -907,9 +930,8 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     collected_log_source_types or protocol_types,
                     key=lambda item: item.lower(),
                 ),
-                "log_source_types": sorted(
-                    collected_log_source_types or protocol_types,
-                    key=lambda item: item.lower(),
+                "log_source_types": _filter_console_log_source_types(
+                    collected_log_source_types or protocol_types
                 ),
             }
 
@@ -969,9 +991,8 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 collected_log_source_types or protocol_types,
                 key=lambda item: item.lower(),
             ),
-            "log_source_types": sorted(
-                collected_log_source_types or protocol_types,
-                key=lambda item: item.lower(),
+            "log_source_types": _filter_console_log_source_types(
+                collected_log_source_types or protocol_types
             ),
         }
 
