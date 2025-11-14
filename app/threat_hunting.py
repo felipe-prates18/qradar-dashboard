@@ -111,6 +111,23 @@ def should_record_monthly_snapshot(moment: Optional[datetime] = None) -> bool:
     return instant.day == 1
 
 
+def month_snapshot_exists(
+    con: sqlite3.Connection, month_key: str
+) -> bool:
+    """Return ``True`` if there is at least one snapshot for ``month_key``."""
+
+    ensure_schema(con)
+    normalized = _normalise_month_key(month_key)
+    if not normalized:
+        return False
+    cur = con.cursor()
+    cur.execute(
+        "SELECT 1 FROM use_case_monthly_totals WHERE month = ? LIMIT 1",
+        (normalized,),
+    )
+    return cur.fetchone() is not None
+
+
 def record_monthly_totals(
     con: sqlite3.Connection,
     month_key: str,
