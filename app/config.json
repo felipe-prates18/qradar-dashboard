@@ -18,8 +18,8 @@
     "store_key_fallback": "vfs.fs.pused[storageUsedPercentage.66]"
   },
   "alerts": {
-    "teams_webhook_url": "https://default33f70dd65ac04e74a8c47736b9998d.e1.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/340bc84bb10d4e4783ed2c73645ca518/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=jH714QpMLk2iPRvqvbCBI0n_KWK7sVE2fC3E3itB8qg",
-    "license_teams_webhook_url": "https://default33f70dd65ac04e74a8c47736b9998d.e1.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/e44e5cae0e7a40c69c8f66ee3f590f73/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=1bCYL9xNYoiPRWBYqGU6l6RiJCXRRoyyvx7xMUY7pMY",
+    "teams_webhook_url": "",
+    "license_teams_webhook_url": "",
     "interval_seconds": 600
   },
   "health": {
@@ -371,28 +371,6 @@
         }
       ],
       "codigo": "MMX9"
-    },
-    {
-      "name": "QRADAR PERNABUCANAS CONSOLE",
-      "host": "172.31.1.241",
-      "collector": "10.14.117.53",
-      "ssh_user": "root",
-      "ssh_key": "/opt/qradar-dashboard/keys/PERNAMBUCANAS.pem",
-      "jmx_port": 7787,
-      "jmx_bean": "com.q1labs.sem:application=ecs-ec-ingress.ecs-ec-ingress,type=sources,name=Source Monitor",
-      "appliances": [
-        {
-          "name": "Event Collector",
-          "zabbix_host": "QRADAR PERNABUCANAS EVENT COLLECTOR"
-        }
-      ],
-      "connectivity_targets": [
-        {
-          "name": "Event Collector",
-          "target": "10.14.117.53"
-        }
-      ],
-      "codigo": "MMX10"
     }
   ],
   "wallboard_token": "uej3g14re4bfa2c65qkhyym75747ff8538bib1u07ae534f4vkyja7ma6a89dbe4",
