@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone, time
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import requests
+import time as time_module
 
 
 def _parse_percent(value: Any) -> Optional[float]:
@@ -307,19 +308,50 @@ class AlertManager:
                         headers,
                         body,
                     )
-                    response = requests.post(
-                        url,
-                        headers=headers,
-                        data=body.encode("utf-8"),
-                        timeout=10,
-                    )
-                    self.logger.debug(
-                        "Resposta do webhook do Teams (%s) | status=%s corpo=%s",
-                        label,
-                        getattr(response, "status_code", "desconhecido"),
-                        (response.text[:1000] if getattr(response, "text", None) else ""),
-                    )
-                    response.raise_for_status()
+
+                    response = None
+                    attempts = 3
+                    for attempt in range(1, attempts + 1):
+                        try:
+                            response = requests.post(
+                                url,
+                                headers=headers,
+                                data=body.encode("utf-8"),
+                                timeout=10,
+                            )
+                            self.logger.debug(
+                                "Resposta do webhook do Teams (%s) | status=%s corpo=%s",
+                                label,
+                                getattr(response, "status_code", "desconhecido"),
+                                (response.text[:1000] if getattr(response, "text", None) else ""),
+                            )
+                            response.raise_for_status()
+                            break
+                        except requests.RequestException as exc:
+                            resp = getattr(exc, "response", None)
+                            if resp is not None:
+                                body_resp = resp.text[:1000] if getattr(resp, "text", None) else ""
+                                self.logger.warning(
+                                    "Tentativa %d/%d falhou (%s) | status=%s corpo=%s",
+                                    attempt,
+                                    attempts,
+                                    label,
+                                    resp.status_code,
+                                    body_resp,
+                                )
+                            else:
+                                self.logger.warning(
+                                    "Tentativa %d/%d falhou (%s) sem resposta HTTP | erro=%s",
+                                    attempt,
+                                    attempts,
+                                    label,
+                                    exc,
+                                )
+                            if attempt < attempts:
+                                time_module.sleep(2 * attempt)
+                                continue
+                            raise
+
                     self.logger.info("Alerta enviado com sucesso (%s): %s", label, title)
                 except requests.RequestException as exc:
                     resp = getattr(exc, "response", None)
@@ -333,8 +365,9 @@ class AlertManager:
                         )
                     else:
                         self.logger.exception(
-                            "Falha ao enviar alerta para o Microsoft Teams (%s) sem resposta HTTP",
+                            "Falha ao enviar alerta para o Microsoft Teams (%s) sem resposta HTTP | erro=%s",
                             label,
+                            exc,
                         )
         except Exception:
             self.logger.exception("Falha inesperada ao enviar alerta para o Microsoft Teams")
