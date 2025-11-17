@@ -129,6 +129,44 @@
           </div>
         </div>
       </form>
+      <section class="tech-catalog-card">
+        <header class="tech-catalog-header">
+          <div>
+            <h4>Tecnologias por cliente</h4>
+            <p class="muted">Use os filtros para descobrir quais clientes possuem cada tecnologia de Log Source.</p>
+          </div>
+        </header>
+        <div class="form-grid tech-catalog-grid">
+          <div class="form-field">
+            <label for="tech-catalog-client">Filtrar por cliente</label>
+            <input type="text" id="tech-catalog-client" name="tech-catalog-client" list="tech-catalog-client-options" placeholder="Ex.: Cliente A">
+            <datalist id="tech-catalog-client-options">
+              {% for option in environment_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="tech-catalog-technology">Filtrar por tecnologia</label>
+            <input type="text" id="tech-catalog-technology" name="tech-catalog-technology" list="tech-catalog-technology-options" placeholder="Ex.: Firewall">
+            <datalist id="tech-catalog-technology-options"></datalist>
+          </div>
+        </div>
+        <div class="tech-catalog-results">
+          <p class="muted" data-tech-catalog-empty>Selecione um cliente ou tecnologia para visualizar as correspondências.</p>
+          <div class="table-wrapper">
+            <table class="data-table tech-catalog-table">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Tecnologias de Log Source</th>
+                </tr>
+              </thead>
+              <tbody data-tech-catalog-body></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
       <div class="table-wrapper">
         <table class="data-table threat-table">
           <thead>
@@ -818,6 +856,139 @@
           closeModal();
         }
       });
+    });
+    document.addEventListener('DOMContentLoaded', function () {
+      const summaryData = (typeof environmentSummaryData === 'object' && environmentSummaryData) ? environmentSummaryData : {};
+      const clientInput = document.getElementById('tech-catalog-client');
+      const techInput = document.getElementById('tech-catalog-technology');
+      const clientOptions = document.getElementById('tech-catalog-client-options');
+      const techOptions = document.getElementById('tech-catalog-technology-options');
+      const tableBody = document.querySelector('[data-tech-catalog-body]');
+      const emptyEl = document.querySelector('[data-tech-catalog-empty]');
+      if (!clientInput || !techInput || !tableBody || !emptyEl) {
+        return;
+      }
+
+      function normalize(text) {
+        return (text || '').toString().trim();
+      }
+
+      function normalizeLower(text) {
+        return normalize(text).toLowerCase();
+      }
+
+      function clearChildren(node) {
+        while (node.firstChild) {
+          node.removeChild(node.firstChild);
+        }
+      }
+
+      function toCatalogItems(data) {
+        const entries = [];
+        if (!data || typeof data !== 'object') {
+          return entries;
+        }
+        Object.keys(data).forEach(key => {
+          const value = data[key];
+          if (!value || typeof value !== 'object') {
+            return;
+          }
+          const name = normalize(value.name || key);
+          const technologies = Array.isArray(value.log_source_types)
+            ? value.log_source_types.map(normalize).filter(Boolean)
+            : [];
+          if (!name || !technologies.length) {
+            return;
+          }
+          entries.push({
+            name,
+            technologies,
+          });
+        });
+        return entries;
+      }
+
+      const catalogItems = toCatalogItems(summaryData);
+
+      function populateDatalist(target, values) {
+        if (!target || !Array.isArray(values)) {
+          return;
+        }
+        clearChildren(target);
+        values.forEach(value => {
+          const option = document.createElement('option');
+          option.value = value;
+          target.appendChild(option);
+        });
+      }
+
+      const uniqueClients = Array.from(new Set(catalogItems.map(item => item.name))).sort((a, b) => a.localeCompare(b, 'pt', { sensitivity: 'base' }));
+      const uniqueTechnologies = [];
+      const techSet = new Set();
+      catalogItems.forEach(item => {
+        item.technologies.forEach(tech => {
+          const key = tech.toLowerCase();
+          if (!techSet.has(key)) {
+            techSet.add(key);
+            uniqueTechnologies.push(tech);
+          }
+        });
+      });
+      uniqueTechnologies.sort((a, b) => a.localeCompare(b, 'pt', { sensitivity: 'base' }));
+
+      populateDatalist(clientOptions, uniqueClients);
+      populateDatalist(techOptions, uniqueTechnologies);
+
+      function renderResults() {
+        const clientTerm = normalizeLower(clientInput.value);
+        const techTerm = normalizeLower(techInput.value);
+
+        const filtered = catalogItems
+          .map(item => {
+            const matchesClient = clientTerm ? item.name.toLowerCase().includes(clientTerm) : true;
+            if (!matchesClient) {
+              return null;
+            }
+            const technologies = techTerm
+              ? item.technologies.filter(tech => tech.toLowerCase().includes(techTerm))
+              : item.technologies;
+            if (!technologies.length) {
+              return null;
+            }
+            return { ...item, technologies };
+          })
+          .filter(Boolean);
+
+        clearChildren(tableBody);
+        if (!filtered.length) {
+          emptyEl.hidden = false;
+          return;
+        }
+        emptyEl.hidden = true;
+        filtered.forEach(entry => {
+          const row = document.createElement('tr');
+          const clientCell = document.createElement('td');
+          clientCell.textContent = entry.name;
+          const techCell = document.createElement('td');
+          const techList = document.createElement('ul');
+          techList.className = 'environment-summary-tags tech-catalog-tags';
+          entry.technologies.forEach(tech => {
+            const tag = document.createElement('li');
+            tag.className = 'environment-summary-tag';
+            tag.textContent = tech;
+            techList.appendChild(tag);
+          });
+          techCell.appendChild(techList);
+          row.appendChild(clientCell);
+          row.appendChild(techCell);
+          tableBody.appendChild(row);
+        });
+      }
+
+      clientInput.addEventListener('input', renderResults);
+      techInput.addEventListener('input', renderResults);
+
+      renderResults();
     });
   </script>
 </body>
