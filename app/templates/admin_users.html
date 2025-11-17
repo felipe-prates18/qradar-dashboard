@@ -209,7 +209,17 @@
         </div>
         <div class="form-field">
           <label for="env-siem">SIEM</label>
-          <input type="text" id="env-siem" name="siem" placeholder="Ex: QRadar">
+          <select id="env-siem" name="siem">
+            <option value="" disabled selected hidden>Selecione o SIEM</option>
+            <option value="Cortex SIEM">Cortex SIEM</option>
+            <option value="Crowdstrike NG-SIEM">Crowdstrike NG-SIEM</option>
+            <option value="Elastic">Elastic</option>
+            <option value="Google SecOps">Google SecOps</option>
+            <option value="Microsoft Sentinel">Microsoft Sentinel</option>
+            <option value="QRadar">QRadar</option>
+            <option value="Splunk">Splunk</option>
+            <option value="Wazuh">Wazuh</option>
+          </select>
         </div>
         <div class="form-field">
           <label for="env-api-token">API Key</label>
@@ -353,7 +363,15 @@
       formTitle.textContent = env ? 'Editar ambiente' : 'Adicionar ambiente';
       form.querySelector('[name="name"]').value = env?.name || '';
       form.querySelector('[name="codigo"]').value = env?.codigo || '';
-      form.querySelector('[name="siem"]').value = env?.siem || '';
+      const siemSelect = form.querySelector('[name="siem"]');
+      if (siemSelect) {
+        const existingOption = Array.from(siemSelect.options).find((opt) => opt.value === (env?.siem || ''));
+        if (!existingOption && env?.siem) {
+          const customOption = new Option(env.siem, env.siem, true, true);
+          siemSelect.add(customOption, siemSelect.firstChild);
+        }
+        siemSelect.value = env?.siem || '';
+      }
       form.querySelector('[name="api_token"]').value = env?.api_token || '';
       form.querySelector('[name="host"]').value = env?.host || '';
       form.querySelector('[name="collector"]').value = env?.collector || '';
