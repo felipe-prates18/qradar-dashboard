@@ -17,6 +17,7 @@
     </div>
     <div class="row">
       <a class="btn secondary" href="/">Voltar</a>
+      <button class="btn secondary" type="button" data-open-environments>Ambientes</button>
       <a class="btn secondary" href="/logout">Sair</a>
     </div>
   </header>
@@ -148,7 +149,313 @@
       </table>
     </div>
   </section>
-</div>
+
+  <div id="environment-list-modal" class="modal">
+    <div class="modal-overlay" data-close-env-list></div>
+    <div class="modal-content environment-modal">
+      <header class="modal-header">
+        <div>
+          <h3>Ambientes monitorados</h3>
+          <p class="modal-meta">Veja e edite as configurações de monitoramento.</p>
+        </div>
+        <div class="modal-actions modal-actions--end">
+          <button class="btn small secondary" type="button" data-open-env-form>Adicionar ambiente</button>
+          <button class="modal-close" type="button" data-close-env-list aria-label="Fechar">×</button>
+        </div>
+      </header>
+      <div class="modal-body">
+        <div class="alert error" data-env-error hidden></div>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Nome</th>
+                <th>Código</th>
+                <th>Host</th>
+                <th>SIEM</th>
+                <th class="actions-col">Ações</th>
+              </tr>
+            </thead>
+            <tbody data-env-table-body>
+              <tr class="muted" data-env-empty-row>
+                <td colspan="5">Nenhum ambiente cadastrado ainda.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="environment-edit-modal" class="modal">
+    <div class="modal-overlay" data-close-env-form></div>
+    <div class="modal-content environment-modal">
+      <header class="modal-header">
+        <div>
+          <h3 data-env-form-title>Adicionar ambiente</h3>
+          <p class="modal-meta">Preencha os dados do ambiente monitorado.</p>
+        </div>
+        <button class="modal-close" type="button" data-close-env-form aria-label="Fechar">×</button>
+      </header>
+      <form class="form-grid" data-env-form>
+        <div class="alert error" data-env-form-error hidden></div>
+        <div class="form-field form-field--full">
+          <label for="env-name">Nome do ambiente</label>
+          <input type="text" id="env-name" name="name" required>
+        </div>
+        <div class="form-field">
+          <label for="env-code">Código</label>
+          <input type="text" id="env-code" name="codigo" placeholder="Ex: VPX1">
+        </div>
+        <div class="form-field">
+          <label for="env-siem">SIEM</label>
+          <select id="env-siem" name="siem">
+            <option value="" disabled selected hidden>Selecione o SIEM</option>
+            <option value="Cortex SIEM">Cortex SIEM</option>
+            <option value="Crowdstrike NG-SIEM">Crowdstrike NG-SIEM</option>
+            <option value="Elastic">Elastic</option>
+            <option value="Google SecOps">Google SecOps</option>
+            <option value="Microsoft Sentinel">Microsoft Sentinel</option>
+            <option value="QRadar">QRadar</option>
+            <option value="Splunk">Splunk</option>
+            <option value="Wazuh">Wazuh</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label for="env-api-token">API Key</label>
+          <input type="text" id="env-api-token" name="api_token" placeholder="Chave da API do SIEM">
+        </div>
+        <div class="form-field">
+          <label for="env-host">Host</label>
+          <input type="text" id="env-host" name="host" placeholder="Hostname ou IP">
+        </div>
+        <div class="form-field">
+          <label for="env-collector">Collector</label>
+          <input type="text" id="env-collector" name="collector" placeholder="Collector ou host">
+        </div>
+        <div class="form-field">
+          <label for="env-ssh-user">Usuário SSH</label>
+          <input type="text" id="env-ssh-user" name="ssh_user" placeholder="root">
+        </div>
+        <div class="form-field">
+          <label for="env-ssh-key">Chave SSH</label>
+          <input type="text" id="env-ssh-key" name="ssh_key" placeholder="/opt/qradar-dashboard/keys/...">
+        </div>
+        <div class="form-field">
+          <label for="env-jmx-port">Porta JMX</label>
+          <input type="number" id="env-jmx-port" name="jmx_port" min="1" step="1" placeholder="7787">
+        </div>
+        <div class="form-field form-field--full">
+          <label for="env-jmx-bean">JMX Bean</label>
+          <input type="text" id="env-jmx-bean" name="jmx_bean">
+        </div>
+        <div class="form-field form-field--full">
+          <label for="env-appliances">Appliances (JSON)</label>
+          <textarea id="env-appliances" name="appliances" rows="3" placeholder='[
+  {"name": "Event Collector", "zabbix_host": "Host no Zabbix"}
+]'></textarea>
+          <p class="field-hint">Use uma lista JSON de appliances e hosts de Zabbix.</p>
+        </div>
+        <div class="form-field form-field--full">
+          <label for="env-connectivity">Alvos de conectividade (JSON)</label>
+          <textarea id="env-connectivity" name="connectivity_targets" rows="3" placeholder='[
+  {"name": "Event Collector", "target": "10.0.0.10"}
+]'></textarea>
+          <p class="field-hint">Use uma lista JSON com os destinos monitorados.</p>
+        </div>
+        <div class="modal-actions">
+          <button class="btn secondary" type="button" data-close-env-form>Cancelar</button>
+          <button class="btn" type="submit">Salvar ambiente</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  </div>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const listModal = document.getElementById('environment-list-modal');
+    const editModal = document.getElementById('environment-edit-modal');
+    const openListBtn = document.querySelector('[data-open-environments]');
+    const closeListButtons = listModal ? listModal.querySelectorAll('[data-close-env-list]') : [];
+    const openFormBtn = listModal ? listModal.querySelector('[data-open-env-form]') : null;
+    const tableBody = listModal ? listModal.querySelector('[data-env-table-body]') : null;
+    const emptyRow = listModal ? listModal.querySelector('[data-env-empty-row]') : null;
+    const listError = listModal ? listModal.querySelector('[data-env-error]') : null;
+    const form = editModal ? editModal.querySelector('[data-env-form]') : null;
+    const formError = editModal ? editModal.querySelector('[data-env-form-error]') : null;
+    const formTitle = editModal ? editModal.querySelector('[data-env-form-title]') : null;
+    let environments = [];
+
+    const toggleModal = (modal, isVisible) => {
+      if (!modal) return;
+      modal.classList.toggle('is-visible', Boolean(isVisible));
+    };
+
+    const closeEditModal = () => toggleModal(editModal, false);
+
+    const formatJson = (value) => {
+      try {
+        return JSON.stringify(value || [], null, 2);
+      } catch (e) {
+        return '[]';
+      }
+    };
+
+    const parseJsonField = (value) => {
+      const text = (value || '').trim();
+      if (!text) return [];
+      try {
+        const parsed = JSON.parse(text);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    };
+
+    const renderTable = () => {
+      if (!tableBody) return;
+      tableBody.innerHTML = '';
+      if (!environments.length) {
+        if (emptyRow) {
+          emptyRow.hidden = false;
+          tableBody.appendChild(emptyRow);
+        }
+        return;
+      }
+      environments.forEach((env) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${env.name || ''}</td>
+          <td>${env.codigo || ''}</td>
+          <td>${env.host || ''}</td>
+          <td>${env.siem || ''}</td>
+          <td class="actions-col">
+            <button class="btn small tertiary" type="button" data-edit-env="${env.id}">Editar</button>
+          </td>
+        `;
+        tableBody.appendChild(tr);
+      });
+    };
+
+    const loadEnvironments = async () => {
+      if (!listError) return;
+      listError.hidden = true;
+      try {
+        const resp = await fetch('/api/admin/environments');
+        if (!resp.ok) throw new Error('Erro ao carregar ambientes');
+        environments = await resp.json();
+        renderTable();
+      } catch (err) {
+        listError.textContent = err.message || 'Erro ao carregar ambientes.';
+        listError.hidden = false;
+      }
+    };
+
+    const openListModal = () => {
+      toggleModal(listModal, true);
+      loadEnvironments();
+    };
+
+    const openEditModal = (env) => {
+      if (!form || !formTitle) return;
+      form.reset();
+      form.dataset.envId = env && env.id ? env.id : '';
+      formTitle.textContent = env ? 'Editar ambiente' : 'Adicionar ambiente';
+      form.querySelector('[name="name"]').value = env?.name || '';
+      form.querySelector('[name="codigo"]').value = env?.codigo || '';
+      const siemSelect = form.querySelector('[name="siem"]');
+      if (siemSelect) {
+        const existingOption = Array.from(siemSelect.options).find((opt) => opt.value === (env?.siem || ''));
+        if (!existingOption && env?.siem) {
+          const customOption = new Option(env.siem, env.siem, true, true);
+          siemSelect.add(customOption, siemSelect.firstChild);
+        }
+        siemSelect.value = env?.siem || '';
+      }
+      form.querySelector('[name="api_token"]').value = env?.api_token || '';
+      form.querySelector('[name="host"]').value = env?.host || '';
+      form.querySelector('[name="collector"]').value = env?.collector || '';
+      form.querySelector('[name="ssh_user"]').value = env?.ssh_user || '';
+      form.querySelector('[name="ssh_key"]').value = env?.ssh_key || '';
+      form.querySelector('[name="jmx_port"]').value = env?.jmx_port || '';
+      form.querySelector('[name="jmx_bean"]').value = env?.jmx_bean || '';
+      form.querySelector('[name="appliances"]').value = formatJson(env?.appliances);
+      form.querySelector('[name="connectivity_targets"]').value = formatJson(env?.connectivity_targets);
+      if (formError) formError.hidden = true;
+      toggleModal(editModal, true);
+    };
+
+    const findEnvironment = (id) => environments.find((env) => String(env.id) === String(id));
+
+    if (openListBtn) {
+      openListBtn.addEventListener('click', openListModal);
+    }
+
+    if (openFormBtn) {
+      openFormBtn.addEventListener('click', () => openEditModal(null));
+    }
+
+    closeListButtons.forEach((btn) => {
+      btn.addEventListener('click', () => toggleModal(listModal, false));
+    });
+
+    if (listModal) {
+      listModal.addEventListener('click', (event) => {
+        if (event.target.dataset.editEnv) {
+          const env = findEnvironment(event.target.dataset.editEnv);
+          openEditModal(env);
+        }
+      });
+    }
+
+    const closeEditButtons = editModal ? editModal.querySelectorAll('[data-close-env-form]') : [];
+    closeEditButtons.forEach((btn) => btn.addEventListener('click', closeEditModal));
+
+    if (form) {
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = {
+          name: form.querySelector('[name="name"]').value,
+          codigo: form.querySelector('[name="codigo"]').value,
+          siem: form.querySelector('[name="siem"]').value,
+          api_token: form.querySelector('[name="api_token"]').value,
+          host: form.querySelector('[name="host"]').value,
+          collector: form.querySelector('[name="collector"]').value,
+          ssh_user: form.querySelector('[name="ssh_user"]').value,
+          ssh_key: form.querySelector('[name="ssh_key"]').value,
+          jmx_port: form.querySelector('[name="jmx_port"]').value,
+          jmx_bean: form.querySelector('[name="jmx_bean"]').value,
+          appliances: parseJsonField(form.querySelector('[name="appliances"]').value),
+          connectivity_targets: parseJsonField(form.querySelector('[name="connectivity_targets"]').value),
+        };
+
+        const envId = form.dataset.envId;
+        const method = envId ? 'PUT' : 'POST';
+        const url = envId ? `/api/admin/environments/${envId}` : '/api/admin/environments';
+
+        if (formError) formError.hidden = true;
+        try {
+          const resp = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!resp.ok) {
+            const msg = (await resp.json()).detail || 'Erro ao salvar ambiente';
+            throw new Error(msg);
+          }
+          closeEditModal();
+          await loadEnvironments();
+        } catch (err) {
+          if (formError) {
+            formError.textContent = err.message || 'Erro ao salvar ambiente.';
+            formError.hidden = false;
+          }
+        }
+      });
+    }
+  });
+</script>
 </body>
 </html>
 
