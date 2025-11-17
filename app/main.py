@@ -332,6 +332,31 @@ async def _cache_refresh_loop(stop_event: asyncio.Event) -> None:
     logger.info("Atualização periódica de caches finalizada")
 
 
+def _con():
+    con = sqlite3.connect(str(DB_PATH))
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA foreign_keys = ON")
+    except sqlite3.DatabaseError:
+        pass
+    return con
+
+
+def _load_environments_from_db() -> List[Dict[str, Any]]:
+    con = _con()
+    try:
+        environment_store.ensure_schema(con)
+        return environment_store.list_environments(con)
+    finally:
+        con.close()
+
+
+def _config_with_envs() -> Dict[str, Any]:
+    config = dict(CONFIG)
+    config["qradar_envs"] = _load_environments_from_db()
+    return config
+
+
 _cache_refresh_task: Optional[asyncio.Task] = None
 _cache_refresh_stop: Optional[asyncio.Event] = None
 
@@ -420,31 +445,6 @@ async def restrict_wallboard_token_scope(request: Request, call_next):
             return response
     response = await call_next(request)
     return response
-
-
-def _con():
-    con = sqlite3.connect(str(DB_PATH))
-    con.row_factory = sqlite3.Row
-    try:
-        con.execute("PRAGMA foreign_keys = ON")
-    except sqlite3.DatabaseError:
-        pass
-    return con
-
-
-def _load_environments_from_db() -> List[Dict[str, Any]]:
-    con = _con()
-    try:
-        environment_store.ensure_schema(con)
-        return environment_store.list_environments(con)
-    finally:
-        con.close()
-
-
-def _config_with_envs() -> Dict[str, Any]:
-    config = dict(CONFIG)
-    config["qradar_envs"] = _load_environments_from_db()
-    return config
 
 
 def _prepare_threat_hunting_schema() -> None:
