@@ -121,6 +121,26 @@ def get_environment(con: Connection, env_id: int) -> Optional[Dict[str, Any]]:
     return _serialize_row(row)
 
 
+def get_environment_by_name(con: Connection, name: str) -> Optional[Dict[str, Any]]:
+    ensure_schema(con)
+    cur = con.cursor()
+    cur.execute(
+        """
+        SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
+               appliances_json, connectivity_targets_json, codigo, siem,
+               api_token, created_at, updated_at
+        FROM environments
+        WHERE name=?
+        LIMIT 1
+        """,
+        (name,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return _serialize_row(row)
+
+
 def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[int] = None) -> int:
     ensure_schema(con)
     now = datetime.utcnow().isoformat()
@@ -187,6 +207,12 @@ def upsert_many(con: Connection, items: Iterable[Dict[str, Any]]) -> int:
     ensure_schema(con)
     inserted = 0
     for item in items:
-        save_environment(con, item)
+        env_id = None
+        name = item.get("name")
+        if name:
+            existing = get_environment_by_name(con, str(name))
+            if existing:
+                env_id = existing.get("id")
+        save_environment(con, item, env_id=env_id)
         inserted += 1
     return inserted
