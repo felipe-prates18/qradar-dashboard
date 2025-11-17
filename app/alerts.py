@@ -153,6 +153,21 @@ class AlertManager:
             except asyncio.TimeoutError:
                 continue
 
+    def run_once(self) -> None:
+        """Executa a rotina de alertas uma vez, de forma síncrona."""
+
+        started_at = time_module.monotonic()
+        self.logger.info("Execução manual da rotina de alertas iniciada")
+        try:
+            self._perform_checks()
+        except Exception:
+            self.logger.exception("Erro ao executar rotina de alertas manualmente")
+            raise
+        elapsed = time_module.monotonic() - started_at
+        self.logger.info(
+            "Execução manual da rotina de alertas concluída em %.2fs", elapsed
+        )
+
     def _perform_checks(self) -> None:
         now = datetime.now()
         try:
