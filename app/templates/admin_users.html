@@ -28,48 +28,80 @@
   <section class="card new-user-card">
     <div class="card-heading">
       <div>
+        <p class="eyebrow">Cadastro rápido</p>
         <h3>Cadastrar novo usuário</h3>
         <p class="muted">Crie contas rapidamente e defina privilégios administrativos.</p>
       </div>
     </div>
-    <form method="post" action="/admin/users/create" class="form-grid">
-      <div class="form-field">
-        <label for="username">Nome de usuário</label>
-        <input type="text" id="username" name="username" placeholder="nome.sobrenome" required>
-      </div>
-      <div class="form-field">
-        <label for="password">Senha inicial</label>
-        <input type="password" id="password" name="password" placeholder="Senha temporária" minlength="6" required>
-      </div>
-      <label class="form-checkbox">
-        <input type="checkbox" name="is_admin">
-        <span>Conceder acesso de administrador</span>
-      </label>
-      <div class="form-field form-field--full">
-        <label for="new-user-permissions">Permissões especiais</label>
-        <select id="new-user-permissions" name="permissions" multiple class="select-multiple" size="{{permission_select_size}}" {% if not available_permissions %}disabled{% endif %}>
-          {% for perm in available_permissions %}
-          <option value="{{perm.code}}">{{perm.name}}</option>
-          {% endfor %}
-        </select>
-        {% if available_permissions %}
-        <p class="field-hint">Mantenha Ctrl (ou ⌘ no Mac) pressionado para selecionar várias opções.</p>
-        {% else %}
-        <p class="field-hint">Nenhuma permissão configurada no momento.</p>
-        {% endif %}
-      </div>
-      <div class="form-actions">
-        <button class="btn" type="submit">Criar usuário</button>
-      </div>
-    </form>
+    <div class="card-body two-column">
+      <form method="post" action="/admin/users/create" class="form-grid card-panel">
+        <div class="form-field">
+          <label for="username">Nome de usuário</label>
+          <input type="text" id="username" name="username" placeholder="nome.sobrenome" required>
+        </div>
+        <div class="form-field">
+          <label for="password">Senha inicial</label>
+          <input type="password" id="password" name="password" placeholder="Senha temporária" minlength="6" required>
+        </div>
+        <label class="form-checkbox">
+          <input type="checkbox" name="is_admin">
+          <span>Conceder acesso de administrador</span>
+        </label>
+        <div class="form-field form-field--full">
+          <label for="new-user-permissions">Permissões especiais</label>
+          <select id="new-user-permissions" name="permissions" multiple class="select-multiple" size="{{permission_select_size}}" {% if not available_permissions %}disabled{% endif %}>
+            {% for perm in available_permissions %}
+            <option value="{{perm.code}}">{{perm.name}}</option>
+            {% endfor %}
+          </select>
+          {% if available_permissions %}
+          <p class="field-hint">Mantenha Ctrl (ou ⌘ no Mac) pressionado para selecionar várias opções.</p>
+          {% else %}
+          <p class="field-hint">Nenhuma permissão configurada no momento.</p>
+          {% endif %}
+        </div>
+        <div class="form-actions">
+          <button class="btn" type="submit">Criar usuário</button>
+        </div>
+      </form>
+      <aside class="card-panel info-panel">
+        <h4>Boas práticas de cadastro</h4>
+        <ul class="info-list">
+          <li>Utilize padrão <strong>nome.sobrenome</strong> para consistência.</li>
+          <li>Configure uma <strong>senha temporária</strong> e oriente o usuário a alterá-la no primeiro acesso.</li>
+          <li>Conceda <strong>permissões específicas</strong> apenas quando necessário.</li>
+          <li>Use o acesso de administrador apenas para perfis responsáveis por governança.</li>
+        </ul>
+        <div class="inline-hint">
+          <div class="eyebrow">Dica</div>
+          Prefira cadastrar permissões antes de criar usuários para agilizar a atribuição.
+        </div>
+      </aside>
+    </div>
   </section>
 
   <section class="card users-card">
     <div class="card-heading">
       <div>
-        <h3>Usuários</h3>
+        <p class="eyebrow">Usuários</p>
+        <h3>Painel de administração</h3>
         <p class="muted">Gerencie o status, permissões e credenciais das contas existentes.</p>
       </div>
+    </div>
+    <div class="table-toolbar">
+      <div class="metric-pill">
+        <span class="metric-label">Contas</span>
+        <span class="metric-value">{{ users|length }}</span>
+      </div>
+      <div class="metric-pill">
+        <span class="metric-label">Ativos</span>
+        <span class="metric-value">{{ users|selectattr('is_active')|list|length }}</span>
+      </div>
+      <div class="metric-pill">
+        <span class="metric-label">Admins</span>
+        <span class="metric-value">{{ users|selectattr('is_admin')|list|length }}</span>
+      </div>
+      <div class="table-toolbar__hint">Dica: use as ações agrupadas para evitar alterações acidentais.</div>
     </div>
     <div class="table-wrapper">
       <table class="data-table">
@@ -112,35 +144,50 @@
               {% endif %}
             </td>
             <td>
-              <div class="user-actions">
-                <form method="post" action="/admin/users/toggle" class="inline-form">
-                  <input type="hidden" name="user_id" value="{{u.id}}">
-                  <input type="hidden" name="field" value="is_active">
-                  <button class="btn small secondary" type="submit">Alternar ativo</button>
-                </form>
-                <form method="post" action="/admin/users/toggle" class="inline-form">
-                  <input type="hidden" name="user_id" value="{{u.id}}">
-                  <input type="hidden" name="field" value="is_admin">
-                  <button class="btn small secondary" type="submit">Alternar admin</button>
-                </form>
-                <form method="post" action="/admin/users/permissions" class="inline-form inline-form--permissions user-action-wide">
-                  <input type="hidden" name="user_id" value="{{u.id}}">
-                  <select name="permissions" multiple class="select-multiple select-multiple--compact" size="{{permission_select_size}}" {% if not available_permissions %}disabled{% endif %}>
-                    {% for perm in available_permissions %}
-                    <option value="{{perm.code}}" {% if perm.code in u.permission_codes %}selected{% endif %}>{{perm.name}}</option>
-                    {% endfor %}
-                  </select>
-                  <button class="btn small tertiary" type="submit" {% if not available_permissions %}disabled{% endif %}>Atualizar permissões</button>
-                </form>
-                <form method="post" action="/admin/users/reset-password" class="inline-form inline-form--password user-action-wide">
-                  <input type="hidden" name="user_id" value="{{u.id}}">
-                  <input type="password" name="new_password" placeholder="Nova senha" minlength="6" required>
-                  <button class="btn small tertiary" type="submit">Resetar senha</button>
-                </form>
-                <form method="post" action="/admin/users/delete" class="inline-form" onsubmit="return confirm('Tem certeza que deseja excluir {{u.username}}? Esta ação não pode ser desfeita.');">
-                  <input type="hidden" name="user_id" value="{{u.id}}">
-                  <button class="btn small danger" type="submit">Excluir</button>
-                </form>
+              <div class="user-actions user-actions--grouped">
+                <div class="action-group">
+                  <div class="group-label">Status</div>
+                  <form method="post" action="/admin/users/toggle" class="inline-form">
+                    <input type="hidden" name="user_id" value="{{u.id}}">
+                    <input type="hidden" name="field" value="is_active">
+                    <button class="btn small secondary" type="submit">Alternar ativo</button>
+                  </form>
+                </div>
+                <div class="action-group">
+                  <div class="group-label">Perfil</div>
+                  <form method="post" action="/admin/users/toggle" class="inline-form">
+                    <input type="hidden" name="user_id" value="{{u.id}}">
+                    <input type="hidden" name="field" value="is_admin">
+                    <button class="btn small secondary" type="submit">Alternar admin</button>
+                  </form>
+                </div>
+                <div class="action-group action-group--wide">
+                  <div class="group-label">Permissões</div>
+                  <form method="post" action="/admin/users/permissions" class="inline-form inline-form--permissions user-action-wide">
+                    <input type="hidden" name="user_id" value="{{u.id}}">
+                    <select name="permissions" multiple class="select-multiple select-multiple--compact" size="{{permission_select_size}}" {% if not available_permissions %}disabled{% endif %}>
+                      {% for perm in available_permissions %}
+                      <option value="{{perm.code}}" {% if perm.code in u.permission_codes %}selected{% endif %}>{{perm.name}}</option>
+                      {% endfor %}
+                    </select>
+                    <button class="btn small tertiary" type="submit" {% if not available_permissions %}disabled{% endif %}>Atualizar permissões</button>
+                  </form>
+                </div>
+                <div class="action-group action-group--wide">
+                  <div class="group-label">Credenciais</div>
+                  <form method="post" action="/admin/users/reset-password" class="inline-form inline-form--password user-action-wide">
+                    <input type="hidden" name="user_id" value="{{u.id}}">
+                    <input type="password" name="new_password" placeholder="Nova senha" minlength="6" required>
+                    <button class="btn small tertiary" type="submit">Resetar senha</button>
+                  </form>
+                </div>
+                <div class="action-group">
+                  <div class="group-label">Remoção</div>
+                  <form method="post" action="/admin/users/delete" class="inline-form" onsubmit="return confirm('Tem certeza que deseja excluir {{u.username}}? Esta ação não pode ser desfeita.');">
+                    <input type="hidden" name="user_id" value="{{u.id}}">
+                    <button class="btn small danger" type="submit">Excluir</button>
+                  </form>
+                </div>
               </div>
             </td>
           </tr>
