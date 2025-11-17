@@ -212,6 +212,10 @@
           <input type="text" id="env-siem" name="siem" placeholder="Ex: QRadar">
         </div>
         <div class="form-field">
+          <label for="env-api-token">API Key</label>
+          <input type="text" id="env-api-token" name="api_token" placeholder="Chave da API do SIEM">
+        </div>
+        <div class="form-field">
           <label for="env-host">Host</label>
           <input type="text" id="env-host" name="host" placeholder="Hostname ou IP">
         </div>
@@ -350,6 +354,7 @@
       form.querySelector('[name="name"]').value = env?.name || '';
       form.querySelector('[name="codigo"]').value = env?.codigo || '';
       form.querySelector('[name="siem"]').value = env?.siem || '';
+      form.querySelector('[name="api_token"]').value = env?.api_token || '';
       form.querySelector('[name="host"]').value = env?.host || '';
       form.querySelector('[name="collector"]').value = env?.collector || '';
       form.querySelector('[name="ssh_user"]').value = env?.ssh_user || '';
@@ -395,6 +400,7 @@
           name: form.querySelector('[name="name"]').value,
           codigo: form.querySelector('[name="codigo"]').value,
           siem: form.querySelector('[name="siem"]').value,
+          api_token: form.querySelector('[name="api_token"]').value,
           host: form.querySelector('[name="host"]').value,
           collector: form.querySelector('[name="collector"]').value,
           ssh_user: form.querySelector('[name="ssh_user"]').value,

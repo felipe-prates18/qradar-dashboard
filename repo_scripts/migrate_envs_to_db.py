@@ -27,15 +27,35 @@ def main() -> None:
     with CONFIG_PATH.open("r", encoding="utf-8") as fp:
         config = json.load(fp)
     envs = config.get("qradar_envs") or []
+    tokens_map = {
+        str(key): str(value)
+        for key, value in (config.get("qradar_api", {}).get("tokens") or {}).items()
+        if key and value
+    }
+
+    enriched_envs = []
+    migrated_tokens = 0
+    for env in envs:
+        item = dict(env)
+        code = item.get("codigo") or item.get("code")
+        if code and not item.get("api_token"):
+            token = tokens_map.get(str(code))
+            if token:
+                item["api_token"] = token
+                migrated_tokens += 1
+        enriched_envs.append(item)
 
     con = sqlite3.connect(str(DB_PATH))
     try:
         con.row_factory = sqlite3.Row
-        inserted = environment_store.upsert_many(con, envs)
+        environment_store.ensure_schema(con)
+        inserted = environment_store.upsert_many(con, enriched_envs)
     finally:
         con.close()
 
     print(f"{inserted} ambientes migrados para {DB_PATH}")
+    if migrated_tokens:
+        print(f"{migrated_tokens} tokens associados aos ambientes")
 
 
 if __name__ == "__main__":

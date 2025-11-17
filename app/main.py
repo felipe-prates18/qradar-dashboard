@@ -353,7 +353,24 @@ def _load_environments_from_db() -> List[Dict[str, Any]]:
 
 def _config_with_envs() -> Dict[str, Any]:
     config = dict(CONFIG)
-    config["qradar_envs"] = _load_environments_from_db()
+    db_envs = _load_environments_from_db()
+    config["qradar_envs"] = db_envs
+
+    api_conf = dict(config.get("qradar_api") or {})
+    tokens_map: Dict[str, str] = {}
+    for env in db_envs:
+        code = env.get("codigo") or env.get("code")
+        api_token = env.get("api_token")
+        if code and api_token:
+            tokens_map[str(code)] = api_token
+
+    for key, value in (api_conf.get("tokens") or {}).items():
+        if key and value and key not in tokens_map:
+            tokens_map[str(key)] = str(value)
+
+    if tokens_map:
+        api_conf["tokens"] = tokens_map
+    config["qradar_api"] = api_conf
     return config
 
 
@@ -632,6 +649,7 @@ def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "connectivity_targets": _parse_json_array(data.get("connectivity_targets")),
         "codigo": _normalize_text(data.get("codigo")),
         "siem": _normalize_text(data.get("siem")),
+        "api_token": _normalize_text(data.get("api_token")),
     }
     return payload
 

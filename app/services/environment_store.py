@@ -22,6 +22,7 @@ def ensure_schema(con: Connection) -> None:
             connectivity_targets_json TEXT,
             codigo TEXT,
             siem TEXT,
+            api_token TEXT,
             created_at TEXT,
             updated_at TEXT
         )
@@ -39,6 +40,11 @@ def ensure_schema(con: Connection) -> None:
         ON environments(codigo)
         """
     )
+    cur.execute("PRAGMA table_info(environments)")
+    existing_columns = {row[1] for row in cur.fetchall()}
+    if "api_token" not in existing_columns:
+        cur.execute("ALTER TABLE environments ADD COLUMN api_token TEXT")
+    con.commit()
 
 
 def _loads_json(raw: Optional[str]) -> list:
@@ -74,6 +80,7 @@ def _serialize_row(row) -> Dict[str, Any]:
         "connectivity_targets": _loads_json(row["connectivity_targets_json"]),
         "codigo": row["codigo"],
         "siem": row["siem"],
+        "api_token": row["api_token"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -86,7 +93,7 @@ def list_environments(con: Connection) -> List[Dict[str, Any]]:
         """
         SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
                appliances_json, connectivity_targets_json, codigo, siem,
-               created_at, updated_at
+               api_token, created_at, updated_at
         FROM environments
         ORDER BY name COLLATE NOCASE
         """
@@ -101,7 +108,7 @@ def get_environment(con: Connection, env_id: int) -> Optional[Dict[str, Any]]:
         """
         SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
                appliances_json, connectivity_targets_json, codigo, siem,
-               created_at, updated_at
+               api_token, created_at, updated_at
         FROM environments
         WHERE id=?
         LIMIT 1
@@ -137,6 +144,7 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
         connectivity_json,
         payload.get("codigo"),
         payload.get("siem"),
+        payload.get("api_token"),
     )
 
     cur = con.cursor()
@@ -146,7 +154,7 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
             UPDATE environments
             SET name=?, host=?, collector=?, ssh_user=?, ssh_key=?, jmx_port=?,
                 jmx_bean=?, appliances_json=?, connectivity_targets_json=?,
-                codigo=?, siem=?, updated_at=?
+                codigo=?, siem=?, api_token=?, updated_at=?
             WHERE id=?
             """,
             (*fields, now, env_id),
@@ -159,8 +167,8 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
         INSERT INTO environments (
             name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
             appliances_json, connectivity_targets_json, codigo, siem,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            api_token, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (*fields, now, now),
     )
