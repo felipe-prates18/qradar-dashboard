@@ -1033,6 +1033,45 @@ button.summary-chip:focus-visible {
   white-space: nowrap;
 }
 
+.tech-catalog-card {
+  margin-top: 18px;
+  padding: 18px 22px;
+  background: rgba(11, 36, 28, 0.55);
+  border: 1px solid rgba(38, 99, 77, 0.35);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tech-catalog-header h4 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.tech-catalog-grid {
+  margin-top: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.tech-catalog-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tech-catalog-results .table-wrapper {
+  margin: 0;
+}
+
+.tech-catalog-table td:first-child {
+  width: 220px;
+}
+
+.tech-catalog-tags {
+  justify-content: flex-start;
+}
+
 .modal {
   position: fixed;
   inset: 0;
