@@ -39,7 +39,7 @@ from requests.exceptions import RequestException
 from .collectors import collect_monitoring_data, collect_health_data
 from .alerts import AlertManager
 from . import threat_hunting
-from .services import qradar_rules
+from .services import environment_store, qradar_rules
 
 try:
     from urllib3.exceptions import InsecureRequestWarning
@@ -52,7 +52,9 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR.parent / "users.db"
 
 with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
-    CONFIG = json.load(f)
+    _RAW_CONFIG = json.load(f)
+
+CONFIG = {key: value for key, value in _RAW_CONFIG.items() if key != "qradar_envs"}
 
 THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS = [
     "Firewall",
@@ -118,6 +120,11 @@ class _DataCache:
             self._payload = payload
             self._collected_at = timestamp
 
+    def clear(self) -> None:
+        with self._lock:
+            self._payload = None
+            self._collected_at = None
+
     def refresh(self, fetcher: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
         payload = fetcher()
         self.store(payload)
@@ -149,21 +156,32 @@ _health_cache = _DataCache(CACHE_TTL_SECONDS)
 _threat_hunting_cache = _DataCache(CACHE_TTL_SECONDS)
 
 
+def _invalidate_environment_caches() -> None:
+    _monitoring_cache.clear()
+    _health_cache.clear()
+    _threat_hunting_cache.clear()
+
+
 def _refresh_monitoring_cache() -> Dict[str, Any]:
-    return _monitoring_cache.refresh(lambda: collect_monitoring_data(CONFIG, logger=logger))
+    return _monitoring_cache.refresh(
+        lambda: collect_monitoring_data(_config_with_envs(), logger=logger)
+    )
 
 
 def _refresh_health_cache() -> Dict[str, Any]:
-    return _health_cache.refresh(lambda: collect_health_data(CONFIG, logger=logger))
+    return _health_cache.refresh(
+        lambda: collect_health_data(_config_with_envs(), logger=logger)
+    )
 
 
 def _collect_threat_hunting_counts() -> Dict[str, Any]:
+    config_with_envs = _config_with_envs()
     try:
         (
             environment_counts,
             _unused_monthly_counts,
             summary_errors,
-        ) = qradar_rules.collect_rule_statistics(CONFIG, logger=logger)
+        ) = qradar_rules.collect_rule_statistics(config_with_envs, logger=logger)
     except Exception:
         logger.exception("Falha ao consultar totais de regras do QRadar")
         environment_counts = []
@@ -175,7 +193,7 @@ def _collect_threat_hunting_counts() -> Dict[str, Any]:
         (
             log_source_types,
             log_source_errors,
-        ) = qradar_rules.collect_log_source_types(CONFIG, logger=logger)
+        ) = qradar_rules.collect_log_source_types(config_with_envs, logger=logger)
     except Exception:
         logger.exception(
             "Falha ao consultar tecnologias de log source do QRadar"
@@ -319,7 +337,7 @@ _cache_refresh_stop: Optional[asyncio.Event] = None
 
 
 alert_manager = AlertManager(
-    CONFIG,
+    _config_with_envs(),
     fetch_monitoring=_get_monitoring_payload,
     fetch_health=_get_health_payload,
     logger=logger,
@@ -414,6 +432,21 @@ def _con():
     return con
 
 
+def _load_environments_from_db() -> List[Dict[str, Any]]:
+    con = _con()
+    try:
+        environment_store.ensure_schema(con)
+        return environment_store.list_environments(con)
+    finally:
+        con.close()
+
+
+def _config_with_envs() -> Dict[str, Any]:
+    config = dict(CONFIG)
+    config["qradar_envs"] = _load_environments_from_db()
+    return config
+
+
 def _prepare_threat_hunting_schema() -> None:
     con = _con()
     try:
@@ -423,7 +456,7 @@ def _prepare_threat_hunting_schema() -> None:
 
 
 def _environment_name_map() -> Dict[str, str]:
-    envs = CONFIG.get("qradar_envs", []) or []
+    envs = _load_environments_from_db()
     mapping: Dict[str, str] = {}
     for env in envs:
         raw_name = env.get("name")
@@ -538,7 +571,7 @@ def _build_environment_config_lookup(
     env_name_map: Dict[str, str]
 ) -> Dict[str, Dict[str, Any]]:
     lookup: Dict[str, Dict[str, Any]] = {}
-    for env in CONFIG.get("qradar_envs", []) or []:
+    for env in _load_environments_from_db() or []:
         if not isinstance(env, dict):
             continue
         keys: set[str] = set()
@@ -560,6 +593,47 @@ def _build_environment_config_lookup(
         for key in keys:
             lookup.setdefault(key, env)
     return lookup
+
+
+def _parse_json_array(raw: Any) -> list:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            return []
+    return []
+
+
+def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_text(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    payload = {
+        "name": _normalize_text(data.get("name")) or "",
+        "host": _normalize_text(data.get("host")),
+        "collector": _normalize_text(data.get("collector")),
+        "ssh_user": _normalize_text(data.get("ssh_user")),
+        "ssh_key": _normalize_text(data.get("ssh_key")),
+        "jmx_port": data.get("jmx_port"),
+        "jmx_bean": _normalize_text(data.get("jmx_bean")),
+        "appliances": _parse_json_array(data.get("appliances")),
+        "connectivity_targets": _parse_json_array(data.get("connectivity_targets")),
+        "codigo": _normalize_text(data.get("codigo")),
+        "siem": _normalize_text(data.get("siem")),
+    }
+    return payload
 
 
 def _build_monthly_series(
@@ -724,7 +798,7 @@ def get_clients(user: str = Depends(verify_user_required_api)):
             "host": e.get("host", ""),
             "code": e.get("codigo") or e.get("code") or "",
         }
-        for e in CONFIG.get("qradar_envs", [])
+        for e in _load_environments_from_db()
     ]
     return JSONResponse(clients)
 
@@ -746,6 +820,81 @@ def handle_authentication_error(request: Request, exc: AuthenticationError):
         {"request": request, "message": exc.message},
         status_code=401,
     )
+
+
+async def _extract_request_json(request: Request) -> Dict[str, Any]:
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    return data
+
+
+@app.get("/api/admin/environments")
+def api_list_environments(user: str = Depends(verify_user_required_api)):
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin required")
+    return _load_environments_from_db()
+
+
+@app.get("/api/admin/environments/{env_id}")
+def api_get_environment(env_id: int, user: str = Depends(verify_user_required_api)):
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin required")
+    con = _con()
+    try:
+        environment_store.ensure_schema(con)
+        env = environment_store.get_environment(con, env_id)
+        if not env:
+            raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+        return env
+    finally:
+        con.close()
+
+
+@app.post("/api/admin/environments")
+async def api_create_environment(
+    request: Request, user: str = Depends(verify_user_required_api)
+):
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin required")
+    raw_payload = await _extract_request_json(request)
+    payload = _normalize_environment_payload(raw_payload)
+    if not payload.get("name"):
+        raise HTTPException(status_code=400, detail="Nome do ambiente é obrigatório")
+    con = _con()
+    try:
+        environment_store.ensure_schema(con)
+        env_id = environment_store.save_environment(con, payload)
+    finally:
+        con.close()
+    _invalidate_environment_caches()
+    return {"id": env_id}
+
+
+@app.put("/api/admin/environments/{env_id}")
+async def api_update_environment(
+    env_id: int, request: Request, user: str = Depends(verify_user_required_api)
+):
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin required")
+    raw_payload = await _extract_request_json(request)
+    payload = _normalize_environment_payload(raw_payload)
+    if not payload.get("name"):
+        raise HTTPException(status_code=400, detail="Nome do ambiente é obrigatório")
+    con = _con()
+    try:
+        environment_store.ensure_schema(con)
+        existing = environment_store.get_environment(con, env_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+        environment_store.save_environment(con, payload, env_id=env_id)
+    finally:
+        con.close()
+    _invalidate_environment_caches()
+    return {"id": env_id}
 
 
 def _redirect_admin_users(success: Optional[str] = None, error: Optional[str] = None) -> RedirectResponse:
