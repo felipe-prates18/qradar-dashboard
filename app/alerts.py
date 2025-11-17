@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone, time
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import requests
+import time as time_module
+from urllib3.exceptions import NameResolutionError
 
 
 def _parse_percent(value: Any) -> Optional[float]:
@@ -151,6 +153,21 @@ class AlertManager:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=wait_seconds)
             except asyncio.TimeoutError:
                 continue
+
+    def run_once(self) -> None:
+        """Executa a rotina de alertas uma vez, de forma síncrona."""
+
+        started_at = time_module.monotonic()
+        self.logger.info("Execução manual da rotina de alertas iniciada")
+        try:
+            self._perform_checks()
+        except Exception:
+            self.logger.exception("Erro ao executar rotina de alertas manualmente")
+            raise
+        elapsed = time_module.monotonic() - started_at
+        self.logger.info(
+            "Execução manual da rotina de alertas concluída em %.2fs", elapsed
+        )
 
     def _perform_checks(self) -> None:
         now = datetime.now()
@@ -307,19 +324,61 @@ class AlertManager:
                         headers,
                         body,
                     )
-                    response = requests.post(
-                        url,
-                        headers=headers,
-                        data=body.encode("utf-8"),
-                        timeout=10,
-                    )
-                    self.logger.debug(
-                        "Resposta do webhook do Teams (%s) | status=%s corpo=%s",
-                        label,
-                        getattr(response, "status_code", "desconhecido"),
-                        (response.text[:1000] if getattr(response, "text", None) else ""),
-                    )
-                    response.raise_for_status()
+
+                    response = None
+                    attempts = 3
+                    for attempt in range(1, attempts + 1):
+                        try:
+                            response = requests.post(
+                                url,
+                                headers=headers,
+                                data=body.encode("utf-8"),
+                                timeout=10,
+                            )
+                            self.logger.debug(
+                                "Resposta do webhook do Teams (%s) | status=%s corpo=%s",
+                                label,
+                                getattr(response, "status_code", "desconhecido"),
+                                (response.text[:1000] if getattr(response, "text", None) else ""),
+                            )
+                            response.raise_for_status()
+                            break
+                        except requests.RequestException as exc:
+                            resp = getattr(exc, "response", None)
+                            if resp is not None:
+                                body_resp = resp.text[:1000] if getattr(resp, "text", None) else ""
+                                self.logger.warning(
+                                    "Tentativa %d/%d falhou (%s) | status=%s corpo=%s",
+                                    attempt,
+                                    attempts,
+                                    label,
+                                    resp.status_code,
+                                    body_resp,
+                                )
+                            else:
+                                if self._is_name_resolution_error(exc):
+                                    self.logger.error(
+                                        "Tentativa %d/%d falhou (%s) por erro de DNS. "
+                                        "Verifique o hostname do webhook e a resolução de DNS antes de reativar o envio. | erro=%s",
+                                        attempt,
+                                        attempts,
+                                        label,
+                                        exc,
+                                    )
+                                    raise
+
+                                self.logger.warning(
+                                    "Tentativa %d/%d falhou (%s) sem resposta HTTP | erro=%s",
+                                    attempt,
+                                    attempts,
+                                    label,
+                                    exc,
+                                )
+                            if attempt < attempts:
+                                time_module.sleep(2 * attempt)
+                                continue
+                            raise
+
                     self.logger.info("Alerta enviado com sucesso (%s): %s", label, title)
                 except requests.RequestException as exc:
                     resp = getattr(exc, "response", None)
@@ -333,11 +392,28 @@ class AlertManager:
                         )
                     else:
                         self.logger.exception(
-                            "Falha ao enviar alerta para o Microsoft Teams (%s) sem resposta HTTP",
+                            "Falha ao enviar alerta para o Microsoft Teams (%s) sem resposta HTTP | erro=%s",
                             label,
+                            exc,
                         )
         except Exception:
             self.logger.exception("Falha inesperada ao enviar alerta para o Microsoft Teams")
+
+    @staticmethod
+    def _is_name_resolution_error(exc: BaseException) -> bool:
+        current: Optional[BaseException] = exc
+        while current is not None:
+            if isinstance(current, NameResolutionError):
+                return True
+
+            message = str(current)
+            lowered = message.lower()
+            if "failed to resolve" in lowered or "name resolution" in lowered:
+                return True
+
+            current = current.__cause__ or current.__context__
+
+        return False
 
     def _process_monitoring_alerts(self, monitoring: Dict[str, Any], now: datetime) -> None:
         rows = monitoring.get("rows") or []
