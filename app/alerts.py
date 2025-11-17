@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import requests
 import time as time_module
+from urllib3.exceptions import NameResolutionError
 
 
 def _parse_percent(value: Any) -> Optional[float]:
@@ -355,6 +356,17 @@ class AlertManager:
                                     body_resp,
                                 )
                             else:
+                                if self._is_name_resolution_error(exc):
+                                    self.logger.error(
+                                        "Tentativa %d/%d falhou (%s) por erro de DNS. "
+                                        "Verifique o hostname do webhook e a resolução de DNS antes de reativar o envio. | erro=%s",
+                                        attempt,
+                                        attempts,
+                                        label,
+                                        exc,
+                                    )
+                                    raise
+
                                 self.logger.warning(
                                     "Tentativa %d/%d falhou (%s) sem resposta HTTP | erro=%s",
                                     attempt,
@@ -386,6 +398,22 @@ class AlertManager:
                         )
         except Exception:
             self.logger.exception("Falha inesperada ao enviar alerta para o Microsoft Teams")
+
+    @staticmethod
+    def _is_name_resolution_error(exc: BaseException) -> bool:
+        current: Optional[BaseException] = exc
+        while current is not None:
+            if isinstance(current, NameResolutionError):
+                return True
+
+            message = str(current)
+            lowered = message.lower()
+            if "failed to resolve" in lowered or "name resolution" in lowered:
+                return True
+
+            current = current.__cause__ or current.__context__
+
+        return False
 
     def _process_monitoring_alerts(self, monitoring: Dict[str, Any], now: datetime) -> None:
         rows = monitoring.get("rows") or []
