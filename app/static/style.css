@@ -426,6 +426,7 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
   padding: 6px 8px;
   border-radius: 10px;
   cursor: pointer;
@@ -435,8 +436,8 @@ textarea:focus {
 .data-table th.is-numeric .sort-button {
   justify-content: flex-end;
   margin-left: auto;
-  width: 100%;
   text-align: right;
+  min-width: 0;
 }
 
 .sort-button:hover,
