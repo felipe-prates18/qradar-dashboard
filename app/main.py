@@ -961,9 +961,12 @@ async def run_alerts_now(
             status_code=403,
         )
     try:
-        await asyncio.to_thread(alert_manager.run_once)
+        await asyncio.to_thread(_refresh_all_caches)
+        await asyncio.to_thread(alert_manager.run_once, True)
     except Exception:
-        logger.exception("Erro ao executar rotina de alertas a partir do painel admin")
+        logger.exception(
+            "Alerta - Erro ao executar rotina de alertas a partir do painel admin"
+        )
         return _redirect_admin_users(
             error="Falha ao executar a rotina de alertas. Verifique os logs."
         )

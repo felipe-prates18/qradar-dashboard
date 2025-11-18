@@ -62,6 +62,11 @@ def _parse_expiration(raw: Any) -> Optional[datetime]:
     return None
 
 
+class _AlertLoggerAdapter(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        return f"Alerta - {msg}", kwargs
+
+
 class AlertManager:
     def __init__(
         self,
@@ -74,7 +79,8 @@ class AlertManager:
         self.config = config
         self._fetch_monitoring = fetch_monitoring
         self._fetch_health = fetch_health
-        self.logger = logger or logging.getLogger(__name__)
+        base_logger = logger or logging.getLogger(__name__)
+        self.logger = _AlertLoggerAdapter(base_logger, {})
         alerts_conf = config.get("alerts", {}) or {}
         self.webhook_url = (
             alerts_conf.get("teams_webhook_url")
@@ -154,13 +160,13 @@ class AlertManager:
             except asyncio.TimeoutError:
                 continue
 
-    def run_once(self) -> None:
+    def run_once(self, *, force_send: bool = False) -> None:
         """Executa a rotina de alertas uma vez, de forma síncrona."""
 
         started_at = time_module.monotonic()
         self.logger.info("Execução manual da rotina de alertas iniciada")
         try:
-            self._perform_checks()
+            self._perform_checks(force_send=force_send)
         except Exception:
             self.logger.exception("Erro ao executar rotina de alertas manualmente")
             raise
@@ -169,7 +175,7 @@ class AlertManager:
             "Execução manual da rotina de alertas concluída em %.2fs", elapsed
         )
 
-    def _perform_checks(self) -> None:
+    def _perform_checks(self, *, force_send: bool = False) -> None:
         now = datetime.now()
         try:
             monitoring = self._fetch_monitoring()
@@ -185,7 +191,7 @@ class AlertManager:
 
         if monitoring is not None:
             if monitoring:
-                self._process_monitoring_alerts(monitoring, now)
+                self._process_monitoring_alerts(monitoring, now, force_send=force_send)
             else:
                 self.logger.info("Dados de monitoramento vazios recebidos para alertas")
         else:
@@ -365,7 +371,7 @@ class AlertManager:
                                         label,
                                         exc,
                                     )
-                                    raise
+                                    return
 
                                 self.logger.warning(
                                     "Tentativa %d/%d falhou (%s) sem resposta HTTP | erro=%s",
@@ -415,7 +421,9 @@ class AlertManager:
 
         return False
 
-    def _process_monitoring_alerts(self, monitoring: Dict[str, Any], now: datetime) -> None:
+    def _process_monitoring_alerts(
+        self, monitoring: Dict[str, Any], now: datetime, *, force_send: bool = False
+    ) -> None:
         rows = monitoring.get("rows") or []
         self.logger.debug("Processando %d registros de monitoramento", len(rows))
         for row in rows:
@@ -430,7 +438,9 @@ class AlertManager:
                 self._check_usage_alerts(env_label, code, component, appliance, now)
 
             self._check_eps_alert(row, env_label, code, now)
-            self._check_license_alert(row, env_label, code, now)
+            self._check_license_alert(
+                row, env_label, code, now, force_send=force_send
+            )
 
     def _check_usage_alerts(
         self,
@@ -582,7 +592,9 @@ class AlertManager:
         else:
             self._eps_state.pop(code, None)
 
-    def _check_license_alert(self, row: Dict[str, Any], env_label: str, code: str, now: datetime) -> None:
+    def _check_license_alert(
+        self, row: Dict[str, Any], env_label: str, code: str, now: datetime, *, force_send: bool
+    ) -> None:
         expirations = row.get("license_exp_list") or []
         if not expirations and row.get("license_exp"):
             expirations = [row.get("license_exp")]
@@ -610,7 +622,7 @@ class AlertManager:
             "Licença de %s expira em %d dias (data %s)", env_label, days_until, soonest.date()
         )
 
-        send_time = self._license_send_time
+        send_time = time(0, 0) if force_send else self._license_send_time
 
         if days_until <= 15:
             last_sent = state.get("critical_date")
@@ -645,7 +657,7 @@ class AlertManager:
                 if not state.get("warning_schedule_date"):
                     state["warning_schedule_date"] = now.date()
                 send_dt = datetime.combine(state["warning_schedule_date"], send_time)
-                if now < send_dt:
+                if not force_send and now < send_dt:
                     return
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
@@ -673,7 +685,7 @@ class AlertManager:
                 if not state.get("info_schedule_date"):
                     state["info_schedule_date"] = now.date()
                 send_dt = datetime.combine(state["info_schedule_date"], send_time)
-                if now < send_dt:
+                if not force_send and now < send_dt:
                     return
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
