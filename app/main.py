@@ -962,7 +962,7 @@ async def run_alerts_now(
         )
     try:
         await asyncio.to_thread(_refresh_all_caches)
-        await asyncio.to_thread(alert_manager.run_once, True)
+        await asyncio.to_thread(alert_manager.run_once, force_send=True)
     except Exception:
         logger.exception(
             "Alerta - Erro ao executar rotina de alertas a partir do painel admin"
