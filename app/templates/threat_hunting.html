@@ -75,6 +75,11 @@
           <h3>Tecnologias por cliente</h3>
           <p class="muted">Use os filtros para descobrir quais clientes possuem cada tecnologia de Log Source.</p>
         </div>
+        <div class="tech-catalog-actions">
+          <button type="button" class="btn secondary small" data-tech-catalog-export>
+            Exportar CSV
+          </button>
+        </div>
       </header>
       <div class="form-grid tech-catalog-grid">
         <div class="form-field">
@@ -119,6 +124,11 @@
         <div>
           <h3>Clientes por tecnologia</h3>
           <p class="muted">Descubra rapidamente quais clientes possuem uma tecnologia específica de Log Source.</p>
+        </div>
+        <div class="tech-catalog-actions">
+          <button type="button" class="btn secondary small" data-tech-inverse-export>
+            Exportar CSV
+          </button>
         </div>
       </header>
       <div class="form-grid tech-catalog-grid">
@@ -194,6 +204,27 @@
 
     function normalizeLower(text) {
       return typeof text === 'string' ? text.trim().toLowerCase() : '';
+    }
+
+    function csvEscape(value) {
+      const text = value === null || value === undefined ? '' : String(value);
+      return `"${text.replace(/"/g, '""')}"`;
+    }
+
+    function downloadCsv(filename, headers, rows) {
+      const headerLine = headers.map(csvEscape).join(',');
+      const lines = rows.map(row => row.map(csvEscape).join(','));
+      const csvContent = [headerLine, ...lines].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
     function clearElement(el) {
@@ -405,11 +436,13 @@
       const emptyEl = document.querySelector('[data-tech-catalog-empty]');
       const sortButton = document.querySelector('[data-tech-catalog-sort]');
       const sortIndicator = document.querySelector('[data-tech-catalog-sort-indicator]');
+      const exportButton = document.querySelector('[data-tech-catalog-export]');
       if (!clientInput || !techInput || !tableBody || !emptyEl || !clientOptions || !techOptions || !sortButton || !sortIndicator) {
         return;
       }
 
       let sortDesc = true;
+      let currentRows = [];
 
       const catalogData = Object.values(environmentSummaryData || {}).reduce((acc, value) => {
         const name = value && value.name ? String(value.name).trim() : '';
@@ -476,6 +509,8 @@
             return a.name.localeCompare(b.name);
           });
 
+        currentRows = sortedEntries;
+
         sortedEntries.forEach(entry => {
           const row = document.createElement('tr');
           const nameCell = document.createElement('td');
@@ -514,6 +549,21 @@
         renderResults();
       });
 
+      if (exportButton) {
+        exportButton.addEventListener('click', () => {
+          if (!currentRows.length) {
+            window.alert('Nenhum resultado para exportar no momento.');
+            return;
+          }
+          const rows = currentRows.map(item => [
+            item.name,
+            item.technologies.join('; '),
+            item.quantity,
+          ]);
+          downloadCsv('tecnologias-por-cliente.csv', ['Cliente', 'Tecnologias de Log Source', 'Quantidade'], rows);
+        });
+      }
+
       updateSortIndicator();
       renderResults();
     }
@@ -527,12 +577,14 @@
       const emptyEl = document.querySelector('[data-tech-inverse-empty]');
       const sortButton = document.querySelector('[data-tech-inverse-sort]');
       const sortIndicator = document.querySelector('[data-tech-inverse-sort-indicator]');
+      const exportButton = document.querySelector('[data-tech-inverse-export]');
 
       if (!techInput || !clientInput || !tableBody || !emptyEl || !techOptions || !clientOptions || !sortButton || !sortIndicator) {
         return;
       }
 
       let sortDesc = true;
+      let currentRows = [];
 
       const techMap = new Map();
       Object.values(environmentSummaryData || {}).forEach(value => {
@@ -601,6 +653,8 @@
             return a.technology.localeCompare(b.technology);
           });
 
+        currentRows = sortedEntries;
+
         sortedEntries.forEach(entry => {
           const row = document.createElement('tr');
           const techCell = document.createElement('td');
@@ -634,6 +688,21 @@
         updateSortIndicator();
         renderInverseResults();
       });
+
+      if (exportButton) {
+        exportButton.addEventListener('click', () => {
+          if (!currentRows.length) {
+            window.alert('Nenhum resultado para exportar no momento.');
+            return;
+          }
+          const rows = currentRows.map(item => [
+            item.technology,
+            item.clients.join('; '),
+            item.quantity,
+          ]);
+          downloadCsv('clientes-por-tecnologia.csv', ['Tecnologia de Log Source', 'Clientes com a tecnologia', 'Quantidade'], rows);
+        });
+      }
 
       updateSortIndicator();
       renderInverseResults();
