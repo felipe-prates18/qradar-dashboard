@@ -100,9 +100,60 @@
               <tr>
                 <th>Cliente</th>
                 <th>Tecnologias de Log Source</th>
+                <th class="is-numeric">
+                  <button type="button" class="sort-button" data-tech-catalog-sort aria-label="Ordenar por quantidade">
+                    Quantidade
+                    <span aria-hidden="true" data-tech-catalog-sort-indicator>↓</span>
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody data-tech-catalog-body></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card tech-catalog-card tech-inverse-card">
+      <header class="tech-catalog-header">
+        <div>
+          <h3>Clientes por tecnologia</h3>
+          <p class="muted">Descubra rapidamente quais clientes possuem uma tecnologia específica de Log Source.</p>
+        </div>
+      </header>
+      <div class="form-grid tech-catalog-grid">
+        <div class="form-field">
+          <label for="tech-inverse-technology">Filtrar por tecnologia</label>
+          <input type="text" id="tech-inverse-technology" name="tech-inverse-technology" list="tech-inverse-technology-options" placeholder="Ex.: Firewall">
+          <datalist id="tech-inverse-technology-options"></datalist>
+        </div>
+        <div class="form-field">
+          <label for="tech-inverse-client">Filtrar por cliente</label>
+          <input type="text" id="tech-inverse-client" name="tech-inverse-client" list="tech-inverse-client-options" placeholder="Ex.: Cliente A">
+          <datalist id="tech-inverse-client-options">
+            {% for option in environment_options %}
+            <option value="{{option}}">
+            {% endfor %}
+          </datalist>
+        </div>
+      </div>
+      <div class="tech-catalog-results">
+        <p class="muted" data-tech-inverse-empty>Selecione um cliente ou tecnologia para visualizar as correspondências.</p>
+        <div class="table-wrapper">
+          <table class="data-table tech-catalog-table">
+            <thead>
+              <tr>
+                <th>Tecnologia de Log Source</th>
+                <th>Clientes com a tecnologia</th>
+                <th class="is-numeric">
+                  <button type="button" class="sort-button" data-tech-inverse-sort aria-label="Ordenar por quantidade">
+                    Quantidade
+                    <span aria-hidden="true" data-tech-inverse-sort-indicator>↓</span>
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody data-tech-inverse-body></tbody>
           </table>
         </div>
       </div>
@@ -154,6 +205,7 @@
     document.addEventListener('DOMContentLoaded', function () {
       setupEnvironmentSummaryModal();
       setupTechCatalog();
+      setupInverseTechCatalog();
     });
 
     function setupEnvironmentSummaryModal() {
@@ -351,9 +403,13 @@
       const techOptions = document.getElementById('tech-catalog-technology-options');
       const tableBody = document.querySelector('[data-tech-catalog-body]');
       const emptyEl = document.querySelector('[data-tech-catalog-empty]');
-      if (!clientInput || !techInput || !tableBody || !emptyEl) {
+      const sortButton = document.querySelector('[data-tech-catalog-sort]');
+      const sortIndicator = document.querySelector('[data-tech-catalog-sort-indicator]');
+      if (!clientInput || !techInput || !tableBody || !emptyEl || !clientOptions || !techOptions || !sortButton || !sortIndicator) {
         return;
       }
+
+      let sortDesc = true;
 
       const catalogData = Object.values(environmentSummaryData || {}).reduce((acc, value) => {
         const name = value && value.name ? String(value.name).trim() : '';
@@ -384,6 +440,11 @@
       const techList = Array.from(techSet.values()).sort((a, b) => a.localeCompare(b));
       populateDatalist(techOptions, techList);
 
+      function updateSortIndicator() {
+        sortIndicator.textContent = sortDesc ? '↓' : '↑';
+        sortButton.setAttribute('aria-label', sortDesc ? 'Ordenar do maior para o menor' : 'Ordenar do menor para o maior');
+      }
+
       function renderResults() {
         clearElement(tableBody);
         const clientTerm = normalizeLower(clientInput.value);
@@ -402,7 +463,20 @@
         }
         emptyEl.hidden = true;
 
-        filtered.forEach(entry => {
+        const sortedEntries = filtered
+          .map(entry => ({
+            ...entry,
+            quantity: entry.technologies.length,
+          }))
+          .sort((a, b) => {
+            const diff = sortDesc ? b.quantity - a.quantity : a.quantity - b.quantity;
+            if (diff !== 0) {
+              return diff;
+            }
+            return a.name.localeCompare(b.name);
+          });
+
+        sortedEntries.forEach(entry => {
           const row = document.createElement('tr');
           const nameCell = document.createElement('td');
           nameCell.textContent = entry.name;
@@ -422,12 +496,145 @@
             });
           techCell.appendChild(techListEl);
           row.appendChild(techCell);
+
+          const quantityCell = document.createElement('td');
+          quantityCell.className = 'is-numeric';
+          quantityCell.textContent = entry.quantity;
+          row.appendChild(quantityCell);
+
           tableBody.appendChild(row);
         });
       }
 
       clientInput.addEventListener('input', renderResults);
       techInput.addEventListener('input', renderResults);
+      sortButton.addEventListener('click', () => {
+        sortDesc = !sortDesc;
+        updateSortIndicator();
+        renderResults();
+      });
+
+      updateSortIndicator();
+    }
+
+    function setupInverseTechCatalog() {
+      const techInput = document.getElementById('tech-inverse-technology');
+      const clientInput = document.getElementById('tech-inverse-client');
+      const techOptions = document.getElementById('tech-inverse-technology-options');
+      const clientOptions = document.getElementById('tech-inverse-client-options');
+      const tableBody = document.querySelector('[data-tech-inverse-body]');
+      const emptyEl = document.querySelector('[data-tech-inverse-empty]');
+      const sortButton = document.querySelector('[data-tech-inverse-sort]');
+      const sortIndicator = document.querySelector('[data-tech-inverse-sort-indicator]');
+
+      if (!techInput || !clientInput || !tableBody || !emptyEl || !techOptions || !clientOptions || !sortButton || !sortIndicator) {
+        return;
+      }
+
+      let sortDesc = true;
+
+      const techMap = new Map();
+      Object.values(environmentSummaryData || {}).forEach(value => {
+        const envName = value && value.name ? String(value.name).trim() : '';
+        const technologies = Array.isArray(value.log_source_types)
+          ? Array.from(new Set(value.log_source_types.filter(Boolean).map(item => String(item).trim())))
+          : [];
+        if (!envName || !technologies.length) {
+          return;
+        }
+        technologies.forEach(tech => {
+          const key = normalizeLower(tech);
+          if (!key) {
+            return;
+          }
+          const existing = techMap.get(key) || { label: tech, clients: [] };
+          if (!existing.clients.includes(envName)) {
+            existing.clients.push(envName);
+          }
+          techMap.set(key, existing);
+        });
+      });
+
+      const technologyEntries = Array.from(techMap.values()).map(item => ({
+        technology: item.label,
+        clients: item.clients.slice().sort((a, b) => a.localeCompare(b)),
+      })).sort((a, b) => a.technology.localeCompare(b.technology));
+
+      populateDatalist(techOptions, technologyEntries.map(item => item.technology));
+      populateDatalist(clientOptions, Array.from(new Set(technologyEntries.flatMap(item => item.clients))).sort((a, b) => a.localeCompare(b)));
+
+      function updateSortIndicator() {
+        sortIndicator.textContent = sortDesc ? '↓' : '↑';
+        sortButton.setAttribute('aria-label', sortDesc ? 'Ordenar do maior para o menor' : 'Ordenar do menor para o maior');
+      }
+
+      function renderInverseResults() {
+        clearElement(tableBody);
+        const techTerm = normalizeLower(techInput.value);
+        const clientTerm = normalizeLower(clientInput.value);
+
+        const filtered = technologyEntries.filter(item => {
+          const matchTech = techTerm ? normalizeLower(item.technology).includes(techTerm) : true;
+          const matchClient = clientTerm
+            ? item.clients.some(client => normalizeLower(client).includes(clientTerm))
+            : true;
+          return matchTech && matchClient;
+        });
+
+        if (!filtered.length) {
+          emptyEl.hidden = false;
+          return;
+        }
+
+        emptyEl.hidden = true;
+        const sortedEntries = filtered
+          .map(entry => ({
+            ...entry,
+            quantity: entry.clients.length,
+          }))
+          .sort((a, b) => {
+            const diff = sortDesc ? b.quantity - a.quantity : a.quantity - b.quantity;
+            if (diff !== 0) {
+              return diff;
+            }
+            return a.technology.localeCompare(b.technology);
+          });
+
+        sortedEntries.forEach(entry => {
+          const row = document.createElement('tr');
+          const techCell = document.createElement('td');
+          techCell.textContent = entry.technology;
+          row.appendChild(techCell);
+
+          const clientsCell = document.createElement('td');
+          const clientsList = document.createElement('ul');
+          clientsList.className = 'environment-summary-tags tech-catalog-tags';
+          entry.clients.forEach(client => {
+            const tag = document.createElement('li');
+            tag.className = 'environment-summary-tag';
+            tag.textContent = client;
+            clientsList.appendChild(tag);
+          });
+          clientsCell.appendChild(clientsList);
+          row.appendChild(clientsCell);
+
+          const quantityCell = document.createElement('td');
+          quantityCell.className = 'is-numeric';
+          quantityCell.textContent = entry.quantity;
+          row.appendChild(quantityCell);
+          tableBody.appendChild(row);
+        });
+      }
+
+      techInput.addEventListener('input', renderInverseResults);
+      clientInput.addEventListener('input', renderInverseResults);
+      sortButton.addEventListener('click', () => {
+        sortDesc = !sortDesc;
+        updateSortIndicator();
+        renderInverseResults();
+      });
+
+      updateSortIndicator();
     }
   </script>
 </body>
