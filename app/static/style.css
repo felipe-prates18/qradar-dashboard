@@ -432,6 +432,13 @@ textarea:focus {
   transition: background 0.2s ease, color 0.2s ease;
 }
 
+.data-table th.is-numeric .sort-button {
+  justify-content: flex-end;
+  margin-left: auto;
+  width: 100%;
+  text-align: right;
+}
+
 .sort-button:hover,
 .sort-button:focus-visible {
   background: rgba(38, 217, 141, 0.12);
