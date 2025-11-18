@@ -947,6 +947,34 @@ def _redirect_threat_hunting(
     return RedirectResponse(url=url, status_code=303)
 
 
+@app.post("/admin/alerts/run")
+async def run_alerts_now(
+    request: Request, user: str = Depends(verify_user_required_page)
+) -> Response:
+    if not is_admin(user):
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "message": "Você não tem permissão para acessar esta área.",
+            },
+            status_code=403,
+        )
+    try:
+        await asyncio.to_thread(_refresh_all_caches)
+        await asyncio.to_thread(alert_manager.run_once, force_send=True)
+    except Exception:
+        logger.exception(
+            "Alerta - Erro ao executar rotina de alertas a partir do painel admin"
+        )
+        return _redirect_admin_users(
+            error="Falha ao executar a rotina de alertas. Verifique os logs."
+        )
+    return _redirect_admin_users(
+        success="Rotina de alertas executada. Consulte os logs para detalhes."
+    )
+
+
 @app.get("/admin/users", response_class=HTMLResponse)
 def admin_users_page(request: Request, user: str = Depends(verify_user_required_page)):
     if not is_admin(user):
