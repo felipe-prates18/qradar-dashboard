@@ -636,6 +636,92 @@
 
       updateSortIndicator();
     }
+
+    function setupInverseTechCatalog() {
+      const techInput = document.getElementById('tech-inverse-technology');
+      const clientInput = document.getElementById('tech-inverse-client');
+      const techOptions = document.getElementById('tech-inverse-technology-options');
+      const clientOptions = document.getElementById('tech-inverse-client-options');
+      const tableBody = document.querySelector('[data-tech-inverse-body]');
+      const emptyEl = document.querySelector('[data-tech-inverse-empty]');
+
+      if (!techInput || !clientInput || !tableBody || !emptyEl) {
+        return;
+      }
+
+      const techMap = new Map();
+      Object.values(environmentSummaryData || {}).forEach(value => {
+        const envName = value && value.name ? String(value.name).trim() : '';
+        const technologies = Array.isArray(value.log_source_types)
+          ? Array.from(new Set(value.log_source_types.filter(Boolean).map(item => String(item).trim())))
+          : [];
+        if (!envName || !technologies.length) {
+          return;
+        }
+        technologies.forEach(tech => {
+          const key = normalizeLower(tech);
+          if (!key) {
+            return;
+          }
+          const existing = techMap.get(key) || { label: tech, clients: [] };
+          if (!existing.clients.includes(envName)) {
+            existing.clients.push(envName);
+          }
+          techMap.set(key, existing);
+        });
+      });
+
+      const technologyEntries = Array.from(techMap.values()).map(item => ({
+        technology: item.label,
+        clients: item.clients.slice().sort((a, b) => a.localeCompare(b)),
+      })).sort((a, b) => a.technology.localeCompare(b.technology));
+
+      populateDatalist(techOptions, technologyEntries.map(item => item.technology));
+      populateDatalist(clientOptions, Array.from(new Set(technologyEntries.flatMap(item => item.clients))).sort((a, b) => a.localeCompare(b)));
+
+      function renderInverseResults() {
+        clearElement(tableBody);
+        const techTerm = normalizeLower(techInput.value);
+        const clientTerm = normalizeLower(clientInput.value);
+
+        const filtered = technologyEntries.filter(item => {
+          const matchTech = techTerm ? normalizeLower(item.technology).includes(techTerm) : true;
+          const matchClient = clientTerm
+            ? item.clients.some(client => normalizeLower(client).includes(clientTerm))
+            : true;
+          return matchTech && matchClient;
+        });
+
+        if (!filtered.length) {
+          emptyEl.hidden = false;
+          return;
+        }
+
+        emptyEl.hidden = true;
+        filtered.forEach(entry => {
+          const row = document.createElement('tr');
+          const techCell = document.createElement('td');
+          techCell.textContent = entry.technology;
+          row.appendChild(techCell);
+
+          const clientsCell = document.createElement('td');
+          const clientsList = document.createElement('ul');
+          clientsList.className = 'environment-summary-tags tech-catalog-tags';
+          entry.clients.forEach(client => {
+            const tag = document.createElement('li');
+            tag.className = 'environment-summary-tag';
+            tag.textContent = client;
+            clientsList.appendChild(tag);
+          });
+          clientsCell.appendChild(clientsList);
+          row.appendChild(clientsCell);
+          tableBody.appendChild(row);
+        });
+      }
+
+      techInput.addEventListener('input', renderInverseResults);
+      clientInput.addEventListener('input', renderInverseResults);
+    }
   </script>
 </body>
 </html>
