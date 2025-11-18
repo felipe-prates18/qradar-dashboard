@@ -409,8 +409,41 @@ textarea:focus {
   border-top: 1px solid rgba(38, 99, 77, 0.3);
 }
 
+.data-table th.is-numeric,
+.data-table td.is-numeric {
+  text-align: right;
+}
+
 .data-table tbody tr:hover {
   background: var(--bg-card-hover);
+}
+
+.sort-button {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.data-table th.is-numeric .sort-button {
+  justify-content: flex-end;
+  margin-left: auto;
+  width: 100%;
+  text-align: right;
+}
+
+.sort-button:hover,
+.sort-button:focus-visible {
+  background: rgba(38, 217, 141, 0.12);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .actions-col {
@@ -1066,6 +1099,10 @@ button.summary-chip:focus-visible {
 
 .tech-catalog-table td:first-child {
   width: 220px;
+}
+
+.tech-inverse-card .tech-catalog-table td:first-child {
+  width: 260px;
 }
 
 .tech-catalog-tags {
