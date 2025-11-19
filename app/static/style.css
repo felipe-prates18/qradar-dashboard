@@ -298,7 +298,7 @@ textarea:focus {
 
 .form-fieldset {
   border: none;
-  padding: 18px;
+  padding: 14px;
   margin: 0;
   min-width: 0;
   border-radius: 20px;
@@ -311,17 +311,17 @@ textarea:focus {
 .form-fieldset legend {
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .checkbox-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 12px;
+  gap: 10px;
 }
 
 .checkbox-grid--scrollable {
-  max-height: min(320px, 40vh);
+  max-height: min(280px, 35vh);
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -829,11 +829,29 @@ button.summary-chip:focus-visible {
 .threat-form {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
 }
 
 .threat-basic-grid {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.threat-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.threat-meta-grid .form-fieldset {
+  grid-column: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.threat-meta-grid .checkbox-grid {
+  flex: 1;
 }
 
 .threat-form .form-actions {

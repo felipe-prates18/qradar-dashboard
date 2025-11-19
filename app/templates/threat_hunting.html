@@ -328,24 +328,10 @@
       </header>
       <form method="post" action="{% if edit_use_case %}/threat-hunting/use-cases/{{edit_use_case.id}}{% else %}/threat-hunting/use-cases{% endif %}" class="threat-form" data-create-action="/threat-hunting/use-cases" data-edit-action="{% if edit_use_case %}/threat-hunting/use-cases/{{edit_use_case.id}}{% endif %}">
         <div class="form-grid threat-basic-grid">
-          <div class="form-field">
+          <div class="form-field form-field--full">
             <label for="name">Nome</label>
             <input type="text" id="name" name="name" value="{{ edit_use_case.name if edit_use_case else '' }}" required>
           </div>
-          <fieldset class="form-field form-fieldset">
-            <legend>Ambientes</legend>
-            <div class="checkbox-grid checkbox-grid--scrollable" data-checkbox-group>
-              {% for option in environment_options %}
-              <label class="form-checkbox">
-                <input type="checkbox" name="environment" value="{{option}}" {% if edit_use_case and option in edit_use_case.environment_values %}checked{% endif %}>
-                <span>{{option}}</span>
-              </label>
-              {% endfor %}
-              {% if not environment_options %}
-              <p class="muted">Nenhum ambiente disponível no momento.</p>
-              {% endif %}
-            </div>
-          </fieldset>
           <div class="form-field">
             <label for="technology-input">Tecnologia</label>
             <input type="text" id="technology-input" name="technology" list="technology-options" value="{{ edit_use_case.technology if edit_use_case else '' }}" required>
@@ -355,20 +341,6 @@
               {% endfor %}
             </datalist>
           </div>
-          <fieldset class="form-field form-fieldset">
-            <legend>SIEM</legend>
-            <div class="checkbox-grid checkbox-grid--scrollable" data-checkbox-group>
-              {% for option in siem_options %}
-              <label class="form-checkbox">
-                <input type="checkbox" name="siem" value="{{option}}" {% if edit_use_case and option in edit_use_case.siem_values %}checked{% endif %}>
-                <span>{{option}}</span>
-              </label>
-              {% endfor %}
-              {% if not siem_options %}
-              <p class="muted">Nenhuma opção de SIEM cadastrada.</p>
-              {% endif %}
-            </div>
-          </fieldset>
           <div class="form-field">
             <label for="mitre-tactic-input">Tática MITRE</label>
             <input type="text" id="mitre-tactic-input" name="mitre_tactic" list="mitre-tactic-options" value="{{ edit_use_case.mitre_tactic if edit_use_case else '' }}">
@@ -396,6 +368,36 @@
               {% endfor %}
             </select>
           </div>
+        </div>
+        <div class="form-grid threat-meta-grid">
+          <fieldset class="form-field form-fieldset">
+            <legend>Ambientes</legend>
+            <div class="checkbox-grid checkbox-grid--scrollable" data-checkbox-group>
+              {% for option in environment_options %}
+              <label class="form-checkbox">
+                <input type="checkbox" name="environment" value="{{option}}" {% if edit_use_case and option in edit_use_case.environment_values %}checked{% endif %}>
+                <span>{{option}}</span>
+              </label>
+              {% endfor %}
+              {% if not environment_options %}
+              <p class="muted">Nenhum ambiente disponível no momento.</p>
+              {% endif %}
+            </div>
+          </fieldset>
+          <fieldset class="form-field form-fieldset">
+            <legend>SIEM</legend>
+            <div class="checkbox-grid checkbox-grid--scrollable" data-checkbox-group>
+              {% for option in siem_options %}
+              <label class="form-checkbox">
+                <input type="checkbox" name="siem" value="{{option}}" {% if edit_use_case and option in edit_use_case.siem_values %}checked{% endif %}>
+                <span>{{option}}</span>
+              </label>
+              {% endfor %}
+              {% if not siem_options %}
+              <p class="muted">Nenhuma opção de SIEM cadastrada.</p>
+              {% endif %}
+            </div>
+          </fieldset>
         </div>
         <div class="form-field">
           <label for="description">Descrição</label>
