@@ -1085,6 +1085,9 @@ def threat_hunting_page(
         "siem": (params.get("siem") or "").strip(),
         "environment": (params.get("environment") or "").strip(),
         "status": (params.get("status") or "").strip(),
+        "mitre_tactic": (params.get("mitre_tactic") or "").strip(),
+        "mitre_technique": (params.get("mitre_technique") or "").strip(),
+        "criticality": (params.get("criticality") or "").strip(),
     }
     success_message = params.get("success")
     error_message = params.get("error")
@@ -1099,6 +1102,9 @@ def threat_hunting_page(
     technology_options: List[str] = []
     siem_options: List[str] = []
     environment_options: List[str] = []
+    mitre_tactic_options: List[str] = []
+    mitre_technique_options: List[str] = []
+    criticality_options: List[str] = []
 
     threat_cache_payload = _get_threat_hunting_payload()
     environment_counts = threat_cache_payload.get("environment_counts") or []
@@ -1121,6 +1127,9 @@ def threat_hunting_page(
             technology=filters["technology"] or None,
             siem=filters["siem"] or None,
             status=filters["status"] or None,
+            mitre_tactic=filters["mitre_tactic"] or None,
+            mitre_technique=filters["mitre_technique"] or None,
+            criticality=filters["criticality"] or None,
         )
         canonical_use_cases: List[Dict[str, Any]] = []
         for uc in use_cases:
@@ -1151,6 +1160,13 @@ def threat_hunting_page(
         tech_values.update(threat_hunting.distinct_values(con, "technology"))
         siem_values = set(THREAT_HUNTING_SIEM_SUGGESTIONS)
         siem_values.update(threat_hunting.distinct_values(con, "siem"))
+        mitre_tactic_values = set(threat_hunting.distinct_values(con, "mitre_tactic"))
+        mitre_technique_values = set(
+            threat_hunting.distinct_values(con, "mitre_technique")
+        )
+        criticality_values = set(
+            threat_hunting.distinct_values(con, "criticality")
+        )
         env_suggestions = set(_environment_suggestions())
         env_suggestions.update(threat_hunting.distinct_values(con, "environment"))
         env_suggestions.update(
@@ -1167,6 +1183,15 @@ def threat_hunting_page(
         technology_options = sorted(filter(None, tech_values), key=str.lower)
         siem_options = sorted(filter(None, siem_values), key=str.lower)
         environment_options = sorted(filter(None, env_suggestions), key=str.lower)
+        mitre_tactic_options = sorted(
+            filter(None, mitre_tactic_values), key=str.lower
+        )
+        mitre_technique_options = sorted(
+            filter(None, mitre_technique_values), key=str.lower
+        )
+        criticality_options = sorted(
+            filter(None, criticality_values), key=str.lower
+        )
 
         if edit_param:
             try:
@@ -1327,6 +1352,9 @@ def threat_hunting_page(
         "technology_options": technology_options,
         "siem_options": siem_options,
         "environment_options": environment_options,
+        "mitre_tactic_options": mitre_tactic_options,
+        "mitre_technique_options": mitre_technique_options,
+        "criticality_options": criticality_options,
         "edit_use_case": edit_use_case,
         "edit_comments": edit_comments,
         "view_use_case": view_use_case,
@@ -1343,6 +1371,9 @@ def _build_use_case_payload(
     technology: str,
     siem: str,
     environment: str,
+    mitre_tactic: str,
+    mitre_technique: str,
+    criticality: str,
     logic: str,
     is_active_value: str,
     created_by: str,
@@ -1357,6 +1388,9 @@ def _build_use_case_payload(
         "technology": technology.strip(),
         "siem": siem.strip(),
         "environment": _normalize_environment_value(environment, env_mapping),
+        "mitre_tactic": mitre_tactic.strip(),
+        "mitre_technique": mitre_technique.strip(),
+        "criticality": criticality.strip(),
         "logic": logic.strip(),
         "is_active": "1" if normalized_active else "0",
         "created_by": created_by,
@@ -1371,6 +1405,9 @@ def create_threat_hunting_use_case(
     technology: str = Form(...),
     siem: str = Form(...),
     environment: str = Form(...),
+    mitre_tactic: str = Form(""),
+    mitre_technique: str = Form(""),
+    criticality: str = Form(""),
     logic: str = Form(""),
     comment: str = Form(""),
     is_active: str = Form("on"),
@@ -1382,6 +1419,9 @@ def create_threat_hunting_use_case(
         technology,
         siem,
         environment,
+        mitre_tactic,
+        mitre_technique,
+        criticality,
         logic,
         is_active,
         user,
@@ -1423,6 +1463,9 @@ def update_threat_hunting_use_case(
     technology: str = Form(...),
     siem: str = Form(...),
     environment: str = Form(...),
+    mitre_tactic: str = Form(""),
+    mitre_technique: str = Form(""),
+    criticality: str = Form(""),
     logic: str = Form(""),
     comment: str = Form(""),
     is_active: str = Form("off"),
@@ -1434,6 +1477,9 @@ def update_threat_hunting_use_case(
         technology,
         siem,
         environment,
+        mitre_tactic,
+        mitre_technique,
+        criticality,
         logic,
         is_active,
         user,
@@ -1572,6 +1618,9 @@ def export_threat_hunting_use_cases(
             "Tecnologia",
             "SIEM",
             "Ambiente",
+            "Tática MITRE",
+            "Técnica MITRE",
+            "Criticidade",
             "Criado por",
             "Criado em",
             "Atualizado em",
@@ -1587,6 +1636,9 @@ def export_threat_hunting_use_cases(
                 row["technology"],
                 row["siem"],
                 row["environment"],
+                row.get("mitre_tactic") or "",
+                row.get("mitre_technique") or "",
+                row.get("criticality") or "",
                 row.get("created_by") or "",
                 row.get("created_at") or "",
                 row.get("updated_at") or "",

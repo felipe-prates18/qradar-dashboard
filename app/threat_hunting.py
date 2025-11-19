@@ -7,7 +7,15 @@ from datetime import datetime
 from typing import Dict, List, Optional, Sequence
 
 REQUIRED_FIELDS = ("name", "description", "technology", "siem", "environment")
-_VALID_DISTINCT_COLUMNS = {"technology", "siem", "environment"}
+_OPTIONAL_TEXT_FIELDS = ("logic", "mitre_tactic", "mitre_technique", "criticality")
+_VALID_DISTINCT_COLUMNS = {
+    "technology",
+    "siem",
+    "environment",
+    "mitre_tactic",
+    "mitre_technique",
+    "criticality",
+}
 
 
 def _utc_now_iso() -> str:
@@ -83,6 +91,9 @@ def ensure_schema(con: sqlite3.Connection) -> None:
         ("created_by", "TEXT"),
         ("created_at", "TEXT"),
         ("updated_at", "TEXT"),
+        ("mitre_tactic", "TEXT"),
+        ("mitre_technique", "TEXT"),
+        ("criticality", "TEXT"),
     ):
         if column not in columns:
             cur.execute(f"ALTER TABLE use_cases ADD COLUMN {column} {definition}")
@@ -207,6 +218,9 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Optional[str]]:
         "technology": row["technology"],
         "siem": row["siem"],
         "environment": row["environment"],
+        "mitre_tactic": row["mitre_tactic"],
+        "mitre_technique": row["mitre_technique"],
+        "criticality": row["criticality"],
         "is_active": bool(row["is_active"]),
         "created_by": row["created_by"],
         "created_at": row["created_at"],
@@ -231,6 +245,9 @@ def list_use_cases(
     technology: Optional[str] = None,
     siem: Optional[str] = None,
     status: Optional[str] = None,
+    mitre_tactic: Optional[str] = None,
+    mitre_technique: Optional[str] = None,
+    criticality: Optional[str] = None,
 ) -> List[Dict[str, Optional[str]]]:
     ensure_schema(con)
     clauses: List[str] = []
@@ -244,12 +261,25 @@ def list_use_cases(
     if siem:
         clauses.append("LOWER(siem) = ?")
         params.append(siem.lower())
+    if mitre_tactic:
+        clauses.append("LOWER(mitre_tactic) = ?")
+        params.append(mitre_tactic.lower())
+    if mitre_technique:
+        clauses.append("LOWER(mitre_technique) = ?")
+        params.append(mitre_technique.lower())
+    if criticality:
+        clauses.append("LOWER(criticality) = ?")
+        params.append(criticality.lower())
     if status == "active":
         clauses.append("is_active = 1")
     elif status == "inactive":
         clauses.append("is_active = 0")
 
-    query = "SELECT id, name, description, logic, technology, siem, environment, is_active, created_by, created_at, updated_at FROM use_cases"
+    query = (
+        "SELECT id, name, description, logic, technology, siem, environment, "
+        "mitre_tactic, mitre_technique, criticality, is_active, created_by, created_at, updated_at "
+        "FROM use_cases"
+    )
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
     query += " ORDER BY LOWER(name)"
@@ -265,7 +295,8 @@ def get_use_case(con: sqlite3.Connection, use_case_id: int) -> Optional[Dict[str
     cur = con.cursor()
     cur.execute(
         """
-        SELECT id, name, description, logic, technology, siem, environment, is_active, created_by, created_at, updated_at
+        SELECT id, name, description, logic, technology, siem, environment, mitre_tactic, mitre_technique, criticality,
+               is_active, created_by, created_at, updated_at
         FROM use_cases
         WHERE id=?
         LIMIT 1
@@ -324,7 +355,8 @@ def _sanitize_payload(payload: Dict[str, str]) -> Dict[str, str]:
         raise ValueError(
             "Campos obrigatórios ausentes: " + ", ".join(sorted(missing))
         )
-    sanitized.setdefault("logic", sanitized.get("logic", ""))
+    for field in _OPTIONAL_TEXT_FIELDS:
+        sanitized.setdefault(field, sanitized.get(field, ""))
     return sanitized
 
 
@@ -345,12 +377,15 @@ def create_use_case(
             technology,
             siem,
             environment,
+            mitre_tactic,
+            mitre_technique,
+            criticality,
             is_active,
             created_by,
             created_at,
             updated_at
         )
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             data["name"],
@@ -359,6 +394,9 @@ def create_use_case(
             data["technology"],
             data["siem"],
             data["environment"],
+            data.get("mitre_tactic"),
+            data.get("mitre_technique"),
+            data.get("criticality"),
             int(data.get("is_active", "1") in ("1", "true", "on", 1, True)),
             data.get("created_by"),
             timestamp,
@@ -384,7 +422,9 @@ def update_use_case(
     cur.execute(
         """
         UPDATE use_cases
-        SET name=?, description=?, logic=?, technology=?, siem=?, environment=?, is_active=?, updated_at=?, created_by=COALESCE(created_by, ?)
+        SET name=?, description=?, logic=?, technology=?, siem=?, environment=?,
+            mitre_tactic=?, mitre_technique=?, criticality=?,
+            is_active=?, updated_at=?, created_by=COALESCE(created_by, ?)
         WHERE id=?
         """,
         (
@@ -394,6 +434,9 @@ def update_use_case(
             data["technology"],
             data["siem"],
             data["environment"],
+            data.get("mitre_tactic"),
+            data.get("mitre_technique"),
+            data.get("criticality"),
             int(data.get("is_active", existing["is_active"]) in ("1", "true", "on", 1, True)),
             timestamp,
             data.get("created_by"),
@@ -495,7 +538,9 @@ def list_active_use_cases(con: sqlite3.Connection) -> List[Dict[str, Optional[st
     cur = con.cursor()
     cur.execute(
         """
-        SELECT id, name, description, logic, technology, siem, environment, is_active, created_by, created_at, updated_at
+        SELECT id, name, description, logic, technology, siem, environment,
+               mitre_tactic, mitre_technique, criticality,
+               is_active, created_by, created_at, updated_at
         FROM use_cases
         WHERE is_active = 1
         ORDER BY LOWER(name)

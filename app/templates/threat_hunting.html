@@ -113,6 +113,33 @@
             </select>
           </div>
           <div class="form-field">
+            <label for="mitre-tactic">Tática MITRE</label>
+            <select id="mitre-tactic" name="mitre_tactic">
+              <option value="">Todas</option>
+              {% for option in mitre_tactic_options %}
+              <option value="{{option}}" {% if filters.mitre_tactic == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="mitre-technique">Técnica MITRE</label>
+            <select id="mitre-technique" name="mitre_technique">
+              <option value="">Todas</option>
+              {% for option in mitre_technique_options %}
+              <option value="{{option}}" {% if filters.mitre_technique == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="criticality">Criticidade</label>
+            <select id="criticality" name="criticality">
+              <option value="">Todas</option>
+              {% for option in criticality_options %}
+              <option value="{{option}}" {% if filters.criticality == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
             <label for="status">Status</label>
             <select id="status" name="status">
               <option value="" {% if not filters.status %}selected{% endif %}>Todos</option>
@@ -137,6 +164,9 @@
               <th>Ambiente</th>
               <th>Tecnologia</th>
               <th>SIEM</th>
+              <th>Tática MITRE</th>
+              <th>Técnica MITRE</th>
+              <th>Criticidade</th>
               <th>Status</th>
               <th>Criado</th>
               <th>Atualizado</th>
@@ -153,6 +183,9 @@
               <td title="{{ uc.environment }}">{{uc.environment}}</td>
               <td title="{{ uc.technology }}">{{uc.technology}}</td>
               <td title="{{ uc.siem }}">{{uc.siem}}</td>
+              <td title="{{ uc.mitre_tactic or '' }}">{{ uc.mitre_tactic or '—' }}</td>
+              <td title="{{ uc.mitre_technique or '' }}">{{ uc.mitre_technique or '—' }}</td>
+              <td title="{{ uc.criticality or '' }}">{{ uc.criticality or '—' }}</td>
               <td>
                 <span class="status-chip {{ 'is-on' if uc.is_active else 'is-off' }}">
                   {{ 'Ativo' if uc.is_active else 'Inativo' }}
@@ -172,7 +205,7 @@
             {% endfor %}
           {% else %}
             <tr>
-              <td colspan="8" class="muted">Nenhum Use Case encontrado com os filtros aplicados.</td>
+              <td colspan="11" class="muted">Nenhum Use Case encontrado com os filtros aplicados.</td>
             </tr>
           {% endif %}
           </tbody>
@@ -326,6 +359,33 @@
               {% endfor %}
             </datalist>
           </div>
+          <div class="form-field">
+            <label for="mitre-tactic-input">Tática MITRE</label>
+            <input type="text" id="mitre-tactic-input" name="mitre_tactic" list="mitre-tactic-options" value="{{ edit_use_case.mitre_tactic if edit_use_case else '' }}">
+            <datalist id="mitre-tactic-options">
+              {% for option in mitre_tactic_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="mitre-technique-input">Técnica MITRE</label>
+            <input type="text" id="mitre-technique-input" name="mitre_technique" list="mitre-technique-options" value="{{ edit_use_case.mitre_technique if edit_use_case else '' }}">
+            <datalist id="mitre-technique-options">
+              {% for option in mitre_technique_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="criticality-input">Criticidade</label>
+            <input type="text" id="criticality-input" name="criticality" list="criticality-options" value="{{ edit_use_case.criticality if edit_use_case else '' }}">
+            <datalist id="criticality-options">
+              {% for option in criticality_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
         </div>
         <div class="form-field">
           <label for="description">Descrição</label>
@@ -409,6 +469,18 @@
           <div>
             <dt>SIEM</dt>
             <dd>{{ view_use_case.siem }}</dd>
+          </div>
+          <div>
+            <dt>Tática MITRE</dt>
+            <dd>{{ view_use_case.mitre_tactic or '—' }}</dd>
+          </div>
+          <div>
+            <dt>Técnica MITRE</dt>
+            <dd>{{ view_use_case.mitre_technique or '—' }}</dd>
+          </div>
+          <div>
+            <dt>Criticidade</dt>
+            <dd>{{ view_use_case.criticality or '—' }}</dd>
           </div>
           <div>
             <dt>Status</dt>
