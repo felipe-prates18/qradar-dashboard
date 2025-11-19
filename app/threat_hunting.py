@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 REQUIRED_FIELDS = ("name", "description", "technology", "siem", "environment")
 _OPTIONAL_TEXT_FIELDS = ("logic", "mitre_tactic", "mitre_technique", "criticality")
+_MULTI_VALUE_SEPARATOR = "|"
 CRITICALITY_LEVELS = ("Baixo", "Médio", "Alto", "Crítico")
 _CRITICALITY_LOOKUP = {value.lower(): value for value in CRITICALITY_LEVELS}
 _VALID_DISTINCT_COLUMNS = {
@@ -18,6 +19,70 @@ _VALID_DISTINCT_COLUMNS = {
     "mitre_technique",
     "criticality",
 }
+
+
+def split_multi_values(value: Optional[str]) -> List[str]:
+    """Split stored multi-value text into a list of unique, ordered strings."""
+
+    text = (value or "").strip()
+    if not text:
+        return []
+    if text.startswith("[") and text.endswith("]"):
+        # Backwards compatibility for any JSON-like representation.
+        try:
+            import json
+
+            data = json.loads(text)
+        except Exception:
+            data = []
+        if isinstance(data, (list, tuple)):
+            raw_items = [str(item).strip() for item in data]
+        else:
+            raw_items = [text]
+    elif _MULTI_VALUE_SEPARATOR in text:
+        raw_items = [
+            item.strip()
+            for item in text.strip(_MULTI_VALUE_SEPARATOR).split(_MULTI_VALUE_SEPARATOR)
+        ]
+    elif "," in text:
+        raw_items = [item.strip() for item in text.split(",")]
+    else:
+        raw_items = [text]
+
+    seen = set()
+    values: List[str] = []
+    for item in raw_items:
+        if not item:
+            continue
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(item)
+    return values
+
+
+def serialize_multi_values(values: Sequence[str]) -> str:
+    """Serialize multiple values into a canonical pipe-delimited string."""
+
+    seen = set()
+    collected: List[str] = []
+    for value in values:
+        text = (value or "").strip()
+        if not text:
+            continue
+        lowered = text.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        collected.append(text)
+    if not collected:
+        return ""
+    return f"{_MULTI_VALUE_SEPARATOR}" + f"{_MULTI_VALUE_SEPARATOR}".join(collected) + f"{_MULTI_VALUE_SEPARATOR}"
+
+
+def _normalize_multi_text(value: Optional[str]) -> str:
+    return serialize_multi_values(split_multi_values(value))
 
 
 def normalize_criticality(value: Optional[str], *, strict: bool = True) -> str:
@@ -228,15 +293,21 @@ def list_monthly_totals(con: sqlite3.Connection) -> Dict[str, Dict[str, int]]:
     return results
 
 
-def _row_to_dict(row: sqlite3.Row) -> Dict[str, Optional[str]]:
+def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    environment_values = split_multi_values(row["environment"])
+    siem_values = split_multi_values(row["siem"])
     return {
         "id": row["id"],
         "name": row["name"],
         "description": row["description"],
         "logic": row["logic"],
         "technology": row["technology"],
-        "siem": row["siem"],
-        "environment": row["environment"],
+        "siem": ", ".join(siem_values) if siem_values else row["siem"],
+        "siem_values": siem_values,
+        "environment": ", ".join(environment_values)
+        if environment_values
+        else row["environment"],
+        "environment_values": environment_values,
         "mitre_tactic": row["mitre_tactic"],
         "mitre_technique": row["mitre_technique"],
         "criticality": row["criticality"],
@@ -267,7 +338,7 @@ def list_use_cases(
     mitre_tactic: Optional[str] = None,
     mitre_technique: Optional[str] = None,
     criticality: Optional[str] = None,
-) -> List[Dict[str, Optional[str]]]:
+) -> List[Dict[str, Any]]:
     ensure_schema(con)
     clauses: List[str] = []
     params: List[str] = []
@@ -278,8 +349,10 @@ def list_use_cases(
         clauses.append("LOWER(technology) = ?")
         params.append(technology.lower())
     if siem:
-        clauses.append("LOWER(siem) = ?")
-        params.append(siem.lower())
+        siem_key = siem.lower()
+        like_pattern = f"%{_MULTI_VALUE_SEPARATOR}{siem_key}{_MULTI_VALUE_SEPARATOR}%"
+        clauses.append("(LOWER(siem) = ? OR LOWER(siem) LIKE ?)")
+        params.extend([siem_key, like_pattern])
     if mitre_tactic:
         clauses.append("LOWER(mitre_tactic) = ?")
         params.append(mitre_tactic.lower())
@@ -310,7 +383,7 @@ def list_use_cases(
     return [_row_to_dict(row) for row in rows]
 
 
-def get_use_case(con: sqlite3.Connection, use_case_id: int) -> Optional[Dict[str, Optional[str]]]:
+def get_use_case(con: sqlite3.Connection, use_case_id: int) -> Optional[Dict[str, Any]]:
     ensure_schema(con)
     cur = con.cursor()
     cur.execute(
@@ -378,6 +451,12 @@ def _sanitize_payload(payload: Dict[str, str]) -> Dict[str, str]:
     for field in _OPTIONAL_TEXT_FIELDS:
         sanitized.setdefault(field, sanitized.get(field, ""))
     sanitized["criticality"] = normalize_criticality(sanitized.get("criticality"))
+    sanitized["environment"] = _normalize_multi_text(sanitized.get("environment"))
+    sanitized["siem"] = _normalize_multi_text(sanitized.get("siem"))
+    if not sanitized["environment"]:
+        raise ValueError("Selecione pelo menos um ambiente válido.")
+    if not sanitized["siem"]:
+        raise ValueError("Selecione pelo menos um SIEM válido.")
     return sanitized
 
 
@@ -472,18 +551,15 @@ def count_active_by_environment(con: sqlite3.Connection) -> List[Dict[str, int]]
     ensure_schema(con)
     cur = con.cursor()
     cur.execute(
-        """
-        SELECT environment, COUNT(*) as total
-        FROM use_cases
-        WHERE is_active = 1
-        GROUP BY environment
-        ORDER BY LOWER(environment)
-        """
+        "SELECT environment FROM use_cases WHERE is_active = 1"
     )
-    rows = cur.fetchall()
+    counts: Dict[str, int] = {}
+    for row in cur.fetchall():
+        for value in split_multi_values(row["environment"]):
+            counts[value] = counts.get(value, 0) + 1
     return [
-        {"environment": row["environment"], "total": int(row["total"]) if row["total"] is not None else 0}
-        for row in rows
+        {"environment": env, "total": total}
+        for env, total in sorted(counts.items(), key=lambda item: item[0].lower())
     ]
 
 
@@ -492,18 +568,14 @@ def count_total_by_environment(con: sqlite3.Connection) -> List[Dict[str, int]]:
 
     ensure_schema(con)
     cur = con.cursor()
-    cur.execute(
-        """
-        SELECT environment, COUNT(*) as total
-        FROM use_cases
-        GROUP BY environment
-        ORDER BY LOWER(environment)
-        """
-    )
-    rows = cur.fetchall()
+    cur.execute("SELECT environment FROM use_cases")
+    counts: Dict[str, int] = {}
+    for row in cur.fetchall():
+        for value in split_multi_values(row["environment"]):
+            counts[value] = counts.get(value, 0) + 1
     return [
-        {"environment": row["environment"], "total": int(row["total"]) if row["total"] is not None else 0}
-        for row in rows
+        {"environment": env, "total": total}
+        for env, total in sorted(counts.items(), key=lambda item: item[0].lower())
     ]
 
 
@@ -522,13 +594,16 @@ def count_creations_by_month(con: sqlite3.Connection) -> Dict[str, Dict[str, int
     rows = cur.fetchall()
     counts: Dict[str, Dict[str, int]] = {}
     for row in rows:
-        environment = row["environment"] or ""
         timestamp = parse_timestamp(row["created_at"])
         if not timestamp:
             continue
         month_key = f"{timestamp.year:04d}-{timestamp.month:02d}"
-        env_counts = counts.setdefault(environment, {})
-        env_counts[month_key] = env_counts.get(month_key, 0) + 1
+        values = split_multi_values(row["environment"]) or [""]
+        for environment in values:
+            if not environment:
+                continue
+            env_counts = counts.setdefault(environment, {})
+            env_counts[month_key] = env_counts.get(month_key, 0) + 1
     return counts
 
 
@@ -549,12 +624,26 @@ def distinct_values(con: sqlite3.Connection, column: str) -> Sequence[str]:
     ensure_schema(con)
     cur = con.cursor()
     cur.execute(
-        f"SELECT DISTINCT {column} as value FROM use_cases WHERE {column} IS NOT NULL AND TRIM({column}) <> '' ORDER BY LOWER({column})"
+        f"SELECT {column} as value FROM use_cases WHERE {column} IS NOT NULL AND TRIM({column}) <> ''"
     )
-    return [row["value"] for row in cur.fetchall()]
+    rows = cur.fetchall()
+    if column in {"environment", "siem"}:
+        seen = set()
+        collected: List[str] = []
+        for row in rows:
+            for value in split_multi_values(row["value"]):
+                key = value.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                collected.append(value)
+        return sorted(collected, key=str.lower)
+    values = [row["value"] for row in rows]
+    values = sorted({value for value in values if value}, key=str.lower)
+    return values
 
 
-def list_active_use_cases(con: sqlite3.Connection) -> List[Dict[str, Optional[str]]]:
+def list_active_use_cases(con: sqlite3.Connection) -> List[Dict[str, Any]]:
     ensure_schema(con)
     cur = con.cursor()
     cur.execute(

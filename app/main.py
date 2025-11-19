@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -506,6 +506,45 @@ def _normalize_environment_value(
     if lookup:
         return lookup
     return text
+
+
+def _prepare_multi_select_values(
+    values: Sequence[str],
+    *,
+    normalizer: Optional[Callable[[str], str]] = None,
+) -> List[str]:
+    prepared: List[str] = []
+    seen = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        normalized = normalizer(text) if normalizer else text
+        normalized = normalized.strip()
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        prepared.append(normalized)
+    return prepared
+
+
+def _apply_multi_value_metadata(
+    record: Dict[str, Any], env_map: Dict[str, str]
+) -> None:
+    raw_env_values = record.get("environment_values") or []
+    normalized_envs = [
+        _normalize_environment_value(value, env_map)
+        for value in raw_env_values
+        if value
+    ]
+    record["environment_values"] = normalized_envs
+    record["environment"] = ", ".join(normalized_envs)
+    siem_values = [value for value in (record.get("siem_values") or []) if value]
+    record["siem_values"] = siem_values
+    record["siem"] = ", ".join(siem_values)
 
 
 def _environment_suggestions() -> list[str]:
@@ -1136,11 +1175,7 @@ def threat_hunting_page(
         )
         canonical_use_cases: List[Dict[str, Any]] = []
         for uc in use_cases:
-            normalized_env = _normalize_environment_value(
-                uc.get("environment"), env_name_map
-            )
-            if normalized_env:
-                uc["environment"] = normalized_env
+            _apply_multi_value_metadata(uc, env_name_map)
             uc["display_created_at"] = _format_use_case_timestamp(
                 uc.get("created_at")
             )
@@ -1153,8 +1188,10 @@ def threat_hunting_page(
             canonical_use_cases = [
                 uc
                 for uc in canonical_use_cases
-                if (uc.get("environment") or "").lower()
-                == normalized_filter_env.lower()
+                if any(
+                    value.lower() == normalized_filter_env.lower()
+                    for value in uc.get("environment_values") or []
+                )
             ]
 
         use_cases = canonical_use_cases
@@ -1202,6 +1239,7 @@ def threat_hunting_page(
                     edit_use_case["display_updated_at"] = _format_use_case_timestamp(
                         edit_use_case.get("updated_at")
                     )
+                    _apply_multi_value_metadata(edit_use_case, env_name_map)
                     edit_comments = _format_use_case_comments(
                         threat_hunting.list_comments(con, edit_id)
                     )
@@ -1221,6 +1259,7 @@ def threat_hunting_page(
                     view_use_case["display_updated_at"] = _format_use_case_timestamp(
                         view_use_case.get("updated_at")
                     )
+                    _apply_multi_value_metadata(view_use_case, env_name_map)
                     view_comments = _format_use_case_comments(
                         threat_hunting.list_comments(con, view_id)
                     )
@@ -1365,8 +1404,8 @@ def _build_use_case_payload(
     name: str,
     description: str,
     technology: str,
-    siem: str,
-    environment: str,
+    siem_values: Sequence[str],
+    environment_values: Sequence[str],
     mitre_tactic: str,
     mitre_technique: str,
     criticality: str,
@@ -1378,12 +1417,21 @@ def _build_use_case_payload(
         str(is_active_value).strip().lower() in ("1", "true", "on", "yes")
     )
     env_mapping = _environment_name_map()
+    normalized_envs = _prepare_multi_select_values(
+        environment_values,
+        normalizer=lambda value: _normalize_environment_value(value, env_mapping),
+    )
+    normalized_siems = _prepare_multi_select_values(siem_values)
+    if not normalized_envs:
+        raise ValueError("Selecione pelo menos um ambiente válido.")
+    if not normalized_siems:
+        raise ValueError("Selecione pelo menos um SIEM válido.")
     return {
         "name": name.strip(),
         "description": description.strip(),
         "technology": technology.strip(),
-        "siem": siem.strip(),
-        "environment": _normalize_environment_value(environment, env_mapping),
+        "siem": threat_hunting.serialize_multi_values(normalized_siems),
+        "environment": threat_hunting.serialize_multi_values(normalized_envs),
         "mitre_tactic": mitre_tactic.strip(),
         "mitre_technique": mitre_technique.strip(),
         "criticality": criticality.strip(),
@@ -1399,8 +1447,8 @@ def create_threat_hunting_use_case(
     name: str = Form(...),
     description: str = Form(...),
     technology: str = Form(...),
-    siem: str = Form(...),
-    environment: str = Form(...),
+    siem: List[str] = Form([]),
+    environment: List[str] = Form([]),
     mitre_tactic: str = Form(""),
     mitre_technique: str = Form(""),
     criticality: str = Form(""),
@@ -1457,8 +1505,8 @@ def update_threat_hunting_use_case(
     name: str = Form(...),
     description: str = Form(...),
     technology: str = Form(...),
-    siem: str = Form(...),
-    environment: str = Form(...),
+    siem: List[str] = Form([]),
+    environment: List[str] = Form([]),
     mitre_tactic: str = Form(""),
     mitre_technique: str = Form(""),
     criticality: str = Form(""),
@@ -1599,9 +1647,7 @@ def export_threat_hunting_use_cases(
 
     env_name_map = _environment_name_map()
     for row in records:
-        row["environment"] = _normalize_environment_value(
-            row.get("environment"), env_name_map
-        )
+        _apply_multi_value_metadata(row, env_name_map)
 
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";", lineterminator="\n")
