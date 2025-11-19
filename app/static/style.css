@@ -283,6 +283,29 @@ textarea:focus {
   accent-color: var(--green);
 }
 
+.form-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.form-fieldset legend {
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.checkbox-grid .form-checkbox {
+  flex: 0 1 auto;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
