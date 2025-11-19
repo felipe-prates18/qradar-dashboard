@@ -334,7 +334,7 @@
           </div>
           <fieldset class="form-field form-fieldset">
             <legend>Ambientes</legend>
-            <div class="checkbox-grid" data-checkbox-group>
+            <div class="checkbox-grid checkbox-grid--scrollable" data-checkbox-group>
               {% for option in environment_options %}
               <label class="form-checkbox">
                 <input type="checkbox" name="environment" value="{{option}}" {% if edit_use_case and option in edit_use_case.environment_values %}checked{% endif %}>
@@ -357,7 +357,7 @@
           </div>
           <fieldset class="form-field form-fieldset">
             <legend>SIEM</legend>
-            <div class="checkbox-grid" data-checkbox-group>
+            <div class="checkbox-grid checkbox-grid--scrollable" data-checkbox-group>
               {% for option in siem_options %}
               <label class="form-checkbox">
                 <input type="checkbox" name="siem" value="{{option}}" {% if edit_use_case and option in edit_use_case.siem_values %}checked{% endif %}>
