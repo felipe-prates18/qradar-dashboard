@@ -1,10 +1,12 @@
 import asyncio
+import csv
+import io
 import json
 import logging
 import secrets
 import sqlite3
 from urllib.parse import urlencode
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -510,6 +512,43 @@ def _environment_suggestions() -> list[str]:
     mapping = _environment_name_map()
     names = {value for value in mapping.values() if value}
     return sorted(names, key=str.lower)
+
+
+def _format_use_case_timestamp(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        parsed = None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                parsed = datetime.strptime(str(value), fmt)
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            return str(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    try:
+        return parsed.astimezone().strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return parsed.strftime("%d/%m/%Y %H:%M")
+
+
+def _format_use_case_comments(
+    entries: Iterable[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    formatted: List[Dict[str, Any]] = []
+    for entry in entries:
+        mapped = dict(entry)
+        mapped["display_created_at"] = _format_use_case_timestamp(
+            entry.get("created_at")
+        )
+        mapped.setdefault("created_by", entry.get("created_by") or "—")
+        formatted.append(mapped)
+    return formatted
 
 
 _MONTH_NAMES_PT = [
@@ -1040,8 +1079,35 @@ def threat_hunting_page(
     user: str = Depends(_require_threat_hunting_page_access),
 ):
     params = request.query_params
+    filters = {
+        "q": (params.get("q") or "").strip(),
+        "technology": (params.get("technology") or "").strip(),
+        "siem": (params.get("siem") or "").strip(),
+        "environment": (params.get("environment") or "").strip(),
+        "status": (params.get("status") or "").strip(),
+        "mitre_tactic": (params.get("mitre_tactic") or "").strip(),
+        "mitre_technique": (params.get("mitre_technique") or "").strip(),
+        "criticality": (params.get("criticality") or "").strip(),
+    }
+    filters["criticality"] = threat_hunting.normalize_criticality(
+        filters["criticality"], strict=False
+    )
     success_message = params.get("success")
     error_message = params.get("error")
+    edit_param = params.get("edit")
+    view_param = params.get("view")
+
+    edit_use_case: Optional[Dict[str, Any]] = None
+    view_use_case: Optional[Dict[str, Any]] = None
+    edit_comments: List[Dict[str, Any]] = []
+    view_comments: List[Dict[str, Any]] = []
+    use_cases: List[Dict[str, Any]] = []
+    technology_options: List[str] = []
+    siem_options: List[str] = []
+    environment_options: List[str] = []
+    mitre_tactic_options: List[str] = []
+    mitre_technique_options: List[str] = []
+    criticality_options: List[str] = list(threat_hunting.CRITICALITY_LEVELS)
 
     threat_cache_payload = _get_threat_hunting_payload()
     environment_counts = threat_cache_payload.get("environment_counts") or []
@@ -1053,6 +1119,114 @@ def threat_hunting_page(
     con = _con()
     try:
         threat_hunting.ensure_schema(con)
+        normalized_filter_env = (
+            _normalize_environment_value(filters["environment"], env_name_map)
+            if filters["environment"]
+            else ""
+        )
+        use_cases = threat_hunting.list_use_cases(
+            con,
+            search=filters["q"] or None,
+            technology=filters["technology"] or None,
+            siem=filters["siem"] or None,
+            status=filters["status"] or None,
+            mitre_tactic=filters["mitre_tactic"] or None,
+            mitre_technique=filters["mitre_technique"] or None,
+            criticality=filters["criticality"] or None,
+        )
+        canonical_use_cases: List[Dict[str, Any]] = []
+        for uc in use_cases:
+            normalized_env = _normalize_environment_value(
+                uc.get("environment"), env_name_map
+            )
+            if normalized_env:
+                uc["environment"] = normalized_env
+            uc["display_created_at"] = _format_use_case_timestamp(
+                uc.get("created_at")
+            )
+            uc["display_updated_at"] = _format_use_case_timestamp(
+                uc.get("updated_at")
+            )
+            canonical_use_cases.append(uc)
+
+        if normalized_filter_env:
+            canonical_use_cases = [
+                uc
+                for uc in canonical_use_cases
+                if (uc.get("environment") or "").lower()
+                == normalized_filter_env.lower()
+            ]
+
+        use_cases = canonical_use_cases
+
+        tech_values = set(THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS)
+        tech_values.update(threat_hunting.distinct_values(con, "technology"))
+        siem_values = set(THREAT_HUNTING_SIEM_SUGGESTIONS)
+        siem_values.update(threat_hunting.distinct_values(con, "siem"))
+        mitre_tactic_values = set(threat_hunting.distinct_values(con, "mitre_tactic"))
+        mitre_technique_values = set(
+            threat_hunting.distinct_values(con, "mitre_technique")
+        )
+        env_suggestions = set(_environment_suggestions())
+        env_suggestions.update(threat_hunting.distinct_values(con, "environment"))
+        env_suggestions.update(
+            _normalize_environment_value(item.get("environment"), env_name_map)
+            for item in environment_counts
+            if item.get("environment")
+        )
+        env_suggestions = {
+            _normalize_environment_value(value, env_name_map)
+            for value in env_suggestions
+            if value
+        }
+
+        technology_options = sorted(filter(None, tech_values), key=str.lower)
+        siem_options = sorted(filter(None, siem_values), key=str.lower)
+        environment_options = sorted(filter(None, env_suggestions), key=str.lower)
+        mitre_tactic_options = sorted(
+            filter(None, mitre_tactic_values), key=str.lower
+        )
+        mitre_technique_options = sorted(
+            filter(None, mitre_technique_values), key=str.lower
+        )
+        if edit_param:
+            try:
+                edit_id = int(edit_param)
+                edit_use_case = threat_hunting.get_use_case(con, edit_id)
+                if not edit_use_case and not error_message:
+                    error_message = "Caso de uso não encontrado."
+                if edit_use_case:
+                    edit_use_case["display_created_at"] = _format_use_case_timestamp(
+                        edit_use_case.get("created_at")
+                    )
+                    edit_use_case["display_updated_at"] = _format_use_case_timestamp(
+                        edit_use_case.get("updated_at")
+                    )
+                    edit_comments = _format_use_case_comments(
+                        threat_hunting.list_comments(con, edit_id)
+                    )
+            except ValueError:
+                if not error_message:
+                    error_message = "Identificador de caso de uso inválido."
+        if view_param:
+            try:
+                view_id = int(view_param)
+                view_use_case = threat_hunting.get_use_case(con, view_id)
+                if not view_use_case and not error_message:
+                    error_message = "Caso de uso não encontrado."
+                if view_use_case:
+                    view_use_case["display_created_at"] = _format_use_case_timestamp(
+                        view_use_case.get("created_at")
+                    )
+                    view_use_case["display_updated_at"] = _format_use_case_timestamp(
+                        view_use_case.get("updated_at")
+                    )
+                    view_comments = _format_use_case_comments(
+                        threat_hunting.list_comments(con, view_id)
+                    )
+            except ValueError:
+                if not error_message:
+                    error_message = "Identificador de caso de uso inválido."
     finally:
         con.close()
 
@@ -1133,6 +1307,13 @@ def threat_hunting_page(
             if text:
                 log_source_error_lookup[key] = text
 
+    if filters.get("environment"):
+        filters["environment"] = _normalize_environment_value(
+            filters["environment"], env_name_map
+        )
+    else:
+        filters["environment"] = ""
+
     if environment_counts:
         for item in environment_counts:
             normalized_env = _normalize_environment_value(
@@ -1154,29 +1335,322 @@ def threat_hunting_page(
     )
     environment_summary_json = json.dumps(environment_summary_data, ensure_ascii=False)
 
-    env_suggestions = set(_environment_suggestions())
-    env_suggestions.update(item.get("environment") for item in environment_counts)
-    environment_options = {
-        _normalize_environment_value(value, env_name_map)
-        for value in env_suggestions
-        if value
-    }
-
     context = {
         "request": request,
         "user": user,
         "title": "Threat Hunting",
         "success": success_message,
         "error": error_message,
+        "filters": filters,
+        "use_cases": use_cases,
         "environment_counts": environment_counts,
         "summary_errors": summary_errors,
-        "environment_options": sorted(
-            filter(None, environment_options), key=str.lower
-        ),
+        "technology_options": technology_options,
+        "siem_options": siem_options,
+        "environment_options": environment_options,
+        "mitre_tactic_options": mitre_tactic_options,
+        "mitre_technique_options": mitre_technique_options,
+        "criticality_options": criticality_options,
+        "edit_use_case": edit_use_case,
+        "edit_comments": edit_comments,
+        "view_use_case": view_use_case,
+        "view_comments": view_comments,
         "is_admin": is_admin(user),
         "environment_summary_json": environment_summary_json,
     }
     return templates.TemplateResponse("threat_hunting.html", context)
+
+
+def _build_use_case_payload(
+    name: str,
+    description: str,
+    technology: str,
+    siem: str,
+    environment: str,
+    mitre_tactic: str,
+    mitre_technique: str,
+    criticality: str,
+    logic: str,
+    is_active_value: str,
+    created_by: str,
+) -> Dict[str, str]:
+    normalized_active = (
+        str(is_active_value).strip().lower() in ("1", "true", "on", "yes")
+    )
+    env_mapping = _environment_name_map()
+    return {
+        "name": name.strip(),
+        "description": description.strip(),
+        "technology": technology.strip(),
+        "siem": siem.strip(),
+        "environment": _normalize_environment_value(environment, env_mapping),
+        "mitre_tactic": mitre_tactic.strip(),
+        "mitre_technique": mitre_technique.strip(),
+        "criticality": criticality.strip(),
+        "logic": logic.strip(),
+        "is_active": "1" if normalized_active else "0",
+        "created_by": created_by,
+    }
+
+
+@app.post("/threat-hunting/use-cases")
+def create_threat_hunting_use_case(
+    request: Request,
+    name: str = Form(...),
+    description: str = Form(...),
+    technology: str = Form(...),
+    siem: str = Form(...),
+    environment: str = Form(...),
+    mitre_tactic: str = Form(""),
+    mitre_technique: str = Form(""),
+    criticality: str = Form(""),
+    logic: str = Form(""),
+    comment: str = Form(""),
+    is_active: str = Form("on"),
+    user: str = Depends(_require_threat_hunting_page_access),
+):
+    payload = _build_use_case_payload(
+        name,
+        description,
+        technology,
+        siem,
+        environment,
+        mitre_tactic,
+        mitre_technique,
+        criticality,
+        logic,
+        is_active,
+        user,
+    )
+    comment_text = (comment or "").strip()
+    try:
+        con = _con()
+        try:
+            new_id = threat_hunting.create_use_case(con, payload)
+            logger.info(
+                "Use Case '%s' (ID %s) criado por %s",
+                payload["name"],
+                new_id,
+                user,
+            )
+            if comment_text:
+                threat_hunting.add_comment(con, new_id, comment_text, user)
+                logger.info(
+                    "Comentário registrado no Use Case '%s' (ID %s) por %s",
+                    payload["name"],
+                    new_id,
+                    user,
+                )
+        finally:
+            con.close()
+    except ValueError as exc:
+        return _redirect_threat_hunting(error=str(exc))
+    return _redirect_threat_hunting(
+        success=f"Use Case '{payload['name']}' criado com sucesso."
+    )
+
+
+@app.post("/threat-hunting/use-cases/{use_case_id}")
+def update_threat_hunting_use_case(
+    request: Request,
+    use_case_id: int,
+    name: str = Form(...),
+    description: str = Form(...),
+    technology: str = Form(...),
+    siem: str = Form(...),
+    environment: str = Form(...),
+    mitre_tactic: str = Form(""),
+    mitre_technique: str = Form(""),
+    criticality: str = Form(""),
+    logic: str = Form(""),
+    comment: str = Form(""),
+    is_active: str = Form("off"),
+    user: str = Depends(_require_threat_hunting_page_access),
+):
+    payload = _build_use_case_payload(
+        name,
+        description,
+        technology,
+        siem,
+        environment,
+        mitre_tactic,
+        mitre_technique,
+        criticality,
+        logic,
+        is_active,
+        user,
+    )
+    comment_text = (comment or "").strip()
+    try:
+        con = _con()
+        try:
+            updated = threat_hunting.update_use_case(con, use_case_id, payload)
+            if updated:
+                logger.info(
+                    "Use Case '%s' (ID %s) atualizado por %s",
+                    payload["name"],
+                    use_case_id,
+                    user,
+                )
+                if comment_text:
+                    threat_hunting.add_comment(con, use_case_id, comment_text, user)
+                    logger.info(
+                        "Comentário registrado no Use Case '%s' (ID %s) por %s",
+                        payload["name"],
+                        use_case_id,
+                        user,
+                    )
+        finally:
+            con.close()
+    except ValueError as exc:
+        return _redirect_threat_hunting(
+            error=str(exc),
+            extra_params={"edit": str(use_case_id)},
+        )
+    if not updated:
+        return _redirect_threat_hunting(
+            error="Caso de uso não encontrado.",
+            extra_params={"edit": str(use_case_id)},
+        )
+    return _redirect_threat_hunting(
+        success=f"Use Case '{payload['name']}' atualizado com sucesso."
+    )
+
+
+@app.post("/threat-hunting/use-cases/{use_case_id}/comments")
+def add_use_case_comment(
+    use_case_id: int,
+    comment: str = Form(...),
+    user: str = Depends(_require_threat_hunting_page_access),
+):
+    text = (comment or "").strip()
+    if not text:
+        return _redirect_threat_hunting(
+            error="O comentário não pode estar vazio.",
+            extra_params={"view": str(use_case_id)},
+        )
+    try:
+        con = _con()
+        try:
+            use_case = threat_hunting.get_use_case(con, use_case_id)
+            if not use_case:
+                raise ValueError("Caso de uso não encontrado.")
+            threat_hunting.add_comment(con, use_case_id, text, user)
+            logger.info(
+                "Comentário registrado no Use Case '%s' (ID %s) por %s",
+                use_case.get("name") or use_case_id,
+                use_case_id,
+                user,
+            )
+        finally:
+            con.close()
+    except ValueError as exc:
+        return _redirect_threat_hunting(
+            error=str(exc),
+            extra_params={"view": str(use_case_id)},
+        )
+    return _redirect_threat_hunting(
+        success="Comentário registrado com sucesso.",
+        extra_params={"view": str(use_case_id)},
+    )
+
+
+@app.post("/threat-hunting/use-cases/{use_case_id}/delete")
+def delete_threat_hunting_use_case(
+    use_case_id: int,
+    _user: str = Depends(_require_threat_hunting_page_access),
+):
+    con = _con()
+    existing_name: Optional[str] = None
+    try:
+        threat_hunting.ensure_schema(con)
+        existing = threat_hunting.get_use_case(con, use_case_id)
+        if not existing:
+            return _redirect_threat_hunting(
+                error="Caso de uso não encontrado para exclusão."
+            )
+        existing_name = existing.get("name") or str(use_case_id)
+        deleted = threat_hunting.delete_use_case(con, use_case_id)
+    except Exception as exc:
+        logger.exception("Falha ao excluir Use Case", exc_info=exc)
+        return _redirect_threat_hunting(
+            error="Erro ao excluir o Use Case. Tente novamente em instantes."
+        )
+    finally:
+        con.close()
+    if not deleted:
+        return _redirect_threat_hunting(
+            error="Não foi possível remover o Use Case informado."
+        )
+    return _redirect_threat_hunting(
+        success=f"Use Case '{existing_name}' removido com sucesso."
+    )
+
+
+@app.get("/threat-hunting/export")
+def export_threat_hunting_use_cases(
+    user: str = Depends(_require_threat_hunting_page_access),
+):
+    con = _con()
+    try:
+        records = threat_hunting.list_active_use_cases(con)
+    finally:
+        con.close()
+
+    env_name_map = _environment_name_map()
+    for row in records:
+        row["environment"] = _normalize_environment_value(
+            row.get("environment"), env_name_map
+        )
+
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=";", lineterminator="\n")
+    writer.writerow(
+        [
+            "ID",
+            "Nome",
+            "Descrição",
+            "Lógica",
+            "Tecnologia",
+            "SIEM",
+            "Ambiente",
+            "Tática MITRE",
+            "Técnica MITRE",
+            "Criticidade",
+            "Criado por",
+            "Criado em",
+            "Atualizado em",
+        ]
+    )
+    for row in records:
+        writer.writerow(
+            [
+                row["id"],
+                row["name"],
+                row["description"],
+                row.get("logic") or "",
+                row["technology"],
+                row["siem"],
+                row["environment"],
+                row.get("mitre_tactic") or "",
+                row.get("mitre_technique") or "",
+                row.get("criticality") or "",
+                row.get("created_by") or "",
+                row.get("created_at") or "",
+                row.get("updated_at") or "",
+            ]
+        )
+
+    csv_content = output.getvalue()
+    output.close()
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    filename = f"use-cases-ativos-{timestamp}.csv"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store",
+    }
+    return Response(content=csv_content, media_type="text/csv", headers=headers)
 
 
 @app.post("/admin/users/create")
