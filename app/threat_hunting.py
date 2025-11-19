@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Sequence
 
 REQUIRED_FIELDS = ("name", "description", "technology", "siem", "environment")
 _OPTIONAL_TEXT_FIELDS = ("logic", "mitre_tactic", "mitre_technique", "criticality")
+CRITICALITY_LEVELS = ("Baixo", "Médio", "Alto", "Crítico")
+_CRITICALITY_LOOKUP = {value.lower(): value for value in CRITICALITY_LEVELS}
 _VALID_DISTINCT_COLUMNS = {
     "technology",
     "siem",
@@ -16,6 +18,23 @@ _VALID_DISTINCT_COLUMNS = {
     "mitre_technique",
     "criticality",
 }
+
+
+def normalize_criticality(value: Optional[str], *, strict: bool = True) -> str:
+    """Normalize ``value`` to a canonical criticidade string."""
+
+    text = (value or "").strip()
+    if not text:
+        return ""
+    normalized = _CRITICALITY_LOOKUP.get(text.lower())
+    if normalized:
+        return normalized
+    if strict:
+        allowed = ", ".join(CRITICALITY_LEVELS)
+        raise ValueError(
+            f"Criticidade inválida. Utilize um dos valores: {allowed}."
+        )
+    return ""
 
 
 def _utc_now_iso() -> str:
@@ -267,9 +286,10 @@ def list_use_cases(
     if mitre_technique:
         clauses.append("LOWER(mitre_technique) = ?")
         params.append(mitre_technique.lower())
-    if criticality:
-        clauses.append("LOWER(criticality) = ?")
-        params.append(criticality.lower())
+    normalized_criticality = normalize_criticality(criticality, strict=False)
+    if normalized_criticality:
+        clauses.append("criticality = ?")
+        params.append(normalized_criticality)
     if status == "active":
         clauses.append("is_active = 1")
     elif status == "inactive":
@@ -357,6 +377,7 @@ def _sanitize_payload(payload: Dict[str, str]) -> Dict[str, str]:
         )
     for field in _OPTIONAL_TEXT_FIELDS:
         sanitized.setdefault(field, sanitized.get(field, ""))
+    sanitized["criticality"] = normalize_criticality(sanitized.get("criticality"))
     return sanitized
 
 

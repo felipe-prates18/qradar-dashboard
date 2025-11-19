@@ -1089,6 +1089,9 @@ def threat_hunting_page(
         "mitre_technique": (params.get("mitre_technique") or "").strip(),
         "criticality": (params.get("criticality") or "").strip(),
     }
+    filters["criticality"] = threat_hunting.normalize_criticality(
+        filters["criticality"], strict=False
+    )
     success_message = params.get("success")
     error_message = params.get("error")
     edit_param = params.get("edit")
@@ -1104,7 +1107,7 @@ def threat_hunting_page(
     environment_options: List[str] = []
     mitre_tactic_options: List[str] = []
     mitre_technique_options: List[str] = []
-    criticality_options: List[str] = []
+    criticality_options: List[str] = list(threat_hunting.CRITICALITY_LEVELS)
 
     threat_cache_payload = _get_threat_hunting_payload()
     environment_counts = threat_cache_payload.get("environment_counts") or []
@@ -1164,9 +1167,6 @@ def threat_hunting_page(
         mitre_technique_values = set(
             threat_hunting.distinct_values(con, "mitre_technique")
         )
-        criticality_values = set(
-            threat_hunting.distinct_values(con, "criticality")
-        )
         env_suggestions = set(_environment_suggestions())
         env_suggestions.update(threat_hunting.distinct_values(con, "environment"))
         env_suggestions.update(
@@ -1189,10 +1189,6 @@ def threat_hunting_page(
         mitre_technique_options = sorted(
             filter(None, mitre_technique_values), key=str.lower
         )
-        criticality_options = sorted(
-            filter(None, criticality_values), key=str.lower
-        )
-
         if edit_param:
             try:
                 edit_id = int(edit_param)

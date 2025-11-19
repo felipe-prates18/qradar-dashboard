@@ -379,12 +379,12 @@
           </div>
           <div class="form-field">
             <label for="criticality-input">Criticidade</label>
-            <input type="text" id="criticality-input" name="criticality" list="criticality-options" value="{{ edit_use_case.criticality if edit_use_case else '' }}">
-            <datalist id="criticality-options">
+            <select id="criticality-input" name="criticality">
+              <option value="">Selecionar</option>
               {% for option in criticality_options %}
-              <option value="{{option}}">
+              <option value="{{option}}" {% if edit_use_case and edit_use_case.criticality == option %}selected{% endif %}>{{option}}</option>
               {% endfor %}
-            </datalist>
+            </select>
           </div>
         </div>
         <div class="form-field">
