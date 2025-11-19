@@ -15,7 +15,7 @@
         <img src="/static/logo-asper.png" alt="ASPER">
         <div class="title">
           <h1>Threat Hunting</h1>
-          <div class="sub">Resumo de Use Cases ativos e tecnologias mapeadas por cliente.</div>
+          <div class="sub">Catálogo colaborativo de Use Cases por ambiente e tecnologia.</div>
         </div>
       </div>
       <div class="row">
@@ -66,7 +66,151 @@
           {% endfor %}
         </ul>
       </div>
-      {% endif %}
+    {% endif %}
+  </section>
+
+    <section class="card threat-list-card">
+      <div class="card-heading">
+        <div>
+          <h3>Casos de Uso</h3>
+          <p class="muted">Pesquise, filtre e exporte a base de conhecimento de Threat Hunting.</p>
+        </div>
+        <div class="card-actions">
+          <a class="btn secondary" href="/threat-hunting/export">Exportar CSV</a>
+        </div>
+      </div>
+      <form class="threat-filter-form" method="get" action="/threat-hunting">
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="search">Buscar por nome</label>
+            <input type="search" id="search" name="q" placeholder="Ex.: Lateral Movement" value="{{filters.q}}">
+          </div>
+          <div class="form-field">
+            <label for="environment-filter">Ambiente</label>
+            <select id="environment-filter" name="environment">
+              <option value="">Todos</option>
+              {% for option in environment_options %}
+              <option value="{{option}}" {% if filters.environment == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="technology">Tecnologia</label>
+            <select id="technology" name="technology">
+              <option value="">Todas</option>
+              {% for option in technology_options %}
+              <option value="{{option}}" {% if filters.technology == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="siem">SIEM</label>
+            <select id="siem" name="siem">
+              <option value="">Todos</option>
+              {% for option in siem_options %}
+              <option value="{{option}}" {% if filters.siem == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="mitre-tactic">Tática MITRE</label>
+            <select id="mitre-tactic" name="mitre_tactic">
+              <option value="">Todas</option>
+              {% for option in mitre_tactic_options %}
+              <option value="{{option}}" {% if filters.mitre_tactic == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="mitre-technique">Técnica MITRE</label>
+            <select id="mitre-technique" name="mitre_technique">
+              <option value="">Todas</option>
+              {% for option in mitre_technique_options %}
+              <option value="{{option}}" {% if filters.mitre_technique == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="criticality">Criticidade</label>
+            <select id="criticality" name="criticality">
+              <option value="">Todas</option>
+              {% for option in criticality_options %}
+              <option value="{{option}}" {% if filters.criticality == option %}selected{% endif %}>{{option}}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-field">
+            <label for="status">Status</label>
+            <select id="status" name="status">
+              <option value="" {% if not filters.status %}selected{% endif %}>Todos</option>
+              <option value="active" {% if filters.status == 'active' %}selected{% endif %}>Ativos</option>
+              <option value="inactive" {% if filters.status == 'inactive' %}selected{% endif %}>Inativos</option>
+            </select>
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button class="btn tertiary" type="button" data-open-modal="use-case">Adicionar Caso de Uso</button>
+          <div class="filter-actions-group">
+            <button class="btn" type="submit">Aplicar filtros</button>
+            <a class="btn secondary" href="/threat-hunting">Limpar</a>
+          </div>
+        </div>
+      </form>
+      <div class="table-wrapper">
+        <table class="data-table threat-table">
+          <thead>
+            <tr>
+              <th>Use Case</th>
+              <th>Ambiente</th>
+              <th>Tecnologia</th>
+              <th>SIEM</th>
+              <th>Tática MITRE</th>
+              <th>Técnica MITRE</th>
+              <th>Criticidade</th>
+              <th>Status</th>
+              <th>Criado</th>
+              <th>Atualizado</th>
+              <th class="actions-col">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% if use_cases %}
+            {% for uc in use_cases %}
+            <tr>
+              <td>
+                <a class="use-case-link" href="/threat-hunting?view={{uc.id}}#use-case-view-modal" title="{{ uc.name }}">{{uc.name}}</a>
+              </td>
+              <td title="{{ uc.environment }}">{{uc.environment}}</td>
+              <td title="{{ uc.technology }}">{{uc.technology}}</td>
+              <td title="{{ uc.siem }}">{{uc.siem}}</td>
+              <td title="{{ uc.mitre_tactic or '' }}">{{ uc.mitre_tactic or '—' }}</td>
+              <td title="{{ uc.mitre_technique or '' }}">{{ uc.mitre_technique or '—' }}</td>
+              <td title="{{ uc.criticality or '' }}">{{ uc.criticality or '—' }}</td>
+              <td>
+                <span class="status-chip {{ 'is-on' if uc.is_active else 'is-off' }}">
+                  {{ 'Ativo' if uc.is_active else 'Inativo' }}
+                </span>
+              </td>
+              <td title="{{ uc.created_at or '' }}">{{ uc.display_created_at or '—' }}</td>
+              <td title="{{ uc.updated_at or '' }}">{{ uc.display_updated_at or '—' }}</td>
+              <td class="actions-col">
+                <div class="user-actions">
+                  <a class="btn small secondary" href="/threat-hunting?edit={{uc.id}}#use-case-modal">Editar</a>
+                  <form class="inline-form" method="post" action="/threat-hunting/use-cases/{{uc.id}}/delete" onsubmit="return confirm('Deseja realmente excluir o Use Case {{ uc.name }}?');">
+                    <button class="btn small danger" type="submit">Excluir</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr>
+              <td colspan="11" class="muted">Nenhum Use Case encontrado com os filtros aplicados.</td>
+            </tr>
+          {% endif %}
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card tech-catalog-card">
@@ -169,6 +313,245 @@
       </div>
     </section>
   </div>
+  <div id="use-case-modal" class="modal{% if edit_use_case %} is-visible{% endif %}" data-open-on-load="{{ 'true' if edit_use_case else 'false' }}" data-initial-mode="{{ 'edit' if edit_use_case else 'create' }}">
+    <div class="modal-overlay" data-close-modal></div>
+    <div class="modal-content">
+      <header class="modal-header">
+        <div>
+          <h3 data-modal-title data-create-label="Cadastrar novo Use Case" data-edit-label="Editar Use Case">{% if edit_use_case %}Editar Use Case{% else %}Cadastrar novo Use Case{% endif %}</h3>
+          <p class="muted">Preencha os campos obrigatórios para documentar o conhecimento do time.</p>
+          {% if edit_use_case %}
+          <p class="modal-meta">Criado em {{ edit_use_case.display_created_at or '—' }} · Atualizado em {{ edit_use_case.display_updated_at or '—' }}</p>
+          {% endif %}
+        </div>
+        <button class="modal-close" type="button" data-close-modal aria-label="Fechar">×</button>
+      </header>
+      <form method="post" action="{% if edit_use_case %}/threat-hunting/use-cases/{{edit_use_case.id}}{% else %}/threat-hunting/use-cases{% endif %}" class="threat-form" data-create-action="/threat-hunting/use-cases" data-edit-action="{% if edit_use_case %}/threat-hunting/use-cases/{{edit_use_case.id}}{% endif %}">
+        <div class="form-grid threat-basic-grid">
+          <div class="form-field">
+            <label for="name">Nome</label>
+            <input type="text" id="name" name="name" value="{{ edit_use_case.name if edit_use_case else '' }}" required>
+          </div>
+          <div class="form-field">
+            <label for="environment">Ambiente</label>
+            <input type="text" id="environment" name="environment" list="environment-options" value="{{ edit_use_case.environment if edit_use_case else '' }}" required>
+            <datalist id="environment-options">
+              {% for option in environment_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="technology-input">Tecnologia</label>
+            <input type="text" id="technology-input" name="technology" list="technology-options" value="{{ edit_use_case.technology if edit_use_case else '' }}" required>
+            <datalist id="technology-options">
+              {% for option in technology_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="siem-input">SIEM</label>
+            <input type="text" id="siem-input" name="siem" list="siem-options" value="{{ edit_use_case.siem if edit_use_case else '' }}" required>
+            <datalist id="siem-options">
+              {% for option in siem_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="mitre-tactic-input">Tática MITRE</label>
+            <input type="text" id="mitre-tactic-input" name="mitre_tactic" list="mitre-tactic-options" value="{{ edit_use_case.mitre_tactic if edit_use_case else '' }}">
+            <datalist id="mitre-tactic-options">
+              {% for option in mitre_tactic_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="mitre-technique-input">Técnica MITRE</label>
+            <input type="text" id="mitre-technique-input" name="mitre_technique" list="mitre-technique-options" value="{{ edit_use_case.mitre_technique if edit_use_case else '' }}">
+            <datalist id="mitre-technique-options">
+              {% for option in mitre_technique_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="form-field">
+            <label for="criticality-input">Criticidade</label>
+            <input type="text" id="criticality-input" name="criticality" list="criticality-options" value="{{ edit_use_case.criticality if edit_use_case else '' }}">
+            <datalist id="criticality-options">
+              {% for option in criticality_options %}
+              <option value="{{option}}">
+              {% endfor %}
+            </datalist>
+          </div>
+        </div>
+        <div class="form-field">
+          <label for="description">Descrição</label>
+          <textarea id="description" name="description" rows="4" placeholder="Detalhe o objetivo, pré-requisitos e contexto do caso de uso." required>{{ edit_use_case.description if edit_use_case else '' }}</textarea>
+        </div>
+        <div class="form-field">
+          <label for="logic">Lógica (opcional)</label>
+          <textarea id="logic" name="logic" rows="4" placeholder="Inclua consultas, regras de correlação ou pseudocódigo.">{{edit_use_case.logic if edit_use_case else '' }}</textarea>
+        </div>
+        <div class="form-field">
+          <label for="comment">Adicionar comentário</label>
+          <textarea id="comment" name="comment" rows="3" placeholder="Registre observações, hipóteses ou decisões complementares."></textarea>
+          <p class="field-hint">Os comentários são associados ao seu usuário com data e horário.</p>
+        </div>
+        <label class="form-checkbox">
+          <input type="hidden" name="is_active" value="off">
+          <input type="checkbox" name="is_active" value="on" {% if not edit_use_case or edit_use_case.is_active %}checked{% endif %}>
+          <span>Use Case ativo</span>
+        </label>
+        <div class="form-actions modal-actions">
+          <button class="btn" type="submit">{% if edit_use_case %}Salvar alterações{% else %}Cadastrar Use Case{% endif %}</button>
+          {% if edit_use_case %}
+          <a class="btn secondary" href="/threat-hunting" data-cancel-edit>Cancelar edição</a>
+          {% else %}
+          <button class="btn secondary" type="button" data-close-modal>Cancelar</button>
+          {% endif %}
+        </div>
+      </form>
+      {% if edit_use_case %}
+      <section class="comment-section">
+        <div class="comment-section-header">
+          <h4>Comentários registrados</h4>
+          <span class="comment-count">{{ edit_comments|length }} {{ 'comentário' if edit_comments|length == 1 else 'comentários' }}</span>
+        </div>
+        {% if edit_comments %}
+        <ul class="comment-list">
+          {% for comment in edit_comments %}
+          <li class="comment-item">
+            <div class="comment-meta">
+              <span class="comment-author">{{ comment.created_by }}</span>
+              <span class="comment-timestamp">{{ comment.display_created_at or '—' }}</span>
+            </div>
+            <div class="comment-text">{{ comment.comment | replace('\n', '<br>') | safe }}</div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted">Nenhum comentário registrado até o momento.</p>
+        {% endif %}
+      </section>
+      {% endif %}
+    </div>
+  </div>
+  <div id="use-case-view-modal" class="modal{% if view_use_case %} is-visible{% endif %}" data-open-on-load="{{ 'true' if view_use_case else 'false' }}" data-has-content="{{ 'true' if view_use_case else 'false' }}">
+    <div class="modal-overlay" data-close-view></div>
+    <div class="modal-content">
+      <header class="modal-header">
+        <div>
+          <h3>Detalhes do Use Case</h3>
+          {% if view_use_case %}
+          <p class="modal-meta">Criado em {{ view_use_case.display_created_at or '—' }} · Atualizado em {{ view_use_case.display_updated_at or '—' }}</p>
+          {% endif %}
+        </div>
+        <button class="modal-close" type="button" data-close-view aria-label="Fechar">×</button>
+      </header>
+      {% if view_use_case %}
+      <div class="use-case-details">
+        <dl class="use-case-detail-grid">
+          <div>
+            <dt>Use Case</dt>
+            <dd>{{ view_use_case.name }}</dd>
+          </div>
+          <div>
+            <dt>Ambiente</dt>
+            <dd>{{ view_use_case.environment }}</dd>
+          </div>
+          <div>
+            <dt>Tecnologia</dt>
+            <dd>{{ view_use_case.technology }}</dd>
+          </div>
+          <div>
+            <dt>SIEM</dt>
+            <dd>{{ view_use_case.siem }}</dd>
+          </div>
+          <div>
+            <dt>Tática MITRE</dt>
+            <dd>{{ view_use_case.mitre_tactic or '—' }}</dd>
+          </div>
+          <div>
+            <dt>Técnica MITRE</dt>
+            <dd>{{ view_use_case.mitre_technique or '—' }}</dd>
+          </div>
+          <div>
+            <dt>Criticidade</dt>
+            <dd>{{ view_use_case.criticality or '—' }}</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd>
+              <span class="status-chip {{ 'is-on' if view_use_case.is_active else 'is-off' }}">{{ 'Ativo' if view_use_case.is_active else 'Inativo' }}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>Criado por</dt>
+            <dd>{{ view_use_case.created_by or '—' }}</dd>
+          </div>
+          <div>
+            <dt>Criado</dt>
+            <dd>{{ view_use_case.display_created_at or '—' }}</dd>
+          </div>
+          <div>
+            <dt>Atualizado</dt>
+            <dd>{{ view_use_case.display_updated_at or '—' }}</dd>
+          </div>
+          <div class="full-row">
+            <dt>Descrição</dt>
+            <dd>{{ view_use_case.description | replace('\n', '<br>') | safe }}</dd>
+          </div>
+          {% if view_use_case.logic %}
+          <div class="full-row">
+            <dt>Lógica</dt>
+            <dd><pre class="use-case-logic-block">{{ view_use_case.logic }}</pre></dd>
+          </div>
+          {% endif %}
+        </dl>
+        <section class="comment-section">
+          <div class="comment-section-header">
+            <h4>Comentários</h4>
+            <span class="comment-count">{{ view_comments|length }} {{ 'comentário' if view_comments|length == 1 else 'comentários' }}</span>
+          </div>
+          {% if view_comments %}
+          <ul class="comment-list">
+            {% for comment in view_comments %}
+            <li class="comment-item">
+              <div class="comment-meta">
+                <span class="comment-author">{{ comment.created_by }}</span>
+                <span class="comment-timestamp">{{ comment.display_created_at or '—' }}</span>
+              </div>
+              <div class="comment-text">{{ comment.comment | replace('\n', '<br>') | safe }}</div>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted">Nenhum comentário registrado até o momento.</p>
+          {% endif %}
+          <form class="comment-form" method="post" action="/threat-hunting/use-cases/{{ view_use_case.id }}/comments">
+            <div class="form-field">
+              <label for="view-comment">Adicionar comentário</label>
+              <textarea id="view-comment" name="comment" rows="3" placeholder="Compartilhe hipóteses, resultados ou próximos passos." required></textarea>
+              <p class="field-hint">Os comentários exibem automaticamente o autor e o horário.</p>
+            </div>
+            <div class="form-actions">
+              <button class="btn" type="submit">Salvar comentário</button>
+            </div>
+          </form>
+        </section>
+        <div class="modal-actions modal-actions--end">
+          <button class="btn secondary" type="button" data-close-view>Fechar</button>
+          <a class="btn" href="/threat-hunting?edit={{ view_use_case.id }}#use-case-modal">Editar Use Case</a>
+        </div>
+      </div>
+      {% else %}
+      <p class="muted">Selecione um Use Case para visualizar os detalhes.</p>
+      {% endif %}
+    </div>
+  </div>
   <div id="environment-summary-modal" class="modal">
     <div class="modal-overlay" data-close-environment></div>
     <div class="modal-content environment-summary-content">
@@ -233,7 +616,209 @@
       }
     }
 
+    function setupUseCaseModal() {
+      const modal = document.getElementById('use-case-modal');
+      if (!modal) {
+        return;
+      }
+      const overlay = modal.querySelector('.modal-overlay');
+      const closeControls = modal.querySelectorAll('[data-close-modal]');
+      const openButtons = document.querySelectorAll('[data-open-modal="use-case"]');
+      const form = modal.querySelector('form');
+      if (!form) {
+        return;
+      }
+      const titleEl = modal.querySelector('[data-modal-title]');
+      const createLabel = titleEl ? titleEl.dataset.createLabel || titleEl.textContent || '' : '';
+      const editLabel = titleEl ? titleEl.dataset.editLabel || createLabel : createLabel;
+      const createAction = form.dataset.createAction || form.getAttribute('action') || '';
+      const editAction = form.dataset.editAction || createAction;
+      const textInputs = modal.querySelectorAll('input[type="text"], textarea');
+      const statusCheckbox = form.querySelector('input[name="is_active"][type="checkbox"]');
+      const initialMode = modal.dataset.initialMode || 'create';
+      const openOnLoad = modal.dataset.openOnLoad === 'true';
+
+      function focusFirstField() {
+        const first = form.querySelector('input[name="name"]') || textInputs[0];
+        if (first && typeof first.focus === 'function') {
+          first.focus();
+        }
+      }
+
+      function clearEditParam() {
+        try {
+          const url = new URL(window.location.href);
+          if (url.searchParams.has('edit')) {
+            url.searchParams.delete('edit');
+            history.replaceState({}, document.title, url.toString());
+          }
+        } catch (err) {
+          /* noop */
+        }
+      }
+
+      function setTitle(mode) {
+        if (titleEl) {
+          titleEl.textContent = mode === 'edit' ? editLabel : createLabel;
+        }
+      }
+
+      function resetFormFields() {
+        textInputs.forEach(function (input) {
+          if (input.tagName === 'TEXTAREA' || input.type === 'text') {
+            input.value = '';
+          }
+        });
+        if (statusCheckbox) {
+          statusCheckbox.checked = true;
+        }
+      }
+
+      function openModal(mode) {
+        if (mode === 'edit') {
+          form.setAttribute('action', editAction || createAction);
+        } else {
+          resetFormFields();
+          clearEditParam();
+          form.setAttribute('action', createAction);
+        }
+        setTitle(mode);
+        modal.classList.add('is-visible');
+        if (window.location.hash !== '#use-case-modal') {
+          try {
+            const baseUrl = window.location.pathname + window.location.search;
+            history.replaceState({}, document.title, baseUrl + '#use-case-modal');
+          } catch (err) {
+            /* noop */
+          }
+        }
+        focusFirstField();
+      }
+
+      function closeModal() {
+        modal.classList.remove('is-visible');
+        if (window.location.hash === '#use-case-modal') {
+          try {
+            history.replaceState({}, document.title, window.location.pathname + window.location.search);
+          } catch (err) {
+            /* noop */
+          }
+        }
+      }
+
+      openButtons.forEach(function (btn) {
+        btn.addEventListener('click', function (event) {
+          event.preventDefault();
+          openModal('create');
+        });
+      });
+
+      closeControls.forEach(function (control) {
+        control.addEventListener('click', function (event) {
+          event.preventDefault();
+          closeModal();
+        });
+      });
+
+      if (overlay) {
+        overlay.addEventListener('click', function (event) {
+          event.preventDefault();
+          closeModal();
+        });
+      }
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && modal.classList.contains('is-visible')) {
+          closeModal();
+        }
+      });
+
+      if (openOnLoad) {
+        openModal(initialMode === 'edit' ? 'edit' : 'create');
+      } else if (window.location.hash === '#use-case-modal') {
+        openModal('create');
+      }
+    }
+
+    function setupUseCaseViewModal() {
+      const viewModal = document.getElementById('use-case-view-modal');
+      if (!viewModal) {
+        return;
+      }
+      const viewOverlay = viewModal.querySelector('.modal-overlay');
+      const closeControls = viewModal.querySelectorAll('[data-close-view]');
+      const openOnLoad = viewModal.dataset.openOnLoad === 'true';
+      const hasContent = viewModal.dataset.hasContent === 'true';
+
+      function clearViewParam() {
+        try {
+          const url = new URL(window.location.href);
+          if (url.searchParams.has('view')) {
+            url.searchParams.delete('view');
+            history.replaceState({}, document.title, url.toString());
+          }
+        } catch (err) {
+          /* noop */
+        }
+      }
+
+      function openViewModal() {
+        if (!hasContent) {
+          return;
+        }
+        viewModal.classList.add('is-visible');
+        if (window.location.hash !== '#use-case-view-modal') {
+          try {
+            const baseUrl = window.location.pathname + window.location.search;
+            history.replaceState({}, document.title, baseUrl + '#use-case-view-modal');
+          } catch (err) {
+            /* noop */
+          }
+        }
+      }
+
+      function closeViewModal() {
+        viewModal.classList.remove('is-visible');
+        if (window.location.hash === '#use-case-view-modal') {
+          try {
+            history.replaceState({}, document.title, window.location.pathname + window.location.search);
+          } catch (err) {
+            /* noop */
+          }
+        }
+        clearViewParam();
+      }
+
+      closeControls.forEach(function (btn) {
+        btn.addEventListener('click', function (event) {
+          event.preventDefault();
+          closeViewModal();
+        });
+      });
+
+      if (viewOverlay) {
+        viewOverlay.addEventListener('click', function (event) {
+          event.preventDefault();
+          closeViewModal();
+        });
+      }
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && viewModal.classList.contains('is-visible')) {
+          closeViewModal();
+        }
+      });
+
+      if (openOnLoad && hasContent) {
+        openViewModal();
+      } else if (hasContent && window.location.hash === '#use-case-view-modal') {
+        openViewModal();
+      }
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
+      setupUseCaseModal();
+      setupUseCaseViewModal();
       setupEnvironmentSummaryModal();
       setupTechCatalog();
       setupInverseTechCatalog();
