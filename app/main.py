@@ -40,6 +40,7 @@ from .collectors import collect_monitoring_data, collect_health_data
 from .alerts import AlertManager
 from . import threat_hunting
 from .services import environment_store, qradar_rules
+from .services.jira_client import JiraClient
 
 try:
     from urllib3.exceptions import InsecureRequestWarning
@@ -154,6 +155,7 @@ class _DataCache:
 _monitoring_cache = _DataCache(CACHE_TTL_SECONDS)
 _health_cache = _DataCache(CACHE_TTL_SECONDS)
 _threat_hunting_cache = _DataCache(CACHE_TTL_SECONDS)
+_jira_cache = _DataCache(CACHE_TTL_SECONDS)
 
 
 def _invalidate_environment_caches() -> None:
@@ -263,6 +265,101 @@ def _refresh_threat_hunting_cache() -> Dict[str, Any]:
     return _threat_hunting_cache.refresh(_collect_threat_hunting_counts)
 
 
+def _collect_jira_monitoring() -> Dict[str, Any]:
+    config_with_envs = _config_with_envs()
+    jira_config = (
+        config_with_envs.get("jira")
+        or config_with_envs.get("jira_alerts")
+        or {}
+    )
+
+    warning_hours = max(1, int(jira_config.get("warning_hours", 12)))
+    critical_hours = max(warning_hours, int(jira_config.get("critical_hours", 24)))
+    now_local = datetime.now()
+    payload: Dict[str, Any] = {
+        "updated_at": now_local.strftime("%d/%m/%Y, %H:%M:%S"),
+        "settings": {
+            "warning_hours": warning_hours,
+            "critical_hours": critical_hours,
+            "window_hours": critical_hours,
+        },
+        "clients": [],
+        "errors": [],
+    }
+
+    jira_clients = [
+        str(c).strip() for c in (jira_config.get("clients") or []) if str(c).strip()
+    ]
+
+    if not jira_config:
+        payload["errors"].append("Monitoramento do Jira não configurado.")
+        return payload
+
+    if not jira_clients:
+        payload["errors"].append("Nenhum cliente configurado para monitoramento no Jira.")
+        return payload
+
+    try:
+        jira_client = JiraClient(jira_config, logger=logger)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Falha ao inicializar cliente do Jira")
+        payload["errors"].append(f"Configuração inválida do Jira: {exc}")
+        return payload
+
+    try:
+        summary = jira_client.summarize_clients(
+            jira_clients, window_hours=critical_hours
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Falha ao coletar status do Jira")
+        payload["errors"].append("Não foi possível consultar o Jira no momento.")
+        return payload
+
+    for entry in summary:
+        last_issue = entry.get("last_issue") or {}
+        last_created_at = last_issue.get("created_at")
+        hours_without = entry.get("hours_without_ticket")
+
+        status = "normal"
+        if hours_without is None:
+            status = "critical"
+        elif hours_without >= critical_hours:
+            status = "critical"
+        elif hours_without >= warning_hours:
+            status = "warning"
+
+        payload["clients"].append(
+            {
+                "name": entry.get("client") or "—",
+                "issues_in_window": entry.get("issues_in_window", 0),
+                "last_issue_key": last_issue.get("key"),
+                "last_issue_summary": last_issue.get("summary"),
+                "last_issue_created_at": last_created_at.isoformat()
+                if last_created_at
+                else None,
+                "hours_without_ticket": hours_without,
+                "status": status,
+            }
+        )
+
+    status_order = {"critical": 0, "warning": 1, "normal": 2}
+    payload["clients"].sort(
+        key=lambda item: (
+            status_order.get(item.get("status"), 3),
+            item.get("hours_without_ticket")
+            if item.get("hours_without_ticket") is not None
+            else float("inf"),
+            item.get("name", ""),
+        )
+    )
+
+    return payload
+
+
+def _refresh_jira_cache() -> Dict[str, Any]:
+    return _jira_cache.refresh(_collect_jira_monitoring)
+
+
 def _get_monitoring_payload() -> Dict[str, Any]:
     payload = _monitoring_cache.get_cached()
     if payload is None:
@@ -296,6 +393,17 @@ def _get_threat_hunting_payload() -> Dict[str, Any]:
     return payload
 
 
+def _get_jira_payload() -> Dict[str, Any]:
+    payload = _jira_cache.get_cached()
+    if payload is None:
+        logger.info("Cache do Jira vazio. Coletando dados iniciais.")
+        return _refresh_jira_cache()
+    if _jira_cache.is_expired():
+        logger.warning("Cache do Jira expirado. Atualizando dados sob demanda.")
+        return _refresh_jira_cache()
+    return payload
+
+
 def _refresh_all_caches() -> None:
     try:
         _refresh_monitoring_cache()
@@ -309,6 +417,10 @@ def _refresh_all_caches() -> None:
         _refresh_threat_hunting_cache()
     except Exception:
         logger.exception("Falha ao atualizar o cache de Threat Hunting")
+    try:
+        _refresh_jira_cache()
+    except Exception:
+        logger.exception("Falha ao atualizar o cache do Jira")
 
 
 async def _cache_refresh_loop(stop_event: asyncio.Event) -> None:
@@ -869,6 +981,12 @@ def get_monitoring(user: str = Depends(verify_user_required_api)):
 @app.get("/api/health")
 def get_health(user: str = Depends(verify_user_required_api)):
     payload = _get_health_payload()
+    return JSONResponse(payload)
+
+
+@app.get("/api/jira")
+def get_jira(user: str = Depends(verify_user_required_api)):
+    payload = _get_jira_payload()
     return JSONResponse(payload)
 
 @app.exception_handler(AuthenticationError)
