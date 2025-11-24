@@ -117,3 +117,64 @@ class JiraClient:
                 if previous is None or created_at > previous:
                     last_seen[normalized] = created_at
         return last_seen
+
+    def summarize_clients(
+        self, clients: Iterable[str], *, window_hours: int = 24
+    ) -> List[Dict[str, Any]]:
+        normalized_clients = [str(c).strip() for c in clients if str(c).strip()]
+        if not normalized_clients:
+            return []
+
+        window_hours = max(1, int(window_hours))
+        issues = self.fetch_recent_issues(hours=window_hours)
+        self.logger.info(
+            "%d issues do Jira coletadas para resumo de clientes", len(issues)
+        )
+
+        now = datetime.now(timezone.utc)
+        client_summary: Dict[str, Dict[str, Any]] = {
+            client: {
+                "client": client,
+                "issues_in_window": 0,
+                "last_issue": None,
+                "hours_without_ticket": None,
+            }
+            for client in normalized_clients
+        }
+
+        for issue in issues:
+            fields = issue.get("fields", {}) or {}
+            created_raw = fields.get("created")
+            created_at = self._parse_created(created_raw)
+            client_field = fields.get(self.customfield_clients_id)
+            client_names = self._extract_client_names(client_field)
+
+            for client in client_names:
+                normalized = str(client).strip()
+                if normalized not in client_summary:
+                    continue
+                summary_entry = client_summary[normalized]
+                summary_entry["issues_in_window"] += 1
+
+                if created_at is None:
+                    continue
+
+                previous_last = summary_entry.get("last_issue")
+                if previous_last is None or created_at > previous_last.get(
+                    "created_at"
+                ):
+                    summary_entry["last_issue"] = {
+                        "key": issue.get("key"),
+                        "summary": fields.get("summary") or "",
+                        "created_at": created_at,
+                    }
+
+        for client, summary_entry in client_summary.items():
+            last_issue = summary_entry.get("last_issue")
+            hours_without = None
+            if last_issue and last_issue.get("created_at"):
+                delta = now - last_issue["created_at"]
+                hours_without = max(0, delta.total_seconds() / 3600)
+            summary_entry["hours_without_ticket"] = hours_without
+
+        return list(client_summary.values())
