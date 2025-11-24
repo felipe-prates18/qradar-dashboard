@@ -18,6 +18,7 @@
             <div class="module-tabs" id="module-tabs" role="tablist" aria-label="Seções do dashboard">
               <button type="button" class="tab-button is-active" data-tab="monitor" role="tab" aria-selected="true">Monitoramento</button>
               <button type="button" class="tab-button" data-tab="health" role="tab" aria-selected="false">Health Check</button>
+              <button type="button" class="tab-button" data-tab="jira" role="tab" aria-selected="false">Jira</button>
             </div>
           </div>
           <div class="sub" id="dashboard-subtitle">Carregando status do monitoramento…</div>
@@ -147,6 +148,25 @@
       if (!trimmed) return null;
       if (trimmed === '01/01/9999' || trimmed.startsWith('01/01/9999 ')) return 'PERPETUAL';
       return trimmed;
+    }
+
+    function formatDateTimeDisplay(value) {
+      if (!value) return '—';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '—';
+      return date.toLocaleString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+
+    function formatHoursDisplay(value) {
+      if (value === null || value === undefined || Number.isNaN(value)) return '—';
+      const rounded = Math.round(Number(value) * 10) / 10;
+      return `${rounded.toFixed(1)}h`;
     }
 
     function getUsageStatus({ cpu, memory, storage }) {
@@ -1413,13 +1433,211 @@
       );
     }
 
+    function JiraClientCard({ item, settings }) {
+      const status = item && item.status ? item.status : 'normal';
+      const name = (item && item.name) || 'Cliente desconhecido';
+      const lastIssueKey = item && item.last_issue_key;
+      const lastIssueSummary = item && item.last_issue_summary;
+      const lastIssueCreatedAt = item && item.last_issue_created_at;
+      const hoursWithout = item && item.hours_without_ticket;
+      const issuesCount = item && typeof item.issues_in_window === 'number' ? item.issues_in_window : 0;
+
+      const pillClass =
+        status === 'critical' ? 'status-pill is-critical' : status === 'warning' ? 'status-pill is-warning' : 'status-pill';
+      const statusLabel = STATUS_LABEL[status] || 'OK';
+      const statusIcon = STATUS_ICON[status] || '🟢';
+
+      const windowHours = (settings && settings.window_hours) || (settings && settings.critical_hours) || 24;
+      const hoursText =
+        hoursWithout === null || hoursWithout === undefined
+          ? `Sem tickets nos últimos ${windowHours}h`
+          : `${formatHoursDisplay(hoursWithout)} sem tickets`;
+
+      const ticketLabel = lastIssueKey
+        ? `${lastIssueKey}${lastIssueSummary ? ` — ${lastIssueSummary}` : ''}`
+        : 'Nenhum ticket encontrado no período.';
+
+      const cardClasses = ['jira-card'];
+      if (status === 'warning') cardClasses.push('status-warning');
+      if (status === 'critical') cardClasses.push('status-critical');
+
+      return (
+        <div className={cardClasses.join(' ')}>
+          <div className="jira-card-header">
+            <div>
+              <div className="jira-client-name">{name}</div>
+              <div className="jira-card-meta">
+                <span className="jira-meta-item">{hoursText}</span>
+                <span className="jira-meta-item">Tickets no período: <strong>{issuesCount}</strong></span>
+              </div>
+            </div>
+            <span className={pillClass}>{statusIcon} {statusLabel}</span>
+          </div>
+          <div className="jira-card-body">
+            <div className="jira-detail-row">
+              <span className="jira-detail-label">Último ticket</span>
+              <div className="jira-detail-value">{ticketLabel}</div>
+            </div>
+            <div className="jira-detail-row">
+              <span className="jira-detail-label">Data</span>
+              <div className="jira-detail-value">{formatDateTimeDisplay(lastIssueCreatedAt)}</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function JiraApp() {
+      const [clients, setClients] = useState([]);
+      const [updatedAt, setUpdatedAt] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [messages, setMessages] = useState([]);
+      const [settings, setSettings] = useState({ window_hours: 24, warning_hours: 12, critical_hours: 24 });
+
+      const warningCount = clients.filter(item => item && item.status === 'warning').length;
+      const criticalCount = clients.filter(item => item && item.status === 'critical').length;
+      const okCount = Math.max(0, clients.length - warningCount - criticalCount);
+
+      const loadData = useCallback(async () => {
+        setLoading(true);
+        setError('');
+        setMessages([]);
+        try {
+          const response = await fetch('/api/jira');
+          if (!response.ok) {
+            throw new Error('Não foi possível carregar os dados do Jira.');
+          }
+          const payload = await response.json();
+          const clientRows = Array.isArray(payload.clients) ? payload.clients : [];
+          setClients(clientRows);
+          const incomingSettings = payload.settings && typeof payload.settings === 'object' ? payload.settings : {};
+          setSettings({
+            window_hours: 24,
+            warning_hours: 12,
+            critical_hours: 24,
+            ...incomingSettings,
+          });
+          if (payload.updated_at) {
+            setUpdatedAt(payload.updated_at);
+          } else {
+            setUpdatedAt(new Date().toLocaleString('pt-BR'));
+          }
+          const incomingMessages = Array.isArray(payload.errors) ? payload.errors.filter(Boolean) : [];
+          setMessages(incomingMessages);
+          setLoading(false);
+        } catch (err) {
+          console.error(err);
+          setError(err.message || 'Erro inesperado ao carregar os dados do Jira.');
+          setLoading(false);
+        }
+      }, []);
+
+      useEffect(() => {
+        loadData();
+        const id = setInterval(loadData, 60000);
+        return () => clearInterval(id);
+      }, [loadData]);
+
+      useEffect(() => {
+        const subtitleEl = document.getElementById('dashboard-subtitle');
+        if (!subtitleEl) return;
+        const count = clients.length;
+        const countLabel = `${count} cliente${count === 1 ? '' : 's'} acompanhad${count === 1 ? 'o' : 'os'} no Jira`;
+        const statusText = loading
+          ? 'sincronizando…'
+          : updatedAt
+          ? `última sincronização: ${updatedAt}`
+          : 'aguardando dados…';
+        subtitleEl.textContent = `${countLabel} – ${statusText}`;
+      }, [clients.length, updatedAt, loading]);
+
+      return (
+        <div className="monitor-app jira-app">
+          <div className="meta-row">
+            <div className="meta-left">
+              <button
+                className={`refresh-button${loading ? ' is-spinning' : ''}`}
+                type="button"
+                onClick={loadData}
+                disabled={loading}
+                aria-label="Atualizar status do Jira"
+                title="Atualizar status do Jira"
+              >
+                <RefreshIcon />
+              </button>
+              <div className="meta-description">
+                <span className="meta-title">Tickets por cliente no Jira (CSIRT)</span>
+                <span className="meta-subtitle">
+                  {loading ? 'Atualizando dados…' : 'Clique para sincronizar manualmente'}
+                </span>
+              </div>
+            </div>
+            <div className="meta-right">
+              {updatedAt ? <span className="meta-updated">Atualizado: {updatedAt}</span> : null}
+            </div>
+          </div>
+
+          <div className="monitor-tags">
+            <span className="badge">Janela de {settings.window_hours || settings.critical_hours || 24}h</span>
+            <span className="badge warn">Alerta após {settings.warning_hours}h sem tickets</span>
+            <span className="badge critical">Crítico após {settings.critical_hours}h</span>
+          </div>
+
+          <div className="jira-summary">
+            <div className="jira-summary-item">
+              <span className="jira-summary-label">Clientes monitorados</span>
+              <span className="jira-summary-value">{clients.length}</span>
+            </div>
+            <div className="jira-summary-item">
+              <span className="jira-summary-label">OK</span>
+              <span className="jira-summary-value ok">{okCount}</span>
+            </div>
+            <div className="jira-summary-item">
+              <span className="jira-summary-label">Aviso</span>
+              <span className="jira-summary-value warn">{warningCount}</span>
+            </div>
+            <div className="jira-summary-item">
+              <span className="jira-summary-label">Crítico</span>
+              <span className="jira-summary-value critical">{criticalCount}</span>
+            </div>
+          </div>
+
+          {error ? <div className="error-message">{error}</div> : null}
+          {messages && messages.length ? (
+            <div className="info-banner">
+              {messages.map((msg, idx) => (
+                <div key={`jira-msg-${idx}`}>{msg}</div>
+              ))}
+            </div>
+          ) : null}
+
+          {clients.length === 0 && !loading ? (
+            <div className="empty-state">Nenhum cliente configurado ou sem dados disponíveis.</div>
+          ) : null}
+
+          <div className="jira-list">
+            {clients.map((item, idx) => (
+              <JiraClientCard key={`${item.name || 'jira'}-${idx}`} item={item} settings={settings} />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     function DashboardApp() {
       const [activeTab, setActiveTab] = useState('monitor');
 
       useEffect(() => {
         const titleEl = document.getElementById('dashboard-title');
         if (titleEl) {
-          titleEl.textContent = activeTab === 'monitor' ? 'Monitoramento' : 'Health Check';
+          if (activeTab === 'monitor') {
+            titleEl.textContent = 'Monitoramento';
+          } else if (activeTab === 'health') {
+            titleEl.textContent = 'Health Check';
+          } else {
+            titleEl.textContent = 'Jira';
+          }
         }
       }, [activeTab]);
 
@@ -1428,7 +1646,9 @@
         if (!subtitleEl) return;
         subtitleEl.textContent = activeTab === 'monitor'
           ? 'Carregando status do monitoramento…'
-          : 'Carregando status do health check…';
+          : activeTab === 'health'
+          ? 'Carregando status do health check…'
+          : 'Carregando dados do Jira…';
       }, [activeTab]);
 
       useEffect(() => {
@@ -1473,7 +1693,11 @@
 
       return (
         <div className="dashboard-panels">
-          {activeTab === 'monitor' ? <MonitorApp key="monitor" /> : <HealthCheckApp key="health" />}
+          {activeTab === 'monitor'
+            ? <MonitorApp key="monitor" />
+            : activeTab === 'health'
+            ? <HealthCheckApp key="health" />
+            : <JiraApp key="jira" />}
         </div>
       );
     }
