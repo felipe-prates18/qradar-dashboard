@@ -1,12 +1,14 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone, time
-from typing import Any, Callable, Dict, Optional, Tuple
+from datetime import date, datetime, timedelta, timezone, time
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import requests
 import time as time_module
 from urllib3.exceptions import NameResolutionError
+
+from .services.jira_client import JiraClient
 
 
 def _parse_percent(value: Any) -> Optional[float]:
@@ -110,6 +112,8 @@ class AlertManager:
         self._postfix_state: Dict[str, bool] = {}
         self._offense_state: Dict[str, bool] = {}
         self._connectivity_state: Dict[Tuple[str, str], bool] = {}
+        self._jira_state: Dict[str, str] = {}
+        self._jira_last_dispatch: Optional[Tuple[date, int]] = None
 
         self._env_labels: Dict[str, str] = {}
         for env in config.get("qradar_envs", []):
@@ -120,11 +124,25 @@ class AlertManager:
             else:
                 self._env_labels[name] = name
 
+        self._jira_config = config.get("jira") or config.get("jira_alerts") or {}
+        self._jira_webhook_url = self._jira_config.get("teams_webhook_url") or self._jira_config.get(
+            "webhook_url"
+        )
+        self._jira_clients = [
+            str(client).strip()
+            for client in (self._jira_config.get("clients") or [])
+            if str(client).strip()
+        ]
+        self._jira_warning_hours = max(1, int(self._jira_config.get("warning_hours", 12)))
+        self._jira_critical_hours = max(self._jira_warning_hours, int(self._jira_config.get("critical_hours", 24)))
+
     async def start(self) -> None:
         if self._task is not None:
             return
-        if not self.webhook_url:
-            self.logger.warning("Webhook do Microsoft Teams não configurado. Sistema de alertas inativo.")
+        if not self.webhook_url and not self._jira_webhook_url:
+            self.logger.warning(
+                "Nenhum webhook configurado para alertas gerais ou do Jira. Sistema de alertas inativo."
+            )
             return
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run_loop())
@@ -203,6 +221,12 @@ class AlertManager:
                 self.logger.info("Dados de saúde vazios recebidos para alertas")
         else:
             self.logger.warning("Falha ao obter dados de saúde para alertas")
+
+        try:
+            self._process_jira_alerts(now, force_send=force_send)
+        except Exception:
+            self.logger.exception("Falha ao processar alertas do Jira")
+
         if monitoring is None and health is None:
             self.logger.warning("Nenhum dado disponível para avaliação de alertas")
 
@@ -264,6 +288,7 @@ class AlertManager:
         extra: Optional[Dict[str, Any]] = None,
         env_code: Optional[str] = None,
         component: Optional[str] = None,
+        webhook_urls: Optional[Iterable[str]] = None,
     ) -> None:
         self.logger.info(
             "Preparando envio de alerta | titulo='%s' severidade='%s'", title, severity
@@ -312,9 +337,17 @@ class AlertManager:
         headers = {"Content-Type": "application/json"}
         body = json.dumps(payload, ensure_ascii=False)
 
-        targets = [("principal", self.webhook_url)] if self.webhook_url else []
-        if category == "license" and self.license_webhook_url:
-            targets.append(("licenca", self.license_webhook_url))
+        dedicated_category = (category or "").lower()
+        if dedicated_category in {"license", "jira"}:
+            targets = []
+            if dedicated_category == "license" and self.license_webhook_url:
+                targets.append(("licenca", self.license_webhook_url))
+            elif dedicated_category == "jira" and self._jira_webhook_url:
+                targets.append(("jira", self._jira_webhook_url))
+        elif webhook_urls:
+            targets = [(f"custom-{idx}", url) for idx, url in enumerate(webhook_urls, start=1) if url]
+        else:
+            targets = [("principal", self.webhook_url)] if self.webhook_url else []
 
         if not targets:
             self.logger.warning("Nenhum webhook configurado para envio do alerta '%s'", title)
@@ -818,3 +851,96 @@ class AlertManager:
                     )
             else:
                 self._connectivity_state.pop(key, None)
+
+    def _process_jira_alerts(self, now: datetime, *, force_send: bool = False) -> None:
+        if not self._jira_config:
+            return
+
+        if not self._jira_webhook_url:
+            self.logger.debug(
+                "Webhook dedicado do Teams para alertas do Jira não configurado. Ignorando verificação."
+            )
+            return
+
+        if not self._jira_clients:
+            self.logger.debug("Nenhum cliente configurado para monitoramento do Jira.")
+            return
+
+        allowed_hours = {7, 19}
+        if not force_send and now.hour not in allowed_hours:
+            return
+
+        dispatch_key = (now.date(), now.hour)
+        if not force_send and self._jira_last_dispatch == dispatch_key:
+            self.logger.debug(
+                "Verificação de Jira já executada para %s %sh. Pulando envio duplicado.",
+                now.date(),
+                now.hour,
+            )
+            return
+
+        jira_client = JiraClient(self._jira_config, logger=self.logger)
+        last_seen_map = jira_client.last_issue_by_client(
+            self._jira_clients, window_hours=self._jira_critical_hours
+        )
+
+        now_utc = datetime.now(timezone.utc)
+
+        for client in self._jira_clients:
+            last_seen = last_seen_map.get(client)
+            severity: Optional[str] = None
+            hours_without: Optional[float] = None
+
+            if last_seen is None:
+                severity = "critical"
+            else:
+                delta = now_utc - last_seen
+                hours_without = delta.total_seconds() / 3600
+                if hours_without >= self._jira_critical_hours:
+                    severity = "critical"
+                elif hours_without >= self._jira_warning_hours:
+                    severity = "warning"
+
+            previous = self._jira_state.get(client)
+            if severity:
+                if previous != severity:
+                    last_ticket_text = (
+                        last_seen.strftime("%d/%m/%Y %H:%M:%S UTC") if last_seen else "Nenhum ticket em 24h"
+                    )
+                    hours_text = (
+                        f"{hours_without:.1f}h" if hours_without is not None else f">= {self._jira_critical_hours}h"
+                    )
+                    facts = (
+                        {"title": "Cliente", "value": client},
+                        {"title": "Último ticket", "value": last_ticket_text},
+                        {"title": "Tempo sem tickets", "value": hours_text},
+                    )
+                    message = (
+                        f"Cliente {client} está sem abertura de tickets há {hours_text}. "
+                        "Verifique a ingestão de incidentes no Jira."
+                    )
+                    self._send_alert(
+                        "Inatividade de tickets no Jira",
+                        message,
+                        severity=severity,
+                        summary=client,
+                        facts=facts,
+                        category="jira",
+                        detected_at=now_utc,
+                        env_code=client,
+                        component="jira-tickets",
+                    )
+                    self._jira_state[client] = severity
+                else:
+                    self.logger.debug(
+                        "Alerta Jira já enviado para cliente=%s com severidade=%s", client, severity
+                    )
+            else:
+                if previous:
+                    self.logger.info(
+                        "Cliente %s voltou a criar tickets dentro do prazo. Limpando estado de alerta do Jira.",
+                        client,
+                    )
+                self._jira_state.pop(client, None)
+
+        self._jira_last_dispatch = dispatch_key
