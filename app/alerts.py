@@ -138,8 +138,10 @@ class AlertManager:
     async def start(self) -> None:
         if self._task is not None:
             return
-        if not self.webhook_url:
-            self.logger.warning("Webhook do Microsoft Teams não configurado. Sistema de alertas inativo.")
+        if not self.webhook_url and not self._jira_webhook_url:
+            self.logger.warning(
+                "Nenhum webhook configurado para alertas gerais ou do Jira. Sistema de alertas inativo."
+            )
             return
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run_loop())

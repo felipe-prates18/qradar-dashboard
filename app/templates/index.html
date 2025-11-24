@@ -1457,15 +1457,21 @@
         ? `${lastIssueKey}${lastIssueSummary ? ` — ${lastIssueSummary}` : ''}`
         : 'Nenhum ticket encontrado no período.';
 
+      const cardClasses = ['jira-card'];
+      if (status === 'warning') cardClasses.push('status-warning');
+      if (status === 'critical') cardClasses.push('status-critical');
+
       return (
-        <div className={`jira-card${status === 'warning' ? ' is-warning' : ''}${status === 'critical' ? ' is-critical' : ''}`}>
+        <div className={cardClasses.join(' ')}>
           <div className="jira-card-header">
-            <div className="jira-client-name">{name}</div>
+            <div>
+              <div className="jira-client-name">{name}</div>
+              <div className="jira-card-meta">
+                <span className="jira-meta-item">{hoursText}</span>
+                <span className="jira-meta-item">Tickets no período: <strong>{issuesCount}</strong></span>
+              </div>
+            </div>
             <span className={pillClass}>{statusIcon} {statusLabel}</span>
-          </div>
-          <div className="jira-card-meta">
-            <span className="jira-meta-item">{hoursText}</span>
-            <span className="jira-meta-item">Tickets no período: <strong>{issuesCount}</strong></span>
           </div>
           <div className="jira-card-body">
             <div className="jira-detail-row">
@@ -1488,6 +1494,10 @@
       const [error, setError] = useState('');
       const [messages, setMessages] = useState([]);
       const [settings, setSettings] = useState({ window_hours: 24, warning_hours: 12, critical_hours: 24 });
+
+      const warningCount = clients.filter(item => item && item.status === 'warning').length;
+      const criticalCount = clients.filter(item => item && item.status === 'critical').length;
+      const okCount = Math.max(0, clients.length - warningCount - criticalCount);
 
       const loadData = useCallback(async () => {
         setLoading(true);
@@ -1572,6 +1582,25 @@
             <span className="badge">Janela de {settings.window_hours || settings.critical_hours || 24}h</span>
             <span className="badge warn">Alerta após {settings.warning_hours}h sem tickets</span>
             <span className="badge critical">Crítico após {settings.critical_hours}h</span>
+          </div>
+
+          <div className="jira-summary">
+            <div className="jira-summary-item">
+              <span className="jira-summary-label">Clientes monitorados</span>
+              <span className="jira-summary-value">{clients.length}</span>
+            </div>
+            <div className="jira-summary-item">
+              <span className="jira-summary-label">OK</span>
+              <span className="jira-summary-value ok">{okCount}</span>
+            </div>
+            <div className="jira-summary-item">
+              <span className="jira-summary-label">Aviso</span>
+              <span className="jira-summary-value warn">{warningCount}</span>
+            </div>
+            <div className="jira-summary-item">
+              <span className="jira-summary-label">Crítico</span>
+              <span className="jira-summary-value critical">{criticalCount}</span>
+            </div>
           </div>
 
           {error ? <div className="error-message">{error}</div> : null}
