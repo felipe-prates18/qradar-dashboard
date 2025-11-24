@@ -1132,8 +1132,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
 
         offense_check = _check_offenses(env)
         _append_error_from_check(offense_check, errors)
-
-        email_check = None
         client = None
         try:
             logger.info("Iniciando conexão SSH ambiente=%s", env_name)
@@ -1169,13 +1167,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                             "error": error_message,
                         }
                     )
-            email_check = {
-                "status": "error",
-                "message": "Não foi possível verificar o envio de e-mails.",
-                "details": [],
-                "count": None,
-                "error": error_message,
-            }
         else:
             try:
                 logger.info("Verificando serviços ambiente=%s", env_name)
@@ -1202,20 +1193,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 error_message = str(exc)
                 errors.append(error_message)
                 logger.exception("Erro ao verificar conectividade do ambiente %s", env_name)
-
-            try:
-                email_check = ssh.check_mail_delivery(env, client=client)
-            except Exception as exc:
-                error_message = str(exc)
-                errors.append(error_message)
-                logger.exception("Erro ao verificar envio de e-mails no ambiente %s", env_name)
-                email_check = {
-                    "status": "error",
-                    "message": "Falha ao verificar envios de e-mail.",
-                    "details": [],
-                    "count": None,
-                    "error": error_message,
-                }
             finally:
                 if client is not None:
                     try:
@@ -1223,16 +1200,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                         logger.info("Conexão SSH encerrada ambiente=%s", env_name)
                     except Exception:
                         pass
-
-        if email_check is None:
-            email_check = {
-                "status": "warning",
-                "message": "Verificação de e-mails não executada.",
-                "details": [],
-                "count": None,
-            }
-
-        _append_error_from_check(email_check, errors)
 
         return (
             idx_env,
@@ -1243,7 +1210,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                 "connectivity": connectivity_result,
                 "log_sources_check": log_sources_check,
                 "offense_check": offense_check,
-                "email_check": email_check,
                 "errors": errors,
             },
         )
@@ -1267,13 +1233,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                         "services": [],
                         "connectivity": [],
                         "offense_check": {
-                            "status": "error",
-                            "message": "Falha inesperada na coleta",
-                            "details": [],
-                            "count": None,
-                            "error": "Falha inesperada na coleta",
-                        },
-                        "email_check": {
                             "status": "error",
                             "message": "Falha inesperada na coleta",
                             "details": [],

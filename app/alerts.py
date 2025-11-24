@@ -107,7 +107,6 @@ class AlertManager:
         self._eps_state: Dict[str, Dict[str, Any]] = {}
         self._license_state: Dict[str, Dict[str, Any]] = {}
         self._license_send_time = time(hour=15, minute=0)
-        self._email_state: Dict[str, bool] = {}
         self._postfix_state: Dict[str, bool] = {}
         self._offense_state: Dict[str, bool] = {}
         self._connectivity_state: Dict[Tuple[str, str], bool] = {}
@@ -717,39 +716,9 @@ class AlertManager:
             env_label = self._env_label(row)
             code = row.get("code") or env_label
 
-            self._check_email_alert(row, env_label, code, now)
             self._check_postfix_alert(row, env_label, code, now)
             self._check_offense_alert(row, env_label, code, now)
             self._check_connectivity_alert(row, env_label, code, now)
-
-    def _check_email_alert(
-        self, row: Dict[str, Any], env_label: str, code: str, now: datetime
-    ) -> None:
-        email_check = row.get("email_check") or {}
-        status = str(email_check.get("status") or "").lower()
-        if status in {"error", "critical", "failed", "missing"}:
-            if not self._email_state.get(code):
-                message = f"{env_label}: sem envios de e-mail nas últimas 24 horas ou verificação com erro."
-                facts = (
-                    {"title": "Ambiente", "value": env_label},
-                    {"title": "Status", "value": status or "desconhecido"},
-                )
-                self._send_alert(
-                    "Falha no envio de e-mails",
-                    message,
-                    severity="critical",
-                    summary=env_label,
-                    facts=facts,
-                    category="email",
-                    detected_at=now,
-                    env_code=code,
-                    component="email",
-                )
-                self._email_state[code] = True
-            else:
-                self.logger.debug("Alerta de e-mail já enviado para %s", env_label)
-        else:
-            self._email_state.pop(code, None)
 
     def _check_postfix_alert(
         self, row: Dict[str, Any], env_label: str, code: str, now: datetime

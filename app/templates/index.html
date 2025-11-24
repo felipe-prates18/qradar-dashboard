@@ -944,7 +944,6 @@
       const connectivity = Array.isArray(environment && environment.connectivity) ? environment.connectivity : [];
       const offenseCheck = environment && environment.offense_check ? environment.offense_check : null;
       const logSourcesCheck = environment && environment.log_sources_check ? environment.log_sources_check : null;
-      const emailCheck = environment && environment.email_check ? environment.email_check : null;
       const errorMessages = Array.isArray(environment && environment.errors)
         ? environment.errors.filter(Boolean)
         : [];
@@ -979,9 +978,6 @@
       if (offenseCheck) {
         coreStatusesForOverall.push(getSimpleCheckSeverity(offenseCheck));
       }
-      if (emailCheck) {
-        coreStatusesForOverall.push(getSimpleCheckSeverity(emailCheck));
-      }
       if (errorMessages.length) {
         coreStatusesForOverall.push('critical');
       }
@@ -1011,12 +1007,6 @@
         ? `${offenseCount} ${offenseCount === 1 ? 'ofensa' : 'ofensas'}`
         : '—';
       const offenseSeverity = offenseCheck ? getSimpleCheckSeverity(offenseCheck) : 'warning';
-
-      const emailCount = emailCheck && typeof emailCheck.count === 'number' ? emailCheck.count : null;
-      const emailSummaryValue = emailCount !== null
-        ? `${emailCount} ${emailCount === 1 ? 'envio' : 'envios'}`
-        : '—';
-      const emailSeverity = emailCheck ? getSimpleCheckSeverity(emailCheck) : 'warning';
 
       const logSourceTotal = logSourcesCheck && typeof logSourcesCheck.total === 'number' ? logSourcesCheck.total : null;
       const logSourceProblematic = logSourcesCheck && typeof logSourcesCheck.count === 'number' ? logSourcesCheck.count : null;
@@ -1084,17 +1074,6 @@
           percent: logSourcePercent,
           status: logSourceSeverity,
           tooltip: logSourcesCheck.message || undefined,
-        });
-      }
-
-      if (emailCheck) {
-        summaryMetrics.push({
-          key: 'emails',
-          label: 'Envios de e-mail (24h)',
-          value: emailSummaryValue,
-          percent: null,
-          status: emailSeverity,
-          tooltip: emailCheck.message || undefined,
         });
       }
 
@@ -1180,14 +1159,6 @@
                     <LogSourcesCheckItem check={logSourcesCheck} environmentName={environment && environment.name} />
                   ) : (
                     <div className="health-empty">Verificação de log sources não disponível.</div>
-                  )}
-                </div>
-                <div className="health-section">
-                  <h3>Envio de e-mails</h3>
-                  {emailCheck ? (
-                    <SimpleCheckItem title="Envios nas últimas 24 horas" check={emailCheck} />
-                  ) : (
-                    <div className="health-empty">Verificação de e-mails não disponível.</div>
                   )}
                 </div>
               </div>
