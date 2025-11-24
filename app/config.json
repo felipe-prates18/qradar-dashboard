@@ -22,6 +22,17 @@
     "license_teams_webhook_url": "",
     "interval_seconds": 600
   },
+  "jira": {
+    "base_url": "https://aspertecnologia.atlassian.net",
+    "email": "",
+    "api_token": "",
+    "project_key": "CSIRT",
+    "customfield_clients_id": "customfield_10191",
+    "warning_hours": 12,
+    "critical_hours": 24,
+    "teams_webhook_url": "",
+    "clients": []
+  },
   "health": {
     "services": [
       "accumulator.service",
