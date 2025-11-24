@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone, time
+from datetime import date, datetime, timedelta, timezone, time
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import requests
@@ -113,6 +113,7 @@ class AlertManager:
         self._offense_state: Dict[str, bool] = {}
         self._connectivity_state: Dict[Tuple[str, str], bool] = {}
         self._jira_state: Dict[str, str] = {}
+        self._jira_last_dispatch: Optional[Tuple[date, int]] = None
 
         self._env_labels: Dict[str, str] = {}
         for env in config.get("qradar_envs", []):
@@ -336,12 +337,17 @@ class AlertManager:
         headers = {"Content-Type": "application/json"}
         body = json.dumps(payload, ensure_ascii=False)
 
-        if webhook_urls:
+        dedicated_category = (category or "").lower()
+        if dedicated_category in {"license", "jira"}:
+            targets = []
+            if dedicated_category == "license" and self.license_webhook_url:
+                targets.append(("licenca", self.license_webhook_url))
+            elif dedicated_category == "jira" and self._jira_webhook_url:
+                targets.append(("jira", self._jira_webhook_url))
+        elif webhook_urls:
             targets = [(f"custom-{idx}", url) for idx, url in enumerate(webhook_urls, start=1) if url]
         else:
             targets = [("principal", self.webhook_url)] if self.webhook_url else []
-            if category == "license" and self.license_webhook_url:
-                targets.append(("licenca", self.license_webhook_url))
 
         if not targets:
             self.logger.warning("Nenhum webhook configurado para envio do alerta '%s'", title)
@@ -850,15 +856,27 @@ class AlertManager:
         if not self._jira_config:
             return
 
-        webhook_targets = [url for url in (self._jira_webhook_url, self.webhook_url) if url]
-        if not webhook_targets:
+        if not self._jira_webhook_url:
             self.logger.debug(
-                "Webhook do Teams para alertas do Jira não configurado (nem dedicado nem global). Ignorando verificação."
+                "Webhook dedicado do Teams para alertas do Jira não configurado. Ignorando verificação."
             )
             return
 
         if not self._jira_clients:
             self.logger.debug("Nenhum cliente configurado para monitoramento do Jira.")
+            return
+
+        allowed_hours = {7, 19}
+        if now.hour not in allowed_hours:
+            return
+
+        dispatch_key = (now.date(), now.hour)
+        if self._jira_last_dispatch == dispatch_key:
+            self.logger.debug(
+                "Verificação de Jira já executada para %s %sh. Pulando envio duplicado.",
+                now.date(),
+                now.hour,
+            )
             return
 
         jira_client = JiraClient(self._jira_config, logger=self.logger)
@@ -911,7 +929,6 @@ class AlertManager:
                         detected_at=now_utc,
                         env_code=client,
                         component="jira-tickets",
-                        webhook_urls=webhook_targets,
                     )
                     self._jira_state[client] = severity
                 else:
@@ -925,3 +942,5 @@ class AlertManager:
                         client,
                     )
                 self._jira_state.pop(client, None)
+
+        self._jira_last_dispatch = dispatch_key
