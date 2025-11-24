@@ -850,8 +850,11 @@ class AlertManager:
         if not self._jira_config:
             return
 
-        if not self._jira_webhook_url:
-            self.logger.debug("Webhook do Teams para alertas do Jira não configurado. Ignorando verificação.")
+        webhook_targets = [url for url in (self._jira_webhook_url, self.webhook_url) if url]
+        if not webhook_targets:
+            self.logger.debug(
+                "Webhook do Teams para alertas do Jira não configurado (nem dedicado nem global). Ignorando verificação."
+            )
             return
 
         if not self._jira_clients:
@@ -908,7 +911,7 @@ class AlertManager:
                         detected_at=now_utc,
                         env_code=client,
                         component="jira-tickets",
-                        webhook_urls=[self._jira_webhook_url],
+                        webhook_urls=webhook_targets,
                     )
                     self._jira_state[client] = severity
                 else:

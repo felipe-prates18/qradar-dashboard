@@ -1453,6 +1453,11 @@
           ? `Sem tickets nos últimos ${windowHours}h`
           : `${formatHoursDisplay(hoursWithout)} sem tickets`;
 
+      const durationText =
+        hoursWithout === null || hoursWithout === undefined
+          ? `≥ ${windowHours}h`
+          : formatHoursDisplay(hoursWithout);
+
       const ticketLabel = lastIssueKey
         ? `${lastIssueKey}${lastIssueSummary ? ` — ${lastIssueSummary}` : ''}`
         : 'Nenhum ticket encontrado no período.';
@@ -1464,21 +1469,31 @@
       return (
         <div className={cardClasses.join(' ')}>
           <div className="jira-card-header">
-            <div>
+            <div className="jira-card-title">
               <div className="jira-client-name">{name}</div>
-              <div className="jira-card-meta">
-                <span className="jira-meta-item">{hoursText}</span>
-                <span className="jira-meta-item">Tickets no período: <strong>{issuesCount}</strong></span>
-              </div>
+              <div className="jira-card-subtitle">{hoursText}</div>
             </div>
             <span className={pillClass}>{statusIcon} {statusLabel}</span>
           </div>
+
           <div className="jira-card-body">
-            <div className="jira-detail-row">
+            <div className="jira-metrics">
+              <div className="jira-metric">
+                <span className="jira-metric-label">Tickets ({windowHours}h)</span>
+                <span className="jira-metric-value">{issuesCount}</span>
+              </div>
+              <div className="jira-metric">
+                <span className="jira-metric-label">Tempo sem tickets</span>
+                <span className="jira-metric-value">{durationText}</span>
+              </div>
+            </div>
+
+            <div className="jira-detail">
               <span className="jira-detail-label">Último ticket</span>
               <div className="jira-detail-value">{ticketLabel}</div>
             </div>
-            <div className="jira-detail-row">
+
+            <div className="jira-detail">
               <span className="jira-detail-label">Data</span>
               <div className="jira-detail-value">{formatDateTimeDisplay(lastIssueCreatedAt)}</div>
             </div>
