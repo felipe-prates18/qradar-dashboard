@@ -223,7 +223,7 @@ class AlertManager:
             self.logger.warning("Falha ao obter dados de saúde para alertas")
 
         try:
-            self._process_jira_alerts(now)
+            self._process_jira_alerts(now, force_send=force_send)
         except Exception:
             self.logger.exception("Falha ao processar alertas do Jira")
 
@@ -852,7 +852,7 @@ class AlertManager:
             else:
                 self._connectivity_state.pop(key, None)
 
-    def _process_jira_alerts(self, now: datetime) -> None:
+    def _process_jira_alerts(self, now: datetime, *, force_send: bool = False) -> None:
         if not self._jira_config:
             return
 
@@ -867,11 +867,11 @@ class AlertManager:
             return
 
         allowed_hours = {7, 19}
-        if now.hour not in allowed_hours:
+        if not force_send and now.hour not in allowed_hours:
             return
 
         dispatch_key = (now.date(), now.hour)
-        if self._jira_last_dispatch == dispatch_key:
+        if not force_send and self._jira_last_dispatch == dispatch_key:
             self.logger.debug(
                 "Verificação de Jira já executada para %s %sh. Pulando envio duplicado.",
                 now.date(),
