@@ -4,6 +4,8 @@ import logging
 from datetime import date, datetime, timedelta, timezone, time
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
+from pathlib import Path
+
 import requests
 import time as time_module
 from urllib3.exceptions import NameResolutionError
@@ -90,6 +92,7 @@ class AlertManager:
             or alerts_conf.get("webhook")
         )
         self.license_webhook_url = alerts_conf.get("license_teams_webhook_url")
+        self._state_file = Path(alerts_conf.get("state_file") or "alerts_state.json")
         self.interval = int(alerts_conf.get("interval_seconds", 600))
         if self.interval < 60:
             self.interval = 60
@@ -135,6 +138,9 @@ class AlertManager:
         ]
         self._jira_warning_hours = max(1, int(self._jira_config.get("warning_hours", 12)))
         self._jira_critical_hours = max(self._jira_warning_hours, int(self._jira_config.get("critical_hours", 24)))
+        self._state_dirty = False
+
+        self._load_state()
 
     async def start(self) -> None:
         if self._task is not None:
@@ -229,6 +235,8 @@ class AlertManager:
 
         if monitoring is None and health is None:
             self.logger.warning("Nenhum dado disponível para avaliação de alertas")
+
+        self._save_state_if_dirty()
 
     def _env_label(self, row: Dict[str, Any]) -> str:
         code = row.get("code")
@@ -453,6 +461,189 @@ class AlertManager:
 
         return False
 
+    @staticmethod
+    def _parse_date_value(raw: Any) -> Optional[date]:
+        if raw is None:
+            return None
+        try:
+            return date.fromisoformat(str(raw))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _parse_datetime_value(raw: Any) -> Optional[datetime]:
+        if raw is None:
+            return None
+        try:
+            return datetime.fromisoformat(str(raw))
+        except Exception:
+            return None
+
+    def _load_state(self) -> None:
+        if not self._state_file:
+            return
+
+        if not self._state_file.exists():
+            return
+
+        try:
+            content = json.loads(self._state_file.read_text(encoding="utf-8"))
+        except Exception:
+            self.logger.exception(
+                "Não foi possível carregar o arquivo de estado dos alertas (%s)",
+                self._state_file,
+            )
+            return
+
+        resource_entries = content.get("resource_state") or []
+        for entry in resource_entries:
+            key = (entry.get("code"), entry.get("component"), entry.get("metric"))
+            if not all(key):
+                continue
+            self._resource_state[key] = {
+                "first_seen": self._parse_datetime_value(entry.get("first_seen")),
+                "alert_sent": bool(entry.get("alert_sent")),
+            }
+
+        storage_entries = content.get("storage_alerts") or []
+        for entry in storage_entries:
+            key = (entry.get("code"), entry.get("component"), entry.get("metric"))
+            if not all(key):
+                continue
+            self._storage_alerts[key] = True
+
+        eps_state = content.get("eps_state") or {}
+        for code, values in eps_state.items():
+            self._eps_state[code] = {
+                "first_exceeded": self._parse_datetime_value(values.get("first_exceeded")),
+                "last_sent_date": self._parse_date_value(values.get("last_sent_date")),
+            }
+
+        license_state = content.get("license_state") or {}
+        for code, values in license_state.items():
+            self._license_state[code] = {
+                "info_sent_date": self._parse_date_value(values.get("info_sent_date")),
+                "warning_sent_date": self._parse_date_value(values.get("warning_sent_date")),
+                "critical_sent_date": self._parse_date_value(values.get("critical_sent_date")),
+            }
+
+        postfix_state = content.get("postfix_state") or {}
+        self._postfix_state.update({key: bool(value) for key, value in postfix_state.items()})
+
+        offense_state = content.get("offense_state") or {}
+        self._offense_state.update({key: bool(value) for key, value in offense_state.items()})
+
+        connectivity_entries = content.get("connectivity_state") or []
+        for entry in connectivity_entries:
+            key = (entry.get("code"), entry.get("target"))
+            if not all(key):
+                continue
+            self._connectivity_state[key] = True
+
+        jira_state = content.get("jira_state") or {}
+        self._jira_state.update({key: str(value) for key, value in jira_state.items() if value})
+
+        dispatch = content.get("jira_last_dispatch")
+        if isinstance(dispatch, (list, tuple)) and len(dispatch) == 2:
+            stored_date = self._parse_date_value(dispatch[0])
+            stored_hour = dispatch[1]
+            if stored_date and isinstance(stored_hour, int):
+                self._jira_last_dispatch = (stored_date, stored_hour)
+
+        self.logger.info(
+            "Estado dos alertas carregado de %s", self._state_file,
+        )
+
+    def _serialize_state(self) -> Dict[str, Any]:
+        def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+            return value.isoformat() if isinstance(value, datetime) else None
+
+        def _serialize_date(value: Optional[date]) -> Optional[str]:
+            return value.isoformat() if isinstance(value, date) else None
+
+        resource_state = [
+            {
+                "code": code,
+                "component": component,
+                "metric": metric,
+                "first_seen": _serialize_datetime(values.get("first_seen")),
+                "alert_sent": bool(values.get("alert_sent")),
+            }
+            for (code, component, metric), values in self._resource_state.items()
+        ]
+
+        storage_state = [
+            {
+                "code": code,
+                "component": component,
+                "metric": metric,
+            }
+            for (code, component, metric) in self._storage_alerts.keys()
+        ]
+
+        eps_state = {
+            code: {
+                "first_exceeded": _serialize_datetime(values.get("first_exceeded")),
+                "last_sent_date": _serialize_date(values.get("last_sent_date")),
+            }
+            for code, values in self._eps_state.items()
+        }
+
+        license_state = {
+            code: {
+                "info_sent_date": _serialize_date(values.get("info_sent_date")),
+                "warning_sent_date": _serialize_date(values.get("warning_sent_date")),
+                "critical_sent_date": _serialize_date(values.get("critical_sent_date")),
+            }
+            for code, values in self._license_state.items()
+        }
+
+        connectivity_state = [
+            {"code": code, "target": target}
+            for (code, target) in self._connectivity_state.keys()
+        ]
+
+        jira_dispatch = None
+        if self._jira_last_dispatch:
+            dispatch_date, dispatch_hour = self._jira_last_dispatch
+            jira_dispatch = [
+                _serialize_date(dispatch_date),
+                dispatch_hour,
+            ]
+
+        return {
+            "resource_state": resource_state,
+            "storage_alerts": storage_state,
+            "eps_state": eps_state,
+            "license_state": license_state,
+            "postfix_state": self._postfix_state,
+            "offense_state": self._offense_state,
+            "connectivity_state": connectivity_state,
+            "jira_state": self._jira_state,
+            "jira_last_dispatch": jira_dispatch,
+        }
+
+    def _save_state_if_dirty(self) -> None:
+        if not self._state_dirty:
+            return
+
+        payload = self._serialize_state()
+        try:
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            self._state_file.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self._state_dirty = False
+            self.logger.debug("Estado dos alertas salvo em %s", self._state_file)
+        except Exception:
+            self.logger.exception(
+                "Falha ao persistir estado dos alertas em %s", self._state_file
+            )
+
+    def _mark_state_dirty(self) -> None:
+        self._state_dirty = True
+
     def _process_monitoring_alerts(
         self, monitoring: Dict[str, Any], now: datetime, *, force_send: bool = False
     ) -> None:
@@ -488,9 +679,13 @@ class AlertManager:
             key = (code, component, metric_key)
 
             if severity == "critical":
-                state = self._resource_state.setdefault(key, {"first_seen": now, "alert_sent": False})
+                if key not in self._resource_state:
+                    self._resource_state[key] = {"first_seen": now, "alert_sent": False}
+                    self._mark_state_dirty()
+                state = self._resource_state[key]
                 if state.get("first_seen") is None:
                     state["first_seen"] = now
+                    self._mark_state_dirty()
                 if not state.get("alert_sent") and now - state["first_seen"] >= timedelta(hours=1):
                     message = (
                         f"{env_label} - {component}: consumo crítico de {metric_key.upper()} "
@@ -515,6 +710,7 @@ class AlertManager:
                         component=component,
                     )
                     state["alert_sent"] = True
+                    self._mark_state_dirty()
                 else:
                     remaining = timedelta(hours=1) - (now - state["first_seen"])
                     if remaining.total_seconds() < 0:
@@ -527,7 +723,9 @@ class AlertManager:
                         remaining,
                     )
             else:
-                self._resource_state.pop(key, None)
+                if key in self._resource_state:
+                    self._resource_state.pop(key, None)
+                    self._mark_state_dirty()
 
             if metric_key == "storage":
                 if percent is not None and percent >= 90:
@@ -552,6 +750,7 @@ class AlertManager:
                             component=component,
                         )
                         self._storage_alerts[key] = True
+                        self._mark_state_dirty()
                     else:
                         self.logger.debug(
                             "Alerta de armazenamento já enviado para %s/%s (%s%%)",
@@ -561,28 +760,33 @@ class AlertManager:
                         )
                 else:
                     self._storage_alerts.pop(key, None)
+                    self._mark_state_dirty()
 
             if severity != "critical":
                 # Reset the first seen timestamp if the metric returned to normal levels.
                 if key in self._resource_state:
                     self._resource_state[key]["first_seen"] = None
                     self._resource_state[key]["alert_sent"] = False
+                    self._mark_state_dirty()
 
     def _check_eps_alert(self, row: Dict[str, Any], env_label: str, code: str, now: datetime) -> None:
         license_eps = _parse_int(row.get("license_eps"))
         eps_current = _parse_int(row.get("eps_current"))
         if not license_eps or license_eps <= 0 or eps_current is None:
-            self._eps_state.pop(code, None)
+            if code in self._eps_state:
+                self._eps_state.pop(code, None)
+                self._mark_state_dirty()
             return
 
-        state = self._eps_state.setdefault(
-            code,
-            {"first_exceeded": None, "last_sent_date": None},
-        )
+        if code not in self._eps_state:
+            self._eps_state[code] = {"first_exceeded": None, "last_sent_date": None}
+            self._mark_state_dirty()
+        state = self._eps_state[code]
 
         if eps_current > license_eps:
             if state.get("first_exceeded") is None:
                 state["first_exceeded"] = now
+                self._mark_state_dirty()
             if now - state["first_exceeded"] >= timedelta(hours=24):
                 last_sent = state.get("last_sent_date")
                 if last_sent != now.date():
@@ -608,6 +812,7 @@ class AlertManager:
                         env_code=code,
                     )
                     state["last_sent_date"] = now.date()
+                    self._mark_state_dirty()
                 else:
                     self.logger.debug(
                         "Alerta diário de EPS já enviado para %s na data %s",
@@ -622,7 +827,9 @@ class AlertManager:
                     elapsed,
                 )
         else:
-            self._eps_state.pop(code, None)
+            if code in self._eps_state:
+                self._eps_state.pop(code, None)
+                self._mark_state_dirty()
 
     def _check_license_alert(
         self, row: Dict[str, Any], env_label: str, code: str, now: datetime, *, force_send: bool
@@ -639,27 +846,26 @@ class AlertManager:
         soonest = min(dates)
         days_until = (soonest.date() - now.date()).days
 
-        state = self._license_state.setdefault(
-            code,
-            {
-                "info_sent": False,
-                "warning_sent": False,
-                "critical_date": None,
-                "info_schedule_date": None,
-                "warning_schedule_date": None,
-            },
-        )
+        if code not in self._license_state:
+            self._license_state[code] = {
+                "info_sent_date": None,
+                "warning_sent_date": None,
+                "critical_sent_date": None,
+            }
+            self._mark_state_dirty()
+
+        state = self._license_state[code]
 
         self.logger.debug(
             "Licença de %s expira em %d dias (data %s)", env_label, days_until, soonest.date()
         )
 
         send_time = time(0, 0) if force_send else self._license_send_time
+        send_dt = datetime.combine(now.date(), send_time)
 
         if days_until <= 15:
-            last_sent = state.get("critical_date")
-            send_dt = datetime.combine(now.date(), send_time)
-            if now >= send_dt and last_sent != now.date():
+            last_sent = state.get("critical_sent_date")
+            if (force_send or now >= send_dt) and last_sent != now.date():
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
@@ -678,19 +884,18 @@ class AlertManager:
                     detected_at=now,
                     env_code=code,
                 )
-                state["critical_date"] = now.date()
-                state["info_sent"] = True
-                state["warning_sent"] = True
-                state["info_schedule_date"] = None
-                state["warning_schedule_date"] = None
+                state["critical_sent_date"] = now.date()
+                state["info_sent_date"] = state.get("info_sent_date") or now.date()
+                state["warning_sent_date"] = state.get("warning_sent_date") or now.date()
+                self._mark_state_dirty()
         elif days_until <= 30:
-            state["info_schedule_date"] = None
-            if not state.get("warning_sent"):
-                if not state.get("warning_schedule_date"):
-                    state["warning_schedule_date"] = now.date()
-                send_dt = datetime.combine(state["warning_schedule_date"], send_time)
-                if not force_send and now < send_dt:
-                    return
+            if state.get("critical_sent_date") is not None:
+                state["critical_sent_date"] = None
+                self._mark_state_dirty()
+            last_sent = state.get("warning_sent_date")
+            if (force_send or now >= send_dt) and (
+                last_sent is None or (now.date() - last_sent).days >= 2
+            ):
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
@@ -709,16 +914,16 @@ class AlertManager:
                     detected_at=now,
                     env_code=code,
                 )
-                state["warning_sent"] = True
-                state["warning_schedule_date"] = None
+                state["warning_sent_date"] = now.date()
+                self._mark_state_dirty()
         elif days_until <= 45:
-            state["warning_schedule_date"] = None
-            if not state.get("info_sent"):
-                if not state.get("info_schedule_date"):
-                    state["info_schedule_date"] = now.date()
-                send_dt = datetime.combine(state["info_schedule_date"], send_time)
-                if not force_send and now < send_dt:
-                    return
+            if state.get("critical_sent_date") is not None:
+                state["critical_sent_date"] = None
+                self._mark_state_dirty()
+            last_sent = state.get("info_sent_date")
+            if (force_send or now >= send_dt) and (
+                last_sent is None or (now.date() - last_sent).days >= 7
+            ):
                 message = (
                     f"{env_label}: licença expira em {days_until} dia(s) (data {soonest.date():%d/%m/%Y})."
                 )
@@ -737,9 +942,12 @@ class AlertManager:
                     detected_at=now,
                     env_code=code,
                 )
-                state["info_sent"] = True
+                state["info_sent_date"] = now.date()
+                self._mark_state_dirty()
         else:
-            self._license_state.pop(code, None)
+            if code in self._license_state:
+                self._license_state.pop(code, None)
+                self._mark_state_dirty()
 
     def _process_health_alerts(self, health: Dict[str, Any], now: datetime) -> None:
         rows = health.get("rows") or []
@@ -779,10 +987,13 @@ class AlertManager:
                         component="postfix",
                     )
                     self._postfix_state[code] = True
+                    self._mark_state_dirty()
                 else:
                     self.logger.debug("Alerta de postfix já enviado para %s", env_label)
             else:
-                self._postfix_state.pop(code, None)
+                if code in self._postfix_state:
+                    self._postfix_state.pop(code, None)
+                    self._mark_state_dirty()
 
     def _check_offense_alert(
         self, row: Dict[str, Any], env_label: str, code: str, now: datetime
@@ -810,10 +1021,13 @@ class AlertManager:
                     component="offense",
                 )
                 self._offense_state[code] = True
+                self._mark_state_dirty()
             else:
                 self.logger.debug("Alerta de ofensas já enviado para %s", env_label)
         else:
-            self._offense_state.pop(code, None)
+            if code in self._offense_state:
+                self._offense_state.pop(code, None)
+                self._mark_state_dirty()
 
     def _check_connectivity_alert(
         self, row: Dict[str, Any], env_label: str, code: str, now: datetime
@@ -845,12 +1059,15 @@ class AlertManager:
                         component=target,
                     )
                     self._connectivity_state[key] = True
+                    self._mark_state_dirty()
                 else:
                     self.logger.debug(
                         "Alerta de conectividade já enviado para %s -> %s", env_label, target
                     )
             else:
-                self._connectivity_state.pop(key, None)
+                if key in self._connectivity_state:
+                    self._connectivity_state.pop(key, None)
+                    self._mark_state_dirty()
 
     def _process_jira_alerts(self, now: datetime, *, force_send: bool = False) -> None:
         if not self._jira_config:
@@ -931,6 +1148,7 @@ class AlertManager:
                         component="jira-tickets",
                     )
                     self._jira_state[client] = severity
+                    self._mark_state_dirty()
                 else:
                     self.logger.debug(
                         "Alerta Jira já enviado para cliente=%s com severidade=%s", client, severity
@@ -941,6 +1159,9 @@ class AlertManager:
                         "Cliente %s voltou a criar tickets dentro do prazo. Limpando estado de alerta do Jira.",
                         client,
                     )
-                self._jira_state.pop(client, None)
+                if client in self._jira_state:
+                    self._jira_state.pop(client, None)
+                    self._mark_state_dirty()
 
         self._jira_last_dispatch = dispatch_key
+        self._mark_state_dirty()
