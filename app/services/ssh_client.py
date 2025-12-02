@@ -11,11 +11,23 @@ class SSHClient:
         pass
 
     def _connect(self, host, user, key_path):
-        key = paramiko.RSAKey.from_private_key_file(key_path)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(hostname=host, username=user, pkey=key, timeout=20, banner_timeout=20, auth_timeout=20)
-        return client
+        try:
+            key = paramiko.RSAKey.from_private_key_file(key_path)
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(
+                hostname=host,
+                username=user,
+                pkey=key,
+                timeout=20,
+                banner_timeout=20,
+                auth_timeout=20,
+            )
+            logger.info("Autenticação SSH bem-sucedida host=%s user=%s", host, user)
+            return client
+        except Exception as exc:
+            logger.error("Falha na autenticação SSH host=%s user=%s: %s", host, user, exc)
+            raise
 
     def _summarize_for_log(self, text, max_chars=400):
         if not text:
@@ -227,6 +239,7 @@ class SSHClient:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect(hostname=host, username=user, pkey=key, timeout=20, banner_timeout=20, auth_timeout=20)
+            logger.info("Autenticação SSH bem-sucedida host=%s user=%s", host, user)
 
             if collector and collector not in ("host", host):
                 logger.info(f"Coletando EPS com salto SSH host={host} -> collector={collector}")
