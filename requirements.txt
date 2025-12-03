@@ -1,8 +1,8 @@
 fastapi
+starlette
 uvicorn
 jinja2
 python-multipart
 requests
 paramiko
-passlib[bcrypt]
-itsdangerous
+bcrypt
