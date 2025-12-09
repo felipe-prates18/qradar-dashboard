@@ -8,7 +8,11 @@ from pathlib import Path
 
 import requests
 import time as time_module
+import urllib3
+from requests.exceptions import RequestException
 from urllib3.exceptions import NameResolutionError
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from .services.jira_client import JiraClient
 
@@ -117,6 +121,33 @@ class AlertManager:
         self._connectivity_state: Dict[Tuple[str, str], bool] = {}
         self._jira_state: Dict[str, str] = {}
         self._jira_last_dispatch: Optional[Tuple[date, int]] = None
+        self._url_state: Dict[str, bool] = {}
+        self._url_timeout = self._parse_timeout_value(alerts_conf.get("url_timeout", 30))
+        self._url_retry_attempts = max(1, int(alerts_conf.get("url_retry_attempts", 2)))
+        self._url_retry_backoff = max(0, int(alerts_conf.get("url_retry_backoff", 2)))
+        self._url_checks = []
+        for entry in alerts_conf.get("url_checks") or []:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                name = str(entry.get("name") or "URL monitorada").strip()
+            except Exception:
+                name = "URL monitorada"
+            url = entry.get("url") or entry.get("link")
+            try:
+                url = str(url).strip()
+            except Exception:
+                url = None
+            if not url:
+                continue
+            timeout_value = self._parse_timeout_value(entry.get("timeout")) or self._url_timeout
+            self._url_checks.append(
+                {
+                    "name": name or "URL monitorada",
+                    "url": url,
+                    "timeout": timeout_value,
+                }
+            )
 
         self._env_labels: Dict[str, str] = {}
         for env in config.get("qradar_envs", []):
@@ -234,6 +265,11 @@ class AlertManager:
             self._process_jira_alerts(now, force_send=force_send)
         except Exception:
             self.logger.exception("Falha ao processar alertas do Jira")
+
+        try:
+            self._process_url_alerts(now)
+        except Exception:
+            self.logger.exception("Falha ao processar alertas de URLs monitoradas")
 
         if monitoring is None and health is None:
             self.logger.warning("Nenhum dado disponível para avaliação de alertas")
@@ -481,6 +517,66 @@ class AlertManager:
         except Exception:
             return None
 
+    @staticmethod
+    def _parse_timeout_value(raw: Any) -> Any:
+        """Return a timeout value compatible with requests, or None if invalid.
+
+        Accepts:
+        - numeric (int/float) -> single timeout for connect/read
+        - sequence of two numerics -> (connect, read)
+        - dict with keys "connect" and/or "read"
+        """
+
+        def _parse_number(value: Any) -> Optional[float]:
+            try:
+                number = float(value)
+                if number > 0:
+                    return number
+            except Exception:
+                return None
+            return None
+
+        if raw is None:
+            return None
+
+        if isinstance(raw, (int, float)):
+            parsed = _parse_number(raw)
+            return parsed if parsed is not None else None
+
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            connect = _parse_number(raw[0])
+            read = _parse_number(raw[1])
+            if connect is not None and read is not None:
+                return (connect, read)
+            return None
+
+        if isinstance(raw, dict):
+            connect = _parse_number(raw.get("connect"))
+            read = _parse_number(raw.get("read"))
+            if connect and read:
+                return (connect, read)
+            if connect:
+                return connect
+            if read:
+                return read
+            return None
+
+        try:
+            as_float = float(str(raw).strip())
+            if as_float > 0:
+                return as_float
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _format_timeout_value(raw: Any) -> str:
+        if isinstance(raw, (list, tuple)) and len(raw) == 2:
+            return f"connect={raw[0]}s read={raw[1]}s"
+        if isinstance(raw, (int, float)):
+            return f"{raw}s"
+        return str(raw)
+
     def _load_state(self) -> None:
         if not self._state_file:
             return
@@ -541,6 +637,15 @@ class AlertManager:
             if not all(key):
                 continue
             self._connectivity_state[key] = True
+
+        url_state = content.get("url_state") or []
+        for item in url_state:
+            try:
+                url = str(item).strip()
+            except Exception:
+                url = None
+            if url:
+                self._url_state[url] = True
 
         jira_state = content.get("jira_state") or {}
         self._jira_state.update({key: str(value) for key, value in jira_state.items() if value})
@@ -605,6 +710,8 @@ class AlertManager:
             for (code, target) in self._connectivity_state.keys()
         ]
 
+        url_state = [url for url in self._url_state.keys()]
+
         jira_dispatch = None
         if self._jira_last_dispatch:
             dispatch_date, dispatch_hour = self._jira_last_dispatch
@@ -621,6 +728,7 @@ class AlertManager:
             "postfix_state": self._postfix_state,
             "offense_state": self._offense_state,
             "connectivity_state": connectivity_state,
+            "url_state": url_state,
             "jira_state": self._jira_state,
             "jira_last_dispatch": jira_dispatch,
         }
@@ -1069,6 +1177,102 @@ class AlertManager:
             else:
                 if key in self._connectivity_state:
                     self._connectivity_state.pop(key, None)
+                    self._mark_state_dirty()
+
+    def _process_url_alerts(self, now: datetime) -> None:
+        if not self._url_checks:
+            return
+
+        for entry in self._url_checks:
+            name = entry.get("name") or "URL monitorada"
+            url = entry.get("url")
+            timeout = self._parse_timeout_value(entry.get("timeout")) or self._url_timeout
+            timeout_label = self._format_timeout_value(timeout)
+            attempts = self._url_retry_attempts
+
+            if not url:
+                continue
+
+            status_label = None
+            error_message = None
+            failed = False
+
+            self.logger.info(
+                "Validando URL monitorada | destino=%s url=%s timeout=%s (verify=False) tentativas=%s",
+                name,
+                url,
+                timeout_label,
+                attempts,
+            )
+
+            for attempt in range(1, attempts + 1):
+                try:
+                    response = requests.get(url, timeout=timeout, verify=False)
+                    status_label = f"HTTP {response.status_code}"
+                    if response.status_code >= 400:
+                        failed = True
+                        error_message = f"Resposta HTTP {response.status_code}"
+                    else:
+                        failed = False
+                    break
+                except RequestException as exc:
+                    failed = True
+                    error_message = f"{exc.__class__.__name__}: {exc}"
+
+                    if attempt < attempts:
+                        self.logger.info(
+                            "Tentativa %s/%s falhou para URL monitorada | destino=%s url=%s erro=%s. Repetindo em %ss",
+                            attempt,
+                            attempts,
+                            name,
+                            url,
+                            error_message,
+                            self._url_retry_backoff,
+                        )
+                        if self._url_retry_backoff:
+                            time_module.sleep(self._url_retry_backoff)
+                        continue
+
+            key = str(url)
+
+            if failed:
+                self.logger.warning(
+                    "URL monitorada indisponível | destino=%s url=%s status=%s",
+                    name,
+                    url,
+                    error_message or status_label or "indisponível",
+                )
+                if not self._url_state.get(key):
+                    message = f"{name}: falha ao acessar URL monitorada."
+                    facts = (
+                        {"title": "Destino", "value": name},
+                        {"title": "URL", "value": url},
+                        {
+                            "title": "Status",
+                            "value": error_message or status_label or "indisponível",
+                        },
+                    )
+                    self._send_alert(
+                        "Falha ao acessar URL",
+                        message,
+                        severity="critical",
+                        summary=name,
+                        facts=facts,
+                        category="url",
+                        detected_at=now,
+                        component=url,
+                    )
+                    self._url_state[key] = True
+                    self._mark_state_dirty()
+            else:
+                self.logger.info(
+                    "URL monitorada acessível | destino=%s url=%s status=%s",
+                    name,
+                    url,
+                    status_label or "OK",
+                )
+                if key in self._url_state:
+                    self._url_state.pop(key, None)
                     self._mark_state_dirty()
 
     def _process_jira_alerts(self, now: datetime, *, force_send: bool = False) -> None:

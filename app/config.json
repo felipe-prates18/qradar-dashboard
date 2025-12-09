@@ -20,7 +20,32 @@
   "alerts": {
     "teams_webhook_url": "",
     "license_teams_webhook_url": "",
-    "interval_seconds": 600
+    "interval_seconds": 600,
+    "url_timeout": 30,
+    "url_retry_attempts": 2,
+    "url_checks": [
+      {"name": "ASPER", "url": "https://172.31.1.8/console"},
+      {"name": "BANESE", "url": "https://172.31.1.10/console"},
+      {"name": "BR PARTNERS", "url": "https://10.11.112.179/console"},
+      {"name": "CNA", "url": "https://172.31.1.172/console"},
+      {"name": "CNSEG", "url": "https://172.31.1.201/console"},
+      {"name": "ECAD", "url": "https://172.31.1.18/console"},
+      {"name": "ELDORADO", "url": "https://10.254.193.100/console"},
+      {"name": "G4 EDUCACAO", "url": "https://172.31.1.99/console"},
+      {"name": "ICATU HOLDING", "url": "https://172.31.1.224/console"},
+      {"name": "INTERPLAYERS", "url": "https://172.31.1.226/console"},
+      {"name": "JBS", "url": "https://10.252.145.203/console"},
+      {"name": "NTS BRASIL", "url": "https://172.31.1.83/console"},
+      {"name": "PERNAMBUCANAS", "url": "https://172.31.1.241/console"},
+      {"name": "PETRONECT", "url": "https://172.31.1.127/console"},
+      {"name": "SILIMED", "url": "https://172.31.1.128/console"},
+      {"name": "PETROLINA - KIBANA 1", "url": "https://665c4b38c76a48c6a669f27c1cce3d2b.172.16.2.212.ip.es.io:9243"},
+      {"name": "PETROLINA - KIBANA 2", "url": "https://665c4b38c76a48c6a669f27c1cce3d2b.172.16.2.41.ip.es.io:9243"},
+      {"name": "PETROLINA - KIBANA 3", "url": "https://665c4b38c76a48c6a669f27c1cce3d2b.172.16.2.249.ip.es.io:9243"},
+      {"name": "PETROLINA - ECE UI 1", "url": "https://172.16.2.243:12443/"},
+      {"name": "PETROLINA - ECE UI 2", "url": "https://172.16.2.244:12443/"},
+      {"name": "PETROLINA - ECE UI 3", "url": "https://172.16.2.117:12443/"}
+    ]
   },
   "jira": {
     "base_url": "https://aspertecnologia.atlassian.net",
