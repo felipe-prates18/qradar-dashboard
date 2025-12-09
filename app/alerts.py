@@ -1136,13 +1136,6 @@ class AlertManager:
             error_message = None
             failed = False
 
-            self.logger.info(
-                "Validando URL monitorada | destino=%s url=%s timeout=%ss (verify=False)",
-                name,
-                url,
-                timeout,
-            )
-
             try:
                 response = requests.get(url, timeout=timeout, verify=False)
                 status_label = f"HTTP {response.status_code}"
@@ -1156,12 +1149,6 @@ class AlertManager:
             key = str(url)
 
             if failed:
-                self.logger.warning(
-                    "URL monitorada indisponível | destino=%s url=%s status=%s",
-                    name,
-                    url,
-                    error_message or status_label or "indisponível",
-                )
                 if not self._url_state.get(key):
                     message = f"{name}: falha ao acessar URL monitorada."
                     facts = (
@@ -1185,12 +1172,6 @@ class AlertManager:
                     self._url_state[key] = True
                     self._mark_state_dirty()
             else:
-                self.logger.info(
-                    "URL monitorada acessível | destino=%s url=%s status=%s",
-                    name,
-                    url,
-                    status_label or "OK",
-                )
                 if key in self._url_state:
                     self._url_state.pop(key, None)
                     self._mark_state_dirty()
