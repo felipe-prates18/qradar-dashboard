@@ -21,6 +21,8 @@
     "teams_webhook_url": "",
     "license_teams_webhook_url": "",
     "interval_seconds": 600,
+    "url_timeout": 30,
+    "url_retry_attempts": 2,
     "url_checks": [
       {"name": "ASPER", "url": "https://172.31.1.8/console"},
       {"name": "BANESE", "url": "https://172.31.1.10/console"},
