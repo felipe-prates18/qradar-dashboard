@@ -28,8 +28,8 @@
     "api_token": "ATATT3xFfGF0ZExjotrOe4QnWtlysM29nL1zfN-V-e_Vwkh4bu4Iw_o3mbIl3fKBXgo-gmV1RVWpYURzdwij1UXZGF75_SMlYSjolAiIl71xJlY1jiUMW-S6cT18U8lffEK9Zff55tnpmo4ogRt1NASIazgH2KiaJYaR4wnFcnNWlkkUPh1Rw54=F8DB08D1",
     "project_key": "CSIRT",
     "customfield_clients_id": "customfield_10191",
-    "warning_hours": 12,
-    "critical_hours": 24,
+    "warning_hours": 24,
+    "critical_hours": 36,
     "teams_webhook_url": "https://default33f70dd65ac04e74a8c47736b9998d.e1.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/0d2e1830ea14412a8a09872cb567f700/triggers/manual/paths/invoke?api-version=1",
     "clients": [
       "ANBIMA", 

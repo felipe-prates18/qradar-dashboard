@@ -273,8 +273,8 @@ def _collect_jira_monitoring() -> Dict[str, Any]:
         or {}
     )
 
-    warning_hours = max(1, int(jira_config.get("warning_hours", 12)))
-    critical_hours = max(warning_hours, int(jira_config.get("critical_hours", 24)))
+    warning_hours = max(1, int(jira_config.get("warning_hours", 24)))
+    critical_hours = max(warning_hours, int(jira_config.get("critical_hours", 36)))
     now_local = datetime.now()
     payload: Dict[str, Any] = {
         "updated_at": now_local.strftime("%d/%m/%Y, %H:%M:%S"),

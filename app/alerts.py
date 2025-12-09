@@ -136,8 +136,10 @@ class AlertManager:
             for client in (self._jira_config.get("clients") or [])
             if str(client).strip()
         ]
-        self._jira_warning_hours = max(1, int(self._jira_config.get("warning_hours", 12)))
-        self._jira_critical_hours = max(self._jira_warning_hours, int(self._jira_config.get("critical_hours", 24)))
+        self._jira_warning_hours = max(1, int(self._jira_config.get("warning_hours", 24)))
+        self._jira_critical_hours = max(
+            self._jira_warning_hours, int(self._jira_config.get("critical_hours", 36))
+        )
         self._state_dirty = False
 
         self._load_state()
@@ -1122,7 +1124,9 @@ class AlertManager:
             if severity:
                 if previous != severity:
                     last_ticket_text = (
-                        last_seen.strftime("%d/%m/%Y %H:%M:%S UTC") if last_seen else "Nenhum ticket em 24h"
+                        last_seen.strftime("%d/%m/%Y %H:%M:%S UTC")
+                        if last_seen
+                        else f"Nenhum ticket em {self._jira_critical_hours}h"
                     )
                     hours_text = (
                         f"{hours_without:.1f}h" if hours_without is not None else f">= {self._jira_critical_hours}h"
