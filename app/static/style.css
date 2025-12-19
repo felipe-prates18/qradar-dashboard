@@ -2194,6 +2194,9 @@ button.summary-chip:focus-visible {
   align-items: center;
   font-size: 13px;
   color: var(--text-muted);
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .monitor-app .meta-updated {
@@ -2203,6 +2206,19 @@ button.summary-chip:focus-visible {
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid rgba(29, 157, 111, 0.28);
+}
+
+.monitor-app .siem-select {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 190px;
+}
+
+.monitor-app .siem-select label {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .monitor-tags {

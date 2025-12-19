@@ -81,6 +81,8 @@ THREAT_HUNTING_SIEM_SUGGESTIONS = [
     "Cortex SIEM",
 ]
 
+DEFAULT_QRADAR_SIEM = "QRadar"
+
 app = FastAPI(title="QRadar Monitoring App")
 logger = logging.getLogger(__name__)
 session_secret = CONFIG.get("session_secret", "qradar-app-secret")
@@ -166,18 +168,22 @@ def _invalidate_environment_caches() -> None:
 
 def _refresh_monitoring_cache() -> Dict[str, Any]:
     return _monitoring_cache.refresh(
-        lambda: collect_monitoring_data(_config_with_envs(), logger=logger)
+        lambda: collect_monitoring_data(
+            _config_with_envs(siem_filter=DEFAULT_QRADAR_SIEM), logger=logger
+        )
     )
 
 
 def _refresh_health_cache() -> Dict[str, Any]:
     return _health_cache.refresh(
-        lambda: collect_health_data(_config_with_envs(), logger=logger)
+        lambda: collect_health_data(
+            _config_with_envs(siem_filter=DEFAULT_QRADAR_SIEM), logger=logger
+        )
     )
 
 
 def _collect_threat_hunting_counts() -> Dict[str, Any]:
-    config_with_envs = _config_with_envs()
+    config_with_envs = _config_with_envs(siem_filter=DEFAULT_QRADAR_SIEM)
     try:
         (
             environment_counts,
@@ -360,7 +366,7 @@ def _refresh_jira_cache() -> Dict[str, Any]:
     return _jira_cache.refresh(_collect_jira_monitoring)
 
 
-def _get_monitoring_payload() -> Dict[str, Any]:
+def _get_qradar_monitoring_payload() -> Dict[str, Any]:
     payload = _monitoring_cache.get_cached()
     if payload is None:
         logger.info("Cache de monitoramento vazio. Coletando dados iniciais.")
@@ -368,6 +374,41 @@ def _get_monitoring_payload() -> Dict[str, Any]:
     if _monitoring_cache.is_expired():
         logger.warning("Cache de monitoramento expirado. Atualizando dados sob demanda.")
         return _refresh_monitoring_cache()
+    return payload
+
+
+def _build_placeholder_monitoring_payload(
+    selected_siem: str, envs: Sequence[Dict[str, Any]]
+) -> Dict[str, Any]:
+    return {
+        "updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
+        "rows": [
+            {
+                "name": env.get("name"),
+                "code": env.get("codigo") or env.get("code"),
+                "siem": _resolved_env_siem(env),
+            }
+            for env in envs
+        ],
+    }
+
+
+def _get_monitoring_payload(selected_siem: Optional[str] = None) -> Dict[str, Any]:
+    envs = _load_environments_from_db()
+    available_siems = _list_available_siems(envs)
+    resolved_siem = _choose_siem(selected_siem, available_siems)
+    is_qradar = resolved_siem.strip().lower() == DEFAULT_QRADAR_SIEM.lower()
+
+    if is_qradar:
+        base_payload = _get_qradar_monitoring_payload()
+    else:
+        filtered_envs = _filter_environments_by_siem(envs, resolved_siem)
+        base_payload = _build_placeholder_monitoring_payload(resolved_siem, filtered_envs)
+
+    payload = dict(base_payload)
+    payload["available_siems"] = available_siems
+    payload["selected_siem"] = resolved_siem
+    payload["collection_enabled"] = is_qradar
     return payload
 
 
@@ -463,14 +504,77 @@ def _load_environments_from_db() -> List[Dict[str, Any]]:
         con.close()
 
 
-def _config_with_envs() -> Dict[str, Any]:
+def _normalize_siem_value(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        text = str(value).strip()
+    except Exception:
+        return None
+    return text or None
+
+
+def _resolved_env_siem(env: Dict[str, Any]) -> str:
+    value = _normalize_siem_value(env.get("siem"))
+    return value or DEFAULT_QRADAR_SIEM
+
+
+def _filter_environments_by_siem(
+    envs: Sequence[Dict[str, Any]], siem_filter: Optional[str]
+) -> List[Dict[str, Any]]:
+    if not siem_filter:
+        return list(envs)
+    try:
+        normalized = str(siem_filter).strip().lower()
+    except Exception:
+        normalized = ""
+    return [
+        env
+        for env in envs
+        if _resolved_env_siem(env).strip().lower() == normalized
+    ]
+
+
+def _list_available_siems(envs: Optional[Sequence[Dict[str, Any]]] = None) -> List[str]:
+    environments = list(envs) if envs is not None else _load_environments_from_db()
+    seen: set[str] = set()
+    values: List[str] = []
+    for env in environments:
+        siem_label = _resolved_env_siem(env)
+        key = siem_label.strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(siem_label)
+    return sorted(values, key=lambda value: value.lower())
+
+
+def _choose_siem(requested: Optional[str], available: Sequence[str]) -> str:
+    if requested:
+        try:
+            requested_norm = str(requested).strip().lower()
+        except Exception:
+            requested_norm = ""
+        for candidate in available:
+            if candidate and candidate.strip().lower() == requested_norm:
+                return candidate
+    for candidate in available:
+        if candidate and candidate.strip().lower() == DEFAULT_QRADAR_SIEM.lower():
+            return candidate
+    if available:
+        return available[0]
+    return DEFAULT_QRADAR_SIEM
+
+
+def _config_with_envs(*, siem_filter: Optional[str] = None) -> Dict[str, Any]:
     config = dict(CONFIG)
     db_envs = _load_environments_from_db()
-    config["qradar_envs"] = db_envs
+    filtered_envs = _filter_environments_by_siem(db_envs, siem_filter) if siem_filter else db_envs
+    config["qradar_envs"] = filtered_envs
 
     api_conf = dict(config.get("qradar_api") or {})
     tokens_map: Dict[str, str] = {}
-    for env in db_envs:
+    for env in filtered_envs:
         code = env.get("codigo") or env.get("code")
         api_token = env.get("api_token")
         if code and api_token:
@@ -491,7 +595,7 @@ _cache_refresh_stop: Optional[asyncio.Event] = None
 
 
 alert_manager = AlertManager(
-    _config_with_envs(),
+    _config_with_envs(siem_filter=DEFAULT_QRADAR_SIEM),
     fetch_monitoring=_get_monitoring_payload,
     fetch_health=_get_health_payload,
     logger=logger,
@@ -976,8 +1080,11 @@ def get_clients(user: str = Depends(verify_user_required_api)):
     return JSONResponse(clients)
 
 @app.get("/api/monitor")
-def get_monitoring(user: str = Depends(verify_user_required_api)):
-    payload = _get_monitoring_payload()
+def get_monitoring(
+    request: Request, user: str = Depends(verify_user_required_api)
+):
+    selected_siem = request.query_params.get("siem") if hasattr(request, "query_params") else None
+    payload = _get_monitoring_payload(selected_siem)
     return JSONResponse(payload)
 
 

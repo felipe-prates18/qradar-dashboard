@@ -1193,17 +1193,30 @@
       const [updatedAt, setUpdatedAt] = useState('');
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
+      const [availableSiems, setAvailableSiems] = useState([]);
+      const [selectedSiem, setSelectedSiem] = useState('');
+      const [collectionEnabled, setCollectionEnabled] = useState(true);
       const [openItems, setOpenItems] = useState(new Set());
 
-      const loadData = useCallback(async () => {
+      const selectedSiemRef = useRef('');
+
+      const loadData = useCallback(async (siemOverride) => {
         setLoading(true);
         setError('');
         try {
-          const response = await fetch('/api/monitor');
+          const targetSiem = typeof siemOverride === 'string' ? siemOverride : selectedSiemRef.current;
+          const query = targetSiem ? `?siem=${encodeURIComponent(targetSiem)}` : '';
+          const response = await fetch(`/api/monitor${query}`);
           if (!response.ok) {
             throw new Error('Não foi possível carregar os dados do monitoramento.');
           }
           const payload = await response.json();
+          const available = Array.isArray(payload.available_siems) ? payload.available_siems : [];
+          setAvailableSiems(available);
+          const resolvedSiem = payload.selected_siem || targetSiem || (available[0] || '');
+          selectedSiemRef.current = resolvedSiem;
+          setSelectedSiem(resolvedSiem);
+          setCollectionEnabled(payload.collection_enabled !== false);
           const environments = Array.isArray(payload.rows) ? payload.rows : [];
           const sortedEnvironments = environments
             .slice()
@@ -1239,6 +1252,16 @@
         return () => clearInterval(id);
       }, [loadData]);
 
+      const handleSiemChange = useCallback(
+        (event) => {
+          const value = event.target.value;
+          selectedSiemRef.current = value;
+          setSelectedSiem(value);
+          loadData(value);
+        },
+        [loadData]
+      );
+
       const toggleItem = useCallback((key) => {
         setOpenItems(prev => {
           const next = new Set(prev);
@@ -1256,13 +1279,20 @@
         if (!subtitleEl) return;
         const count = rows.length;
         const countLabel = `${count} ambiente${count === 1 ? '' : 's'} monitorado${count === 1 ? '' : 's'}`;
+        const siemLabel = selectedSiem ? `SIEM: ${selectedSiem}` : 'SIEM: —';
         const statusText = loading
           ? 'sincronizando…'
           : updatedAt
           ? `última atualização: ${updatedAt}`
           : 'aguardando dados…';
-        subtitleEl.textContent = `${countLabel} – ${statusText}`;
-      }, [rows.length, updatedAt, loading]);
+        subtitleEl.textContent = `${countLabel} (${siemLabel}) – ${statusText}`;
+      }, [rows.length, updatedAt, loading, selectedSiem]);
+
+      useEffect(() => {
+        setOpenItems(new Set());
+      }, [selectedSiem]);
+
+      const selectValue = availableSiems.length === 0 ? '' : selectedSiem;
 
       return (
         <div className="monitor-app">
@@ -1286,6 +1316,25 @@
               </div>
             </div>
             <div className="meta-right">
+              <div className="siem-select">
+                <label htmlFor="siem-filter">SIEM</label>
+                <select
+                  id="siem-filter"
+                  value={selectValue}
+                  onChange={handleSiemChange}
+                  disabled={loading || availableSiems.length === 0}
+                >
+                  {availableSiems.length === 0 ? (
+                    <option value="">Nenhum SIEM disponível</option>
+                  ) : (
+                    availableSiems.map(option => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
               {updatedAt ? <span className="meta-updated">Atualizado: {updatedAt}</span> : null}
             </div>
           </div>
@@ -1293,6 +1342,12 @@
             <span className="badge">CPU/Mem/Storage via Zabbix</span>
             <span className="badge warn">Licença via license.sh</span>
           </div>
+          {!collectionEnabled ? (
+            <div className="info-banner">
+              <div>As coletas de SSH, Ping, API e Zabbix estão desativadas para o SIEM selecionado.</div>
+              <div>Selecione o QRadar para visualizar os ambientes com métricas coletadas.</div>
+            </div>
+          ) : null}
           {error ? <div className="error-message">{error}</div> : null}
           {rows.length === 0 && !loading ? (
             <div className="empty-state">Nenhum ambiente configurado ainda.</div>
