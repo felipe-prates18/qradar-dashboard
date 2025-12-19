@@ -23,6 +23,9 @@ def ensure_schema(con: Connection) -> None:
             codigo TEXT,
             siem TEXT,
             api_token TEXT,
+            client_id TEXT,
+            client_secret TEXT,
+            base_url TEXT,
             created_at TEXT,
             updated_at TEXT
         )
@@ -44,6 +47,12 @@ def ensure_schema(con: Connection) -> None:
     existing_columns = {row[1] for row in cur.fetchall()}
     if "api_token" not in existing_columns:
         cur.execute("ALTER TABLE environments ADD COLUMN api_token TEXT")
+    if "client_id" not in existing_columns:
+        cur.execute("ALTER TABLE environments ADD COLUMN client_id TEXT")
+    if "client_secret" not in existing_columns:
+        cur.execute("ALTER TABLE environments ADD COLUMN client_secret TEXT")
+    if "base_url" not in existing_columns:
+        cur.execute("ALTER TABLE environments ADD COLUMN base_url TEXT")
     con.commit()
 
 
@@ -81,6 +90,9 @@ def _serialize_row(row) -> Dict[str, Any]:
         "codigo": row["codigo"],
         "siem": row["siem"],
         "api_token": row["api_token"],
+        "client_id": row["client_id"],
+        "client_secret": row["client_secret"],
+        "base_url": row["base_url"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -93,7 +105,7 @@ def list_environments(con: Connection) -> List[Dict[str, Any]]:
         """
         SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
                appliances_json, connectivity_targets_json, codigo, siem,
-               api_token, created_at, updated_at
+               api_token, client_id, client_secret, base_url, created_at, updated_at
         FROM environments
         ORDER BY name COLLATE NOCASE
         """
@@ -108,7 +120,7 @@ def get_environment(con: Connection, env_id: int) -> Optional[Dict[str, Any]]:
         """
         SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
                appliances_json, connectivity_targets_json, codigo, siem,
-               api_token, created_at, updated_at
+               api_token, client_id, client_secret, base_url, created_at, updated_at
         FROM environments
         WHERE id=?
         LIMIT 1
@@ -128,7 +140,7 @@ def get_environment_by_name(con: Connection, name: str) -> Optional[Dict[str, An
         """
         SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
                appliances_json, connectivity_targets_json, codigo, siem,
-               api_token, created_at, updated_at
+               api_token, client_id, client_secret, base_url, created_at, updated_at
         FROM environments
         WHERE name=?
         LIMIT 1
@@ -165,6 +177,9 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
         payload.get("codigo"),
         payload.get("siem"),
         payload.get("api_token"),
+        payload.get("client_id"),
+        payload.get("client_secret"),
+        payload.get("base_url"),
     )
 
     cur = con.cursor()
@@ -174,7 +189,7 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
             UPDATE environments
             SET name=?, host=?, collector=?, ssh_user=?, ssh_key=?, jmx_port=?,
                 jmx_bean=?, appliances_json=?, connectivity_targets_json=?,
-                codigo=?, siem=?, api_token=?, updated_at=?
+                codigo=?, siem=?, api_token=?, client_id=?, client_secret=?, base_url=?, updated_at=?
             WHERE id=?
             """,
             (*fields, now, env_id),
@@ -187,8 +202,8 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
         INSERT INTO environments (
             name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
             appliances_json, connectivity_targets_json, codigo, siem,
-            api_token, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            api_token, client_id, client_secret, base_url, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (*fields, now, now),
     )
