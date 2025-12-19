@@ -816,6 +816,9 @@ def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "codigo": _normalize_text(data.get("codigo")),
         "siem": _normalize_text(data.get("siem")),
         "api_token": _normalize_text(data.get("api_token")),
+        "client_id": _normalize_text(data.get("client_id")),
+        "client_secret": _normalize_text(data.get("client_secret")),
+        "base_url": _normalize_text(data.get("base_url")),
     }
     return payload
 
@@ -2082,4 +2085,3 @@ def api_admin_list(user: str = Depends(verify_user_required_api)):
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
-
