@@ -341,6 +341,12 @@
     const closeListButtons = listModal ? listModal.querySelectorAll('[data-close-env-list]') : [];
     const openFormBtn = listModal ? listModal.querySelector('[data-open-env-form]') : null;
     const siemSelect = editModal ? editModal.querySelector('[name="siem"]') : null;
+    const qradarSections = editModal
+      ? Array.from(editModal.querySelectorAll('[data-siem-section="qradar"]'))
+      : [];
+    const otherSections = editModal
+      ? Array.from(editModal.querySelectorAll('[data-siem-section="other"]'))
+      : [];
     const tableBody = listModal ? listModal.querySelector('[data-env-table-body]') : null;
     const emptyRow = listModal ? listModal.querySelector('[data-env-empty-row]') : null;
     const listError = listModal ? listModal.querySelector('[data-env-error]') : null;
@@ -403,13 +409,14 @@
     const toggleSiemSections = (siem) => {
       const value = (siem || '').toString().trim().toLowerCase();
       const isQRadar = value === 'qradar';
-      const qradarSections = editModal ? editModal.querySelectorAll('[data-siem-section="qradar"]') : [];
-      const otherSections = editModal ? editModal.querySelectorAll('[data-siem-section="other"]') : [];
       qradarSections.forEach((section) => {
         section.hidden = !isQRadar;
+        section.setAttribute('aria-hidden', String(!isQRadar));
       });
       otherSections.forEach((section) => {
-        section.hidden = isQRadar || !value;
+        const showOther = !isQRadar && Boolean(value);
+        section.hidden = !showOther;
+        section.setAttribute('aria-hidden', String(!showOther));
       });
     };
 
@@ -494,6 +501,7 @@
       siemSelect.addEventListener('change', (event) => {
         toggleSiemSections(event.target.value);
       });
+      toggleSiemSections(siemSelect.value);
     }
 
     if (form) {
