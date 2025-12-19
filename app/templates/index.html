@@ -220,8 +220,11 @@
 
     function getConnectorSeverity(connector) {
       if (!connector) return 'warning';
-      const statusText = connector.status ? String(connector.status).toLowerCase() : '';
+      const statusText = connector.status ? String(connector.status).trim().toLowerCase() : '';
       if (!statusText) return 'warning';
+      if (statusText === 'active') return 'normal';
+      if (statusText === 'pending' || statusText === 'paused') return 'warning';
+      if (statusText === 'idle') return 'critical';
       if (
         statusText.includes('error') ||
         statusText.includes('fail') ||
