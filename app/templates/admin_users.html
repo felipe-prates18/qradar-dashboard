@@ -406,18 +406,19 @@
       });
     };
 
+    const updateVisibility = (elements, show) => {
+      elements.forEach((section) => {
+        section.hidden = !show;
+        section.setAttribute('aria-hidden', String(!show));
+        section.style.display = show ? '' : 'none';
+      });
+    };
+
     const toggleSiemSections = (siem) => {
       const value = (siem || '').toString().trim().toLowerCase();
       const isQRadar = value === 'qradar';
-      qradarSections.forEach((section) => {
-        section.hidden = !isQRadar;
-        section.setAttribute('aria-hidden', String(!isQRadar));
-      });
-      otherSections.forEach((section) => {
-        const showOther = !isQRadar && Boolean(value);
-        section.hidden = !showOther;
-        section.setAttribute('aria-hidden', String(!showOther));
-      });
+      updateVisibility(qradarSections, isQRadar);
+      updateVisibility(otherSections, !isQRadar && Boolean(value));
     };
 
     const loadEnvironments = async () => {
