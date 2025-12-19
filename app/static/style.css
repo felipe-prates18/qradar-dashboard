@@ -2541,6 +2541,17 @@ button.summary-chip:focus-visible {
   letter-spacing: 0.02em;
 }
 
+.env-siem-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 4px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(38, 217, 141, 0.4);
+  color: var(--green-strong);
+  background: rgba(38, 217, 141, 0.12);
+}
+
 .env-title .status-icon {
   font-size: 20px;
 }
@@ -2554,6 +2565,21 @@ button.summary-chip:focus-visible {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
+}
+
+.env-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.env-meta {
+  background: rgba(6, 20, 16, 0.7);
+  border: 1px solid rgba(29, 157, 111, 0.22);
+  border-radius: 10px;
+  padding: 6px 10px;
 }
 
 .summary-metric {
@@ -2900,6 +2926,89 @@ button.summary-chip:focus-visible {
   border: 1px dashed rgba(154, 195, 175, 0.35);
   border-radius: 14px;
   background: rgba(6, 20, 16, 0.6);
+}
+
+.connector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.connector-card {
+  background: rgba(13, 41, 34, 0.78);
+  border: 1px solid rgba(29, 157, 111, 0.3);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+}
+
+.connector-card.status-warning {
+  border-color: rgba(240, 173, 78, 0.45);
+}
+
+.connector-card.status-critical {
+  border-color: rgba(217, 83, 79, 0.5);
+}
+
+.connector-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.connector-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.connector-name {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.connector-type {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(29, 157, 111, 0.35);
+  color: var(--text-muted);
+}
+
+.connector-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.connector-status-label {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--green);
+}
+
+.status-dot.is-warning {
+  background: var(--yellow);
+}
+
+.status-dot.is-critical {
+  background: var(--red);
 }
 
 @media (max-width: 980px) {

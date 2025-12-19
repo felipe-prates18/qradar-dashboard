@@ -9,6 +9,7 @@ import requests
 from requests.exceptions import RequestException
 
 from .constants import QRADAR_CONSOLE_INTERNAL_LOG_SOURCE_TYPES
+from .services.crowdstrike_client import CrowdstrikeApiError, CrowdstrikeClient
 from .services.zabbix_client import ZabbixClient
 from .services.ssh_client import SSHClient
 
@@ -202,6 +203,7 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
             {
                 "name": name,
                 "code": env.get("codigo") or env.get("code"),
+                "siem": env.get("siem") or "QRadar",
                 "cpu": _pct(metrics.get("cpu")),
                 "memory": _pct(metrics.get("memory")),
                 "storage": _pct(metrics.get("storage")),
@@ -230,6 +232,7 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
                 rows[env_idx] = {
                     "name": envs[env_idx].get("name"),
                     "code": envs[env_idx].get("codigo") or envs[env_idx].get("code"),
+                    "siem": envs[env_idx].get("siem") or "QRadar",
                     "cpu": "—",
                     "memory": "—",
                     "storage": "—",
@@ -1230,6 +1233,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     rows[env_idx] = {
                         "name": envs[env_idx].get("name") or envs[env_idx].get("host") or "Ambiente",
                         "code": envs[env_idx].get("codigo") or envs[env_idx].get("code"),
+                        "siem": envs[env_idx].get("siem") or "QRadar",
                         "services": [],
                         "connectivity": [],
                         "offense_check": {
@@ -1253,3 +1257,116 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
     }
 
     return payload
+
+
+def collect_crowdstrike_monitoring_data(
+    config: Dict[str, Any], logger: Optional[logging.Logger] = None
+) -> Dict[str, Any]:
+    """Collect connector counts and ingestion totals from Crowdstrike NG-SIEM."""
+
+    logger = logger or logging.getLogger(__name__)
+    envs = list(config.get("qradar_envs", []))
+    total_envs = len(envs)
+    if total_envs == 0:
+        return {
+            "updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
+            "rows": [],
+        }
+
+    rows: List[Optional[Dict[str, Any]]] = [None] * total_envs
+
+    def _collect_env(idx_env: int, env: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        env_name = env.get("name") or env.get("host") or env.get("codigo") or "Ambiente"
+        env_code = env.get("codigo") or env.get("code")
+        errors: List[str] = []
+        connectors: List[Dict[str, Any]] = []
+        ingestion_summary: Dict[str, Any] = {}
+        try:
+            client = CrowdstrikeClient(
+                base_url=env.get("base_url", ""),
+                client_id=env.get("client_id", ""),
+                client_secret=env.get("client_secret", ""),
+                logger=logger,
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            client = None
+
+        if client:
+            try:
+                logger.info("Solicitando token OAuth2 Crowdstrike ambiente=%s", env_name)
+                bearer = client.fetch_token()
+                logger.info("Token OAuth2 obtido ambiente=%s", env_name)
+                logger.info("Listando conexões NG-SIEM ambiente=%s", env_name)
+                result = client.list_all_connections(bearer)
+                connectors = client.map_connectors(result.get("resources", []))
+                ingestion_summary = client.summarize_ingestion(result)
+                logger.info(
+                    "Conexões NG-SIEM coletadas ambiente=%s total=%s",
+                    env_name,
+                    ingestion_summary.get("connectors_count"),
+                )
+            except (CrowdstrikeApiError, RequestException) as exc:
+                errors.append(str(exc))
+                logger.exception("Erro ao consultar API do Crowdstrike ambiente=%s", env_name)
+            except Exception:
+                logger.exception("Erro inesperado na coleta Crowdstrike ambiente=%s", env_name)
+                errors.append("Erro inesperado ao consultar a API do Crowdstrike.")
+
+        summary_defaults = {
+            "connectors_count": len(connectors),
+            "missing_or_invalid_count": None,
+            "total_bytes_one_day": None,
+            "total_gb_one_day_decimal": None,
+            "total_gib_one_day_binary": None,
+        }
+        summary_payload = {**summary_defaults, **ingestion_summary}
+
+        return (
+            idx_env,
+            {
+                "name": env_name,
+                "code": env_code,
+                "siem": env.get("siem") or "Crowdstrike NG-SIEM",
+                "connectors": connectors,
+                **summary_payload,
+                "ingestion_window_hours": 24,
+                "errors": errors,
+                "base_url": env.get("base_url"),
+            },
+        )
+
+    max_workers = _determine_workers(total_envs, default=4)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {
+            executor.submit(_collect_env, idx, env): idx for idx, env in enumerate(envs)
+        }
+        for future in as_completed(future_to_index):
+            env_idx = future_to_index[future]
+            try:
+                idx_env, payload = future.result()
+                rows[idx_env] = payload
+            except Exception:
+                logger.exception("Erro inesperado na coleta Crowdstrike idx=%s", env_idx)
+                env = envs[env_idx]
+                rows[env_idx] = {
+                    "name": env.get("name") or env.get("codigo") or env.get("host"),
+                    "code": env.get("codigo") or env.get("code"),
+                    "siem": env.get("siem") or "Crowdstrike NG-SIEM",
+                    "connectors": [],
+                    "connectors_count": 0,
+                    "missing_or_invalid_count": None,
+                    "total_bytes_one_day": None,
+                    "total_gb_one_day_decimal": None,
+                    "total_gib_one_day_binary": None,
+                    "ingestion_window_hours": 24,
+                    "errors": ["Falha inesperada na coleta do Crowdstrike."],
+                    "base_url": env.get("base_url"),
+                }
+
+    data: List[Dict[str, Any]] = [row for row in rows if row is not None]
+
+    return {
+        "updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
+        "rows": data,
+    }

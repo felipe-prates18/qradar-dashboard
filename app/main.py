@@ -36,7 +36,7 @@ from .auth import (
 import requests
 from requests.exceptions import RequestException
 
-from .collectors import collect_monitoring_data, collect_health_data
+from .collectors import collect_crowdstrike_monitoring_data, collect_health_data, collect_monitoring_data
 from .alerts import AlertManager
 from . import threat_hunting
 from .services import environment_store, qradar_rules
@@ -82,6 +82,7 @@ THREAT_HUNTING_SIEM_SUGGESTIONS = [
 ]
 
 DEFAULT_QRADAR_SIEM = "QRadar"
+CROWDSTRIKE_SIEM = "Crowdstrike NG-SIEM"
 
 app = FastAPI(title="QRadar Monitoring App")
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ class _DataCache:
 
 
 _monitoring_cache = _DataCache(CACHE_TTL_SECONDS)
+_crowdstrike_monitoring_cache = _DataCache(CACHE_TTL_SECONDS)
 _health_cache = _DataCache(CACHE_TTL_SECONDS)
 _threat_hunting_cache = _DataCache(CACHE_TTL_SECONDS)
 _jira_cache = _DataCache(CACHE_TTL_SECONDS)
@@ -162,6 +164,7 @@ _jira_cache = _DataCache(CACHE_TTL_SECONDS)
 
 def _invalidate_environment_caches() -> None:
     _monitoring_cache.clear()
+    _crowdstrike_monitoring_cache.clear()
     _health_cache.clear()
     _threat_hunting_cache.clear()
 
@@ -170,6 +173,14 @@ def _refresh_monitoring_cache() -> Dict[str, Any]:
     return _monitoring_cache.refresh(
         lambda: collect_monitoring_data(
             _config_with_envs(siem_filter=DEFAULT_QRADAR_SIEM), logger=logger
+        )
+    )
+
+
+def _refresh_crowdstrike_cache() -> Dict[str, Any]:
+    return _crowdstrike_monitoring_cache.refresh(
+        lambda: collect_crowdstrike_monitoring_data(
+            _config_with_envs(siem_filter=CROWDSTRIKE_SIEM), logger=logger
         )
     )
 
@@ -377,6 +388,17 @@ def _get_qradar_monitoring_payload() -> Dict[str, Any]:
     return payload
 
 
+def _get_crowdstrike_monitoring_payload() -> Dict[str, Any]:
+    payload = _crowdstrike_monitoring_cache.get_cached()
+    if payload is None:
+        logger.info("Cache Crowdstrike vazio. Coletando dados iniciais.")
+        return _refresh_crowdstrike_cache()
+    if _crowdstrike_monitoring_cache.is_expired():
+        logger.warning("Cache Crowdstrike expirado. Atualizando dados sob demanda.")
+        return _refresh_crowdstrike_cache()
+    return payload
+
+
 def _build_placeholder_monitoring_payload(
     selected_siem: str, envs: Sequence[Dict[str, Any]]
 ) -> Dict[str, Any]:
@@ -398,9 +420,12 @@ def _get_monitoring_payload(selected_siem: Optional[str] = None) -> Dict[str, An
     available_siems = _list_available_siems(envs)
     resolved_siem = _choose_siem(selected_siem, available_siems)
     is_qradar = resolved_siem.strip().lower() == DEFAULT_QRADAR_SIEM.lower()
+    is_crowdstrike = resolved_siem.strip().lower() == CROWDSTRIKE_SIEM.lower()
 
     if is_qradar:
         base_payload = _get_qradar_monitoring_payload()
+    elif is_crowdstrike:
+        base_payload = _get_crowdstrike_monitoring_payload()
     else:
         filtered_envs = _filter_environments_by_siem(envs, resolved_siem)
         base_payload = _build_placeholder_monitoring_payload(resolved_siem, filtered_envs)
@@ -408,7 +433,7 @@ def _get_monitoring_payload(selected_siem: Optional[str] = None) -> Dict[str, An
     payload = dict(base_payload)
     payload["available_siems"] = available_siems
     payload["selected_siem"] = resolved_siem
-    payload["collection_enabled"] = is_qradar
+    payload["collection_enabled"] = is_qradar or is_crowdstrike
     return payload
 
 
@@ -450,6 +475,10 @@ def _refresh_all_caches() -> None:
         _refresh_monitoring_cache()
     except Exception:
         logger.exception("Falha ao atualizar o cache de monitoramento")
+    try:
+        _refresh_crowdstrike_cache()
+    except Exception:
+        logger.exception("Falha ao atualizar o cache Crowdstrike")
     try:
         _refresh_health_cache()
     except Exception:
