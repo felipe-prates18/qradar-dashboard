@@ -198,6 +198,57 @@
       return String(numeric);
     }
 
+    function formatGigabytes(value) {
+      const numeric = parseNumberValue(value);
+      if (numeric === null) return '—';
+      const formatted = numeric >= 10 ? numeric.toFixed(1) : numeric.toFixed(2);
+      return `${formatted} GB`;
+    }
+
+    function formatConnectorVolume(connector) {
+      if (!connector) return '—';
+      const bytes = connector.last_ingested_volume_bytes;
+      if (typeof bytes === 'number' && Number.isFinite(bytes)) {
+        return formatGigabytes(bytes / 1_000_000_000);
+      }
+      const raw = connector.last_ingested_volume_one_day;
+      if (raw === null || raw === undefined || raw === '') return '—';
+      const numeric = parseNumberValue(raw);
+      if (numeric !== null) return formatGigabytes(numeric);
+      return String(raw);
+    }
+
+    function getConnectorSeverity(connector) {
+      if (!connector) return 'warning';
+      const statusText = connector.status ? String(connector.status).trim().toLowerCase() : '';
+      if (!statusText) return 'warning';
+      if (statusText === 'active') return 'normal';
+      if (statusText === 'pending' || statusText === 'paused') return 'warning';
+      if (statusText === 'idle') return 'critical';
+      if (
+        statusText.includes('error') ||
+        statusText.includes('fail') ||
+        statusText.includes('inactive') ||
+        statusText.includes('disabled')
+      ) {
+        return 'critical';
+      }
+      if (statusText.includes('warning') || statusText.includes('degraded') || statusText.includes('stale')) {
+        return 'warning';
+      }
+      return 'normal';
+    }
+
+    function connectorTypeLabel(connector) {
+      if (!connector) return '';
+      return (
+        connector.type ||
+        connector.product ||
+        connector.vendor ||
+        ''
+      );
+    }
+
     const STATUS_RANK = { normal: 0, warning: 1, critical: 2 };
     const STATUS_LABEL = {
       normal: 'OK',
@@ -250,9 +301,48 @@
       }, 'normal');
     }
 
+    function isCrowdstrikeEnvironment(environment) {
+      if (!environment || typeof environment !== 'object') return false;
+      const siemValue = environment.siem ? String(environment.siem) : '';
+      return siemValue.trim().toLowerCase() === 'crowdstrike ng-siem';
+    }
+
+    function getCrowdstrikeOverallStatus(environment) {
+      if (!environment || typeof environment !== 'object') return 'warning';
+      const hasErrors =
+        (Array.isArray(environment.errors) && environment.errors.filter(Boolean).length > 0) ||
+        Boolean(environment.error);
+
+      if (hasErrors) return 'critical';
+
+      const connectorsCount = parseNumberValue(
+        environment.connectors_count ??
+          environment.connectors_total ??
+          (environment.ingestion && environment.ingestion.connectors_count) ??
+          (Array.isArray(environment.connectors) ? environment.connectors.length : null)
+      );
+      const totalGbDecimal = parseNumberValue(
+        environment.total_gb_one_day_decimal ??
+          (environment.ingestion && environment.ingestion.total_gb_one_day_decimal)
+      );
+      const totalGibBinary = parseNumberValue(
+        environment.total_gib_one_day_binary ??
+          (environment.ingestion && environment.ingestion.total_gib_one_day_binary)
+      );
+      const totalIngested = totalGbDecimal ?? totalGibBinary;
+
+      if (connectorsCount === 0) return 'warning';
+      if (totalIngested !== null && totalIngested <= 0) return 'warning';
+      return 'normal';
+    }
+
     function getEnvironmentOverallStatus(environment) {
       if (!environment || typeof environment !== 'object') {
         return 'normal';
+      }
+
+      if (isCrowdstrikeEnvironment(environment)) {
+        return getCrowdstrikeOverallStatus(environment);
       }
 
       const licenseExpRawList = Array.isArray(environment.license_exp_list)
@@ -738,6 +828,166 @@
                 </div>
               ) : (
                 <div className="empty-appliances">Nenhum appliance adicional configurado.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function CrowdstrikeEnvironmentCard({ environment, isOpen, onToggle }) {
+      const connectors = Array.isArray(environment.connectors) ? environment.connectors : [];
+      const errors = Array.isArray(environment.errors) ? environment.errors.filter(Boolean) : [];
+      const missingCount = parseNumberValue(
+        environment.missing_or_invalid_count ?? (environment.ingestion && environment.ingestion.missing_or_invalid_count)
+      );
+      const connectorsCount =
+        parseNumberValue(
+          environment.connectors_count ??
+            environment.connectors_total ??
+            (environment.ingestion && environment.ingestion.connectors_count)
+        ) ?? connectors.length;
+      const totalGbDecimal = parseNumberValue(
+        environment.total_gb_one_day_decimal ?? (environment.ingestion && environment.ingestion.total_gb_one_day_decimal)
+      );
+      const totalGibBinary = parseNumberValue(
+        environment.total_gib_one_day_binary ?? (environment.ingestion && environment.ingestion.total_gib_one_day_binary)
+      );
+      const ingestionDisplay =
+        totalGbDecimal !== null
+          ? `${totalGbDecimal.toFixed(2)} GB`
+          : totalGibBinary !== null
+          ? `${totalGibBinary.toFixed(2)} GiB`
+          : '—';
+      const ingestionStatus =
+        totalGbDecimal === null && totalGibBinary === null
+          ? 'warning'
+          : (totalGbDecimal ?? totalGibBinary) <= 0
+          ? 'warning'
+          : 'normal';
+      const connectorsStatus =
+        connectorsCount === null
+          ? 'warning'
+          : connectorsCount === 0
+          ? 'warning'
+          : 'normal';
+
+      const detailsRef = useRef(null);
+      const [detailsHeight, setDetailsHeight] = useState(0);
+
+      useEffect(() => {
+        const el = detailsRef.current;
+        if (!el) return;
+        if (isOpen) {
+          const frame = requestAnimationFrame(() => {
+            setDetailsHeight(el.scrollHeight);
+          });
+          return () => cancelAnimationFrame(frame);
+        }
+        setDetailsHeight(0);
+      }, [isOpen, connectorsCount, totalGbDecimal, totalGibBinary]);
+
+      const summaryMetrics = [
+        {
+          key: 'ingestion',
+          label: 'Ingestão 24h',
+          value: ingestionDisplay,
+          percent: null,
+          status: ingestionStatus,
+          tooltip: missingCount ? `Sem métrica em ${missingCount} conector(es)` : ''
+        },
+        {
+          key: 'connectors',
+          label: 'Conectores',
+          value: connectorsCount ?? '—',
+          percent: null,
+          status: connectorsStatus,
+          tooltip: missingCount ? `Sem métrica em ${missingCount} conector(es)` : ''
+        }
+      ];
+
+      const overallStatus = getCrowdstrikeOverallStatus(environment);
+
+      return (
+        <div className={`env-card status-${overallStatus} ${isOpen ? 'open' : ''}`}>
+          <button
+            type="button"
+            className="env-card-header"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+          >
+            <div className="env-header-main">
+              <div className="env-title">
+                <span className="status-icon">{STATUS_ICON[overallStatus]}</span>
+                <span className="env-name-text">{environment.name ?? '—'}</span>
+                <span className="env-siem-badge">Crowdstrike NG-SIEM</span>
+              </div>
+              <div className="env-summary-line">
+                {summaryMetrics.map(metric => (
+                  <SummaryMetric
+                    key={metric.key}
+                    label={metric.label}
+                    value={metric.value}
+                    percent={metric.percent}
+                    status={metric.status}
+                    tooltip={metric.tooltip}
+                  />
+                ))}
+              </div>
+              <div className="env-meta-line">
+                <span className="env-meta">Janela: {environment.ingestion_window_hours ?? 24}h</span>
+                {environment.base_url ? (
+                  <span className="env-meta">Base URL: {environment.base_url}</span>
+                ) : null}
+              </div>
+            </div>
+            <span className={`env-toggle-icon ${isOpen ? 'open' : ''}`} aria-hidden="true">
+              ▼
+            </span>
+          </button>
+          <div
+            className="env-details"
+            style={{ maxHeight: `${detailsHeight}px` }}
+            aria-hidden={!isOpen}
+          >
+            <div ref={detailsRef} className="env-details-inner">
+              {errors.length ? (
+                <div className="error-message">
+                  {errors.map((err, idx) => (
+                    <div key={`crowdstrike-error-${idx}`}>{err}</div>
+                  ))}
+                </div>
+              ) : null}
+              {connectors.length ? (
+                <div className="connector-grid">
+                  {connectors.map((connector, idx) => {
+                    const severity = getConnectorSeverity(connector);
+                    const typeLabel = connectorTypeLabel(connector);
+                    const lastSeen = connector.last_ingested_at
+                      ? formatDateTimeDisplay(connector.last_ingested_at)
+                      : null;
+                    return (
+                      <div className={`connector-card status-${severity}`} key={`${environment.name || 'env'}-connector-${idx}`}>
+                        <div className="connector-card-header">
+                          <div className="connector-title">
+                            <span className={`status-dot is-${severity}`} aria-hidden="true" />
+                            <span className="connector-name">{connector.name || `Conector ${idx + 1}`}</span>
+                          </div>
+                          {typeLabel ? <span className="connector-type">{typeLabel}</span> : null}
+                        </div>
+                        <div className="connector-meta">
+                          <span>Ingestão 24h: {formatConnectorVolume(connector)}</span>
+                          {lastSeen ? <span>Atualizado: {lastSeen}</span> : null}
+                        </div>
+                        {connector.status ? (
+                          <div className="connector-status-label">Status: {connector.status}</div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="empty-appliances">Nenhum conector retornado pela API.</div>
               )}
             </div>
           </div>
@@ -1293,6 +1543,8 @@
       }, [selectedSiem]);
 
       const selectValue = availableSiems.length === 0 ? '' : selectedSiem;
+      const isCrowdstrikeSelected =
+        selectedSiem && selectedSiem.trim().toLowerCase() === 'crowdstrike ng-siem';
 
       return (
         <div className="monitor-app">
@@ -1339,8 +1591,17 @@
             </div>
           </div>
           <div className="monitor-tags">
-            <span className="badge">CPU/Mem/Storage via Zabbix</span>
-            <span className="badge warn">Licença via license.sh</span>
+            {isCrowdstrikeSelected ? (
+              <>
+                <span className="badge">Ingestão 24h via Crowdstrike API</span>
+                <span className="badge warn">Conectores atualizados a cada coleta</span>
+              </>
+            ) : (
+              <>
+                <span className="badge">CPU/Mem/Storage via Zabbix</span>
+                <span className="badge warn">Licença via license.sh</span>
+              </>
+            )}
           </div>
           {!collectionEnabled ? (
             <div className="info-banner">
@@ -1355,8 +1616,11 @@
           <div className="env-list">
             {rows.map((environment, index) => {
               const key = environment.name || `env-${index}`;
+              const CardComponent = isCrowdstrikeEnvironment(environment)
+                ? CrowdstrikeEnvironmentCard
+                : EnvironmentCard;
               return (
-                <EnvironmentCard
+                <CardComponent
                   key={key}
                   environment={environment}
                   isOpen={openItems.has(key)}
