@@ -271,47 +271,59 @@
             <option value="Wazuh">Wazuh</option>
           </select>
         </div>
-        <div class="form-field">
+        <div class="form-field" data-siem-section="qradar" hidden>
           <label for="env-api-token">API Key</label>
           <input type="text" id="env-api-token" name="api_token" placeholder="Chave da API do SIEM">
         </div>
-        <div class="form-field">
+        <div class="form-field" data-siem-section="qradar" hidden>
           <label for="env-host">Host</label>
           <input type="text" id="env-host" name="host" placeholder="Hostname ou IP">
         </div>
-        <div class="form-field">
+        <div class="form-field" data-siem-section="qradar" hidden>
           <label for="env-collector">Collector</label>
           <input type="text" id="env-collector" name="collector" placeholder="Collector ou host">
         </div>
-        <div class="form-field">
+        <div class="form-field" data-siem-section="qradar" hidden>
           <label for="env-ssh-user">Usuário SSH</label>
           <input type="text" id="env-ssh-user" name="ssh_user" placeholder="root">
         </div>
-        <div class="form-field">
+        <div class="form-field" data-siem-section="qradar" hidden>
           <label for="env-ssh-key">Chave SSH</label>
           <input type="text" id="env-ssh-key" name="ssh_key" placeholder="/opt/qradar-dashboard/keys/...">
         </div>
-        <div class="form-field">
+        <div class="form-field" data-siem-section="qradar" hidden>
           <label for="env-jmx-port">Porta JMX</label>
           <input type="number" id="env-jmx-port" name="jmx_port" min="1" step="1" placeholder="7787">
         </div>
-        <div class="form-field form-field--full">
+        <div class="form-field form-field--full" data-siem-section="qradar" hidden>
           <label for="env-jmx-bean">JMX Bean</label>
           <input type="text" id="env-jmx-bean" name="jmx_bean">
         </div>
-        <div class="form-field form-field--full">
+        <div class="form-field form-field--full" data-siem-section="qradar" hidden>
           <label for="env-appliances">Appliances (JSON)</label>
           <textarea id="env-appliances" name="appliances" rows="3" placeholder='[
   {"name": "Event Collector", "zabbix_host": "Host no Zabbix"}
 ]'></textarea>
           <p class="field-hint">Use uma lista JSON de appliances e hosts de Zabbix.</p>
         </div>
-        <div class="form-field form-field--full">
+        <div class="form-field form-field--full" data-siem-section="qradar" hidden>
           <label for="env-connectivity">Alvos de conectividade (JSON)</label>
           <textarea id="env-connectivity" name="connectivity_targets" rows="3" placeholder='[
   {"name": "Event Collector", "target": "10.0.0.10"}
 ]'></textarea>
           <p class="field-hint">Use uma lista JSON com os destinos monitorados.</p>
+        </div>
+        <div class="form-field" data-siem-section="other" hidden>
+          <label for="env-client-id">Client ID</label>
+          <input type="text" id="env-client-id" name="client_id" placeholder="Client ID do SIEM">
+        </div>
+        <div class="form-field" data-siem-section="other" hidden>
+          <label for="env-client-secret">Client Secret</label>
+          <input type="text" id="env-client-secret" name="client_secret" placeholder="Client Secret do SIEM">
+        </div>
+        <div class="form-field form-field--full" data-siem-section="other" hidden>
+          <label for="env-base-url">Base URL</label>
+          <input type="text" id="env-base-url" name="base_url" placeholder="https://example.siem.local">
         </div>
         <div class="modal-actions">
           <button class="btn secondary" type="button" data-close-env-form>Cancelar</button>
@@ -328,6 +340,13 @@
     const openListBtn = document.querySelector('[data-open-environments]');
     const closeListButtons = listModal ? listModal.querySelectorAll('[data-close-env-list]') : [];
     const openFormBtn = listModal ? listModal.querySelector('[data-open-env-form]') : null;
+    const siemSelect = editModal ? editModal.querySelector('[name="siem"]') : null;
+    const qradarSections = editModal
+      ? Array.from(editModal.querySelectorAll('[data-siem-section="qradar"]'))
+      : [];
+    const otherSections = editModal
+      ? Array.from(editModal.querySelectorAll('[data-siem-section="other"]'))
+      : [];
     const tableBody = listModal ? listModal.querySelector('[data-env-table-body]') : null;
     const emptyRow = listModal ? listModal.querySelector('[data-env-empty-row]') : null;
     const listError = listModal ? listModal.querySelector('[data-env-error]') : null;
@@ -387,6 +406,21 @@
       });
     };
 
+    const updateVisibility = (elements, show) => {
+      elements.forEach((section) => {
+        section.hidden = !show;
+        section.setAttribute('aria-hidden', String(!show));
+        section.style.display = show ? '' : 'none';
+      });
+    };
+
+    const toggleSiemSections = (siem) => {
+      const value = (siem || '').toString().trim().toLowerCase();
+      const isQRadar = value === 'qradar';
+      updateVisibility(qradarSections, isQRadar);
+      updateVisibility(otherSections, !isQRadar && Boolean(value));
+    };
+
     const loadEnvironments = async () => {
       if (!listError) return;
       listError.hidden = true;
@@ -413,7 +447,6 @@
       formTitle.textContent = env ? 'Editar ambiente' : 'Adicionar ambiente';
       form.querySelector('[name="name"]').value = env?.name || '';
       form.querySelector('[name="codigo"]').value = env?.codigo || '';
-      const siemSelect = form.querySelector('[name="siem"]');
       if (siemSelect) {
         const existingOption = Array.from(siemSelect.options).find((opt) => opt.value === (env?.siem || ''));
         if (!existingOption && env?.siem) {
@@ -421,6 +454,7 @@
           siemSelect.add(customOption, siemSelect.firstChild);
         }
         siemSelect.value = env?.siem || '';
+        toggleSiemSections(siemSelect.value);
       }
       form.querySelector('[name="api_token"]').value = env?.api_token || '';
       form.querySelector('[name="host"]').value = env?.host || '';
@@ -431,6 +465,9 @@
       form.querySelector('[name="jmx_bean"]').value = env?.jmx_bean || '';
       form.querySelector('[name="appliances"]').value = formatJson(env?.appliances);
       form.querySelector('[name="connectivity_targets"]').value = formatJson(env?.connectivity_targets);
+      form.querySelector('[name="client_id"]').value = env?.client_id || '';
+      form.querySelector('[name="client_secret"]').value = env?.client_secret || '';
+      form.querySelector('[name="base_url"]').value = env?.base_url || '';
       if (formError) formError.hidden = true;
       toggleModal(editModal, true);
     };
@@ -461,6 +498,13 @@
     const closeEditButtons = editModal ? editModal.querySelectorAll('[data-close-env-form]') : [];
     closeEditButtons.forEach((btn) => btn.addEventListener('click', closeEditModal));
 
+    if (siemSelect) {
+      siemSelect.addEventListener('change', (event) => {
+        toggleSiemSections(event.target.value);
+      });
+      toggleSiemSections(siemSelect.value);
+    }
+
     if (form) {
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -477,6 +521,9 @@
           jmx_bean: form.querySelector('[name="jmx_bean"]').value,
           appliances: parseJsonField(form.querySelector('[name="appliances"]').value),
           connectivity_targets: parseJsonField(form.querySelector('[name="connectivity_targets"]').value),
+          client_id: form.querySelector('[name="client_id"]').value,
+          client_secret: form.querySelector('[name="client_secret"]').value,
+          base_url: form.querySelector('[name="base_url"]').value,
         };
 
         const envId = form.dataset.envId;
@@ -508,4 +555,3 @@
 </script>
 </body>
 </html>
-
