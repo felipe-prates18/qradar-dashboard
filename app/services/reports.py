@@ -423,35 +423,60 @@ def _crowdstrike_detections_report(
             )
         return resp.json()
 
+    def _ensure_job_completion(token: str, search_id: str) -> None:
+        url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs/{search_id}"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+        resp = session.patch(
+            url,
+            json={"state": "DONE"},
+            headers=headers,
+            timeout=timeout,
+        )
+        # best effort; do not fail if PATCH is not supported
+
     def _extract_count(result: Dict[str, Any]) -> Optional[int]:
         if not isinstance(result, dict):
             return None
+
+        # Preferred: events array returned by the results endpoint.
         events = result.get("events")
         if isinstance(events, list) and events:
-            first = events[0]
-            attrs = {}
-            if isinstance(first, dict):
-                attrs = first.get("attributes") or first.get("data") or {}
-            if isinstance(attrs, dict):
-                numeric_values = [
-                    v for v in attrs.values() if isinstance(v, (int, float))
-                ]
-                if numeric_values:
-                    return int(numeric_values[0])
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                attrs = event.get("attributes") or event.get("data") or {}
+                if isinstance(attrs, dict):
+                    for value in attrs.values():
+                        if isinstance(value, (int, float)):
+                            return int(value)
+
+        # Sometimes the result map contains the numeric aggregation directly.
         result_map = result.get("result") if isinstance(result.get("result"), dict) else None
         if isinstance(result_map, dict):
             for value in result_map.values():
                 if isinstance(value, (int, float)):
                     return int(value)
+
+        # Last resort: check meta statistics if available.
+        meta = result.get("meta")
+        if isinstance(meta, dict):
+            stats = meta.get("statistics")
+            if isinstance(stats, dict):
+                for value in stats.values():
+                    if isinstance(value, (int, float)):
+                        return int(value)
+
         return None
 
     try:
         logger.info("Iniciando search NG-SIEM ambiente=%s repo=%s", env.get("name"), repository)
         search_id = _start_ngsiem_search(bearer)
         poll_result = _poll_ngsiem_search(bearer, search_id)
-        result = poll_result
-        if not (poll_result.get("events") or poll_result.get("result")):
-            result = _fetch_ngsiem_results(bearer, search_id)
+        _ensure_job_completion(bearer, search_id)
+        result = _fetch_ngsiem_results(bearer, search_id)
     except (requests.RequestException, ValueError, CrowdstrikeApiError) as exc:
         logger.exception("Erro ao consultar detecções do Crowdstrike ambiente=%s", env.get("name"))
         return ReportResult(
