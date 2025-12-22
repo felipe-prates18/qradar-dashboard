@@ -361,15 +361,15 @@ def _crowdstrike_detections_report(
             details=[_format_period_label(start, end)],
         )
 
-    start_iso = start.astimezone(timezone.utc).replace(microsecond=0).isoformat()
-    end_iso = end.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+    start_ms = int(start.astimezone(timezone.utc).timestamp() * 1000)
+    end_ms = int(end.astimezone(timezone.utc).timestamp() * 1000)
 
     def _start_ngsiem_search(token: str) -> str:
         url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs"
         payload = {
             "isLive": False,
-            "start": start_iso,
-            "end": end_iso,
+            "start": start_ms,
+            "end": end_ms,
             "queryString": query_string,
             "timeZone": "America/Sao_Paulo",
             "showQueryEventDistribution": False,
@@ -382,7 +382,7 @@ def _crowdstrike_detections_report(
         resp = session.post(url, json=payload, headers=headers, timeout=timeout)
         if resp.status_code not in (200, 201):
             raise CrowdstrikeApiError(
-                f"Erro ao iniciar search NG-SIEM (HTTP {resp.status_code})."
+                f"Erro ao iniciar search NG-SIEM (HTTP {resp.status_code}): {resp.text}"
             )
         data = resp.json()
         search_id = data.get("id")
@@ -402,7 +402,7 @@ def _crowdstrike_detections_report(
             resp = session.get(url, headers=headers, timeout=timeout)
             if resp.status_code not in (200, 201):
                 raise CrowdstrikeApiError(
-                    f"Erro ao fazer polling do search (HTTP {resp.status_code})."
+                    f"Erro ao fazer polling do search (HTTP {resp.status_code}): {resp.text}"
                 )
             data = resp.json()
             if data.get("done"):
