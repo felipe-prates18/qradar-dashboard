@@ -1091,6 +1091,18 @@ def home(request: Request, user: str = Depends(verify_user_required_page)):
     return templates.TemplateResponse("index.html", context)
 
 
+@app.get("/reports", response_class=HTMLResponse)
+def reports_page(request: Request, user: str = Depends(verify_user_required_page)):
+    context = {
+        "request": request,
+        "user": user,
+        "title": "Reports",
+        "is_admin": is_admin(user),
+        "can_access_threat_hunting": _threat_hunting_allowed(user),
+    }
+    return templates.TemplateResponse("reports.html", context)
+
+
 @app.get("/painel", response_class=HTMLResponse)
 def wallboard(request: Request):
     session_user = verify_user(request)
