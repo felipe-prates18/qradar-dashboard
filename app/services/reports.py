@@ -289,7 +289,21 @@ def _qradar_offense_report(
 def _crowdstrike_detections_report(
     env: Dict[str, Any], start: datetime, end: datetime, logger: logging.Logger
 ) -> ReportResult:
-    base_url = env.get("base_url") or env.get("api_base_url")
+    def _normalize_base_url(raw: Any) -> Optional[str]:
+        if not raw:
+            return None
+        try:
+            from urllib.parse import urlsplit, urlunsplit
+
+            parts = urlsplit(str(raw))
+            if not parts.scheme or not parts.netloc:
+                return str(raw).rstrip("/")
+            cleaned = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+            return cleaned.rstrip("/")
+        except Exception:
+            return str(raw).rstrip("/")
+
+    base_url = _normalize_base_url(env.get("base_url") or env.get("api_base_url"))
     client_id = env.get("client_id")
     client_secret = env.get("client_secret")
     if not base_url or not client_id or not client_secret:

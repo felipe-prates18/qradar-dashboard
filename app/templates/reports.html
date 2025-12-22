@@ -221,6 +221,7 @@
               <input
                 id="report-start"
                 type="date"
+                className="date-input"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
                 max={endDate}
@@ -232,6 +233,7 @@
               <input
                 id="report-end"
                 type="date"
+                className="date-input"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
                 min={startDate}
@@ -253,7 +255,7 @@
 
           {report ? (
             <div className="report-results">
-              <div className="report-summary card-panel">
+              <div className="report-summary card-panel single-report">
                 <div className="report-summary-header">
                   <div>
                     <div className="report-env">{envLabel || 'Ambiente selecionado'}</div>
@@ -267,37 +269,18 @@
                   <div className="metric-label">Total de ocorrências</div>
                   <div className="metric-value">{report.total}</div>
                 </div>
-              </div>
-
-              <div className="report-cards">
-                {(report.results || []).map((item, idx) => {
-                  const status = normalizeStatus(item.status || 'warning');
-                  const pillClass = status === 'critical' ? 'status-pill is-critical' : status === 'warning' ? 'status-pill is-warning' : 'status-pill';
-                  const statusIcon = STATUS_ICON[status] || STATUS_ICON.normal;
-                  const statusLabel = STATUS_LABEL[status] || 'OK';
-                  return (
-                    <div className="report-card card-panel" key={`${item.type || 'item'}-${idx}`}>
-                      <div className="report-card-header">
-                        <div>
-                          <div className="report-card-title">{item.label || 'Métrica'}</div>
-                          <div className="report-card-subtitle">{item.message || '—'}</div>
-                        </div>
-                        <span className={pillClass}>{statusIcon} {statusLabel}</span>
-                      </div>
-                      <div className="report-card-body">
-                        <div className="report-metric">
-                          <span className="report-metric-label">Quantidade</span>
-                          <span className="report-metric-value">{item.count !== null && item.count !== undefined ? item.count : '—'}</span>
-                        </div>
-                        {item.details && item.details.length ? (
-                          <ul className="report-details">
-                            {item.details.map((detail, i) => <li key={`detail-${idx}-${i}`}>{detail}</li>)}
-                          </ul>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                })}
+                {(report.results || []).length ? (
+                  <div className="report-breakdown">
+                    <h4>Detalhes</h4>
+                    <ul className="report-details">
+                      {(report.results || []).map((item, idx) => (
+                        <li key={`detail-${idx}`}>
+                          <strong>{item.label || 'Métrica'}:</strong> {item.count !== null && item.count !== undefined ? item.count : '—'} — {item.message || '—'}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : null}

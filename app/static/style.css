@@ -222,6 +222,7 @@ input[type="text"]::placeholder,
 input[type="password"]::placeholder,
 input[type="email"]::placeholder,
 input[type="search"]::placeholder,
+input[type="date"]::placeholder,
 textarea::placeholder {
   color: rgba(234, 252, 230, 0.45);
 }
@@ -230,12 +231,29 @@ input[type="text"]:focus,
 input[type="password"]:focus,
 input[type="email"]:focus,
 input[type="search"]:focus,
+input[type="date"]:focus,
 select:focus,
 textarea:focus {
   outline: none;
   border-color: rgba(38, 217, 141, 0.6);
   box-shadow: 0 0 0 3px rgba(38, 217, 141, 0.18);
   background: rgba(12, 41, 32, 0.95);
+}
+
+input[type="date"],
+.date-input {
+  appearance: none;
+  background: rgba(11, 34, 27, 0.85);
+  color: var(--text-primary);
+  border: 1px solid rgba(38, 99, 77, 0.6);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  min-height: 44px;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(1);
 }
 
 .form-grid {
