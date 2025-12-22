@@ -380,6 +380,10 @@ def _crowdstrike_detections_report(
             "Content-Type": "application/json",
         }
         resp = session.post(url, json=payload, headers=headers, timeout=timeout)
+        try:
+            logger.info("Resposta start search NG-SIEM ambiente=%s status=%s body=%s", env.get("name"), resp.status_code, resp.text)
+        except Exception:
+            pass
         if resp.status_code not in (200, 201):
             raise CrowdstrikeApiError(
                 f"Erro ao iniciar search NG-SIEM (HTTP {resp.status_code}): {resp.text}"
@@ -398,6 +402,16 @@ def _crowdstrike_detections_report(
         }
         for attempt in range(1, max_polls + 1):
             resp = session.get(url, headers=headers, timeout=timeout)
+            try:
+                logger.info(
+                    "Polling NG-SIEM search ambiente=%s attempt=%s status=%s body=%s",
+                    env.get("name"),
+                    attempt,
+                    resp.status_code,
+                    resp.text,
+                )
+            except Exception:
+                pass
             if resp.status_code not in (200, 201):
                 raise CrowdstrikeApiError(
                     f"Erro ao fazer polling do search (HTTP {resp.status_code}): {resp.text}"
