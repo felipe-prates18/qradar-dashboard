@@ -434,6 +434,11 @@ def _crowdstrike_detections_report(
                 if not isinstance(event, dict):
                     continue
                 attrs = event.get("attributes") or event.get("data") or {}
+                if "_count" in event and isinstance(event.get("_count"), (int, float, str)):
+                    try:
+                        return int(event.get("_count"))
+                    except Exception:
+                        pass
                 if isinstance(attrs, dict):
                     for value in attrs.values():
                         if isinstance(value, (int, float)):
