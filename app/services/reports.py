@@ -390,52 +390,24 @@ def _crowdstrike_detections_report(
             raise CrowdstrikeApiError("Resposta sem id de search job.")
         return search_id
 
-    def _poll_ngsiem_search(token: str, search_id: str) -> Dict[str, Any]:
+    def _poll_ngsiem_search(token: str, search_id: str, poll_interval: int = 5, max_polls: int = 30) -> Dict[str, Any]:
         url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs/{search_id}"
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
         }
-        attempts = 0
-        while attempts < 12:
-            attempts += 1
+        for attempt in range(1, max_polls + 1):
             resp = session.get(url, headers=headers, timeout=timeout)
             if resp.status_code not in (200, 201):
                 raise CrowdstrikeApiError(
                     f"Erro ao fazer polling do search (HTTP {resp.status_code}): {resp.text}"
                 )
             data = resp.json()
-            if data.get("done"):
+            done = data.get("done", False)
+            if done:
                 return data
-            time.sleep(5)
+            time.sleep(poll_interval)
         raise CrowdstrikeApiError("Query NG-SIEM não finalizou dentro do tempo limite.")
-
-    def _fetch_ngsiem_results(token: str, search_id: str) -> Dict[str, Any]:
-        url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs/{search_id}/results"
-        headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-        }
-        resp = session.get(url, headers=headers, timeout=timeout)
-        if resp.status_code not in (200, 201):
-            raise CrowdstrikeApiError(
-                f"Erro ao buscar resultados do search (HTTP {resp.status_code}): {resp.text}"
-            )
-        return resp.json()
-
-    def _ensure_job_completion(token: str, search_id: str) -> None:
-        url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs/{search_id}"
-        headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-        }
-        resp = session.patch(
-            url,
-            json={"state": "DONE"},
-            headers=headers,
-            timeout=timeout,
-        )
-        # best effort; do not fail if PATCH is not supported
 
     def _extract_count(result: Dict[str, Any]) -> Optional[int]:
         if not isinstance(result, dict):
@@ -474,9 +446,7 @@ def _crowdstrike_detections_report(
     try:
         logger.info("Iniciando search NG-SIEM ambiente=%s repo=%s", env.get("name"), repository)
         search_id = _start_ngsiem_search(bearer)
-        poll_result = _poll_ngsiem_search(bearer, search_id)
-        _ensure_job_completion(bearer, search_id)
-        result = _fetch_ngsiem_results(bearer, search_id)
+        result = _poll_ngsiem_search(bearer, search_id)
     except (requests.RequestException, ValueError, CrowdstrikeApiError) as exc:
         logger.exception("Erro ao consultar detecções do Crowdstrike ambiente=%s", env.get("name"))
         return ReportResult(
