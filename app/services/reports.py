@@ -410,6 +410,19 @@ def _crowdstrike_detections_report(
             time.sleep(5)
         raise CrowdstrikeApiError("Query NG-SIEM não finalizou dentro do tempo limite.")
 
+    def _fetch_ngsiem_results(token: str, search_id: str) -> Dict[str, Any]:
+        url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs/{search_id}/results"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+        resp = session.get(url, headers=headers, timeout=timeout)
+        if resp.status_code not in (200, 201):
+            raise CrowdstrikeApiError(
+                f"Erro ao buscar resultados do search (HTTP {resp.status_code}): {resp.text}"
+            )
+        return resp.json()
+
     def _extract_count(result: Dict[str, Any]) -> Optional[int]:
         if not isinstance(result, dict):
             return None
@@ -435,7 +448,10 @@ def _crowdstrike_detections_report(
     try:
         logger.info("Iniciando search NG-SIEM ambiente=%s repo=%s", env.get("name"), repository)
         search_id = _start_ngsiem_search(bearer)
-        result = _poll_ngsiem_search(bearer, search_id)
+        poll_result = _poll_ngsiem_search(bearer, search_id)
+        result = poll_result
+        if not (poll_result.get("events") or poll_result.get("result")):
+            result = _fetch_ngsiem_results(bearer, search_id)
     except (requests.RequestException, ValueError, CrowdstrikeApiError) as exc:
         logger.exception("Erro ao consultar detecções do Crowdstrike ambiente=%s", env.get("name"))
         return ReportResult(
