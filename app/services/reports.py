@@ -8,6 +8,7 @@ from datetime import date, datetime, time, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
+import time as time_module
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -420,7 +421,7 @@ def _crowdstrike_detections_report(
             done = data.get("done", False)
             if done:
                 return data
-            time.sleep(poll_interval)
+            time_module.sleep(poll_interval)
         raise CrowdstrikeApiError("Query NG-SIEM não finalizou dentro do tempo limite.")
 
     def _extract_count(result: Dict[str, Any]) -> Optional[int]:
