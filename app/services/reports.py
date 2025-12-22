@@ -12,7 +12,7 @@ import time as time_module
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .crowdstrike_client import CrowdstrikeApiError, CrowdstrikeAuthError
+from .crowdstrike_client import CrowdstrikeApiError, CrowdstrikeAuthError, CrowdstrikeClient
 
 DEFAULT_TIMEOUT = 30
 DEFAULT_MAX_RETRIES = 3
@@ -21,6 +21,11 @@ DEFAULT_NGSIEM_QUERY = r"""#repo=xdr_indicatorsrepo
 | Ngsiem.event.type="ngsiem-rule-trigger-event"
 | stats(function=count(rule.name))
 """
+DEFAULT_NGSIEM_SEVERITY_QUERY = r"""#repo=xdr_indicatorsrepo
+| Ngsiem.event.type="ngsiem-rule-trigger-event"
+| groupBy(Vendor.SeverityName)
+"""
+DEFAULT_NGSIEM_EVENTS_QUERY = "count()"
 
 
 @dataclass
@@ -92,6 +97,81 @@ def _resolve_overall_status(results: Sequence[ReportResult]) -> str:
         if value > rank.get(worst, 1):
             worst = result.status
     return worst
+
+
+def _crowdstrike_connectors_summary(env: Dict[str, Any], logger: logging.Logger) -> List[ReportResult]:
+    base_url = env.get("base_url") or env.get("api_base_url")
+    client_id = env.get("client_id")
+    client_secret = env.get("client_secret")
+    results: List[ReportResult] = []
+
+    try:
+        client = CrowdstrikeClient(
+            base_url=base_url or "",
+            client_id=client_id or "",
+            client_secret=client_secret or "",
+            logger=logger,
+        )
+    except ValueError as exc:
+        return [
+            ReportResult(
+                type="connectors",
+                label="Conectores",
+                count=None,
+                status="error",
+                message=str(exc),
+                details=[],
+            )
+        ]
+
+    try:
+        logger.info("Solicitando token OAuth2 Crowdstrike ambiente=%s para conectores", env.get("name"))
+        bearer = client.fetch_token()
+        logger.info("Token OAuth2 obtido ambiente=%s", env.get("name"))
+        logger.info("Listando conexões NG-SIEM ambiente=%s", env.get("name"))
+        connections_payload = client.list_all_connections(bearer)
+        connectors = client.map_connectors(connections_payload.get("resources", []))
+        ingestion_summary = client.summarize_ingestion(connections_payload)
+    except (CrowdstrikeApiError, requests.RequestException) as exc:
+        logger.exception("Erro ao consultar conectores do Crowdstrike ambiente=%s", env.get("name"))
+        return [
+            ReportResult(
+                type="connectors",
+                label="Conectores",
+                count=None,
+                status="error",
+                message=f"Falha ao consultar conectores: {exc}",
+                details=[],
+            )
+        ]
+
+    connectors_count = len(connectors)
+    status_counter: Dict[str, int] = {}
+    details: List[str] = []
+    for item in connectors:
+        status_raw = item.get("status") or "unknown"
+        status_norm = str(status_raw).strip().lower()
+        status_counter[status_norm] = status_counter.get(status_norm, 0) + 1
+        name = item.get("name") or item.get("id") or "Conector"
+        vendor = item.get("vendor") or item.get("product")
+        details.append(f"{name} ({vendor or '—'}) – Status: {status_raw}")
+
+    status_parts = [f"{k or 'unknown'}: {v}" for k, v in status_counter.items()]
+    ingestion_gb = ingestion_summary.get("total_gb_one_day_decimal")
+    ingestion_msg = f"Ingestão 24h: {ingestion_gb:.2f} GB" if ingestion_gb is not None else "Ingestão 24h: —"
+    status_msg = "; ".join(status_parts) if status_parts else "Sem status informado."
+
+    results.append(
+        ReportResult(
+            type="connectors",
+            label="Conectores",
+            count=connectors_count,
+            status="ok",
+            message=f"{connectors_count} conector(es). {status_msg}. {ingestion_msg}",
+            details=details,
+        )
+    )
+    return results
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -294,9 +374,11 @@ def _qradar_offense_report(
 
 def _crowdstrike_detections_report(
     env: Dict[str, Any], start: datetime, end: datetime, logger: logging.Logger
-) -> ReportResult:
+) -> List[ReportResult]:
     repository = env.get("ngsiem_repository") or DEFAULT_NGSIEM_REPOSITORY
     query_string = env.get("ngsiem_query") or DEFAULT_NGSIEM_QUERY
+    severity_query = env.get("ngsiem_severity_query") or DEFAULT_NGSIEM_SEVERITY_QUERY
+    events_query = env.get("ngsiem_events_query") or DEFAULT_NGSIEM_EVENTS_QUERY
 
     def _normalize_base_url(raw: Any) -> Optional[str]:
         if not raw:
@@ -365,13 +447,13 @@ def _crowdstrike_detections_report(
     start_ms = int(start.astimezone(timezone.utc).timestamp() * 1000)
     end_ms = int(end.astimezone(timezone.utc).timestamp() * 1000)
 
-    def _start_ngsiem_search(token: str) -> str:
+    def _start_ngsiem_search(token: str, query: str) -> str:
         url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs"
         payload = {
             "isLive": False,
             "start": start_ms,
             "end": end_ms,
-            "queryString": query_string,
+            "queryString": query,
             "timeZone": "America/Sao_Paulo",
             "showQueryEventDistribution": False,
         }
@@ -463,40 +545,118 @@ def _crowdstrike_detections_report(
 
         return None
 
+    def _run_query(query: str, *, poll_interval: int = 5, max_polls: int = 30) -> Tuple[Optional[int], Dict[str, Any]]:
+        try:
+            logger.info("Iniciando search NG-SIEM ambiente=%s repo=%s", env.get("name"), repository)
+            search_id = _start_ngsiem_search(bearer, query)
+            result = _poll_ngsiem_search(bearer, search_id, poll_interval=poll_interval, max_polls=max_polls)
+            count_value = _extract_count(result)
+            return count_value, result
+        except (requests.RequestException, ValueError, CrowdstrikeApiError) as exc:
+            logger.exception("Erro ao consultar detecções do Crowdstrike ambiente=%s", env.get("name"))
+            raise
+
+    results: List[ReportResult] = []
+
+    # Detecções totais
     try:
-        logger.info("Iniciando search NG-SIEM ambiente=%s repo=%s", env.get("name"), repository)
-        search_id = _start_ngsiem_search(bearer)
-        result = _poll_ngsiem_search(bearer, search_id)
-    except (requests.RequestException, ValueError, CrowdstrikeApiError) as exc:
-        logger.exception("Erro ao consultar detecções do Crowdstrike ambiente=%s", env.get("name"))
-        return ReportResult(
+        det_count, det_result = _run_query(query_string)
+    except Exception as exc:
+        return [
+            ReportResult(
+                type="detections",
+                label="Detecções",
+                count=None,
+                status="error",
+                message=f"Falha ao consultar detecções: {exc}",
+                details=[_format_period_label(start, end)],
+            )
+        ]
+
+    det_total = det_count or 0
+    det_status = "ok" if det_total > 0 else "warning"
+    det_message = f"{det_total} detecção(ões) no período informado." if det_total > 0 else "Nenhuma detecção encontrada no período selecionado."
+    results.append(
+        ReportResult(
             type="detections",
             label="Detecções",
-            count=None,
-            status="error",
-            message=f"Falha ao consultar detecções: {exc}",
+            count=det_total,
+            status=det_status,
+            message=det_message,
             details=[_format_period_label(start, end)],
         )
-
-    total_int = _extract_count(result)
-    if total_int is None:
-        total_int = 0
-
-    if total_int > 0:
-        status = "ok"
-        message = f"{total_int} detecção(ões) no período informado."
-    else:
-        status = "warning"
-        message = "Nenhuma detecção encontrada no período selecionado."
-
-    return ReportResult(
-        type="detections",
-        label="Detecções",
-        count=total_int,
-        status=status,
-        message=message,
-        details=[_format_period_label(start, end)],
     )
+
+    # Severidade (alertas por severidade)
+    try:
+        sev_count, sev_result = _run_query(severity_query)
+        sev_events = sev_result.get("events") if isinstance(sev_result, dict) else []
+        sev_breakdown = []
+        if isinstance(sev_events, list):
+            for item in sev_events:
+                if not isinstance(item, dict):
+                    continue
+                sev_label = item.get("Vendor.SeverityName") or item.get("vendor.severityname") or "Desconhecido"
+                sev_val = item.get("_count")
+                try:
+                    sev_val_int = int(sev_val) if sev_val is not None else 0
+                except Exception:
+                    sev_val_int = 0
+                sev_breakdown.append(f"{sev_label}: {sev_val_int}")
+        sev_message = "; ".join(sev_breakdown) if sev_breakdown else "Nenhuma severidade retornada."
+        results.append(
+            ReportResult(
+                type="severity",
+                label="Alertas por severidade",
+                count=sev_count if sev_count is not None else 0,
+                status="ok",
+                message=sev_message,
+                details=sev_breakdown or [_format_period_label(start, end)],
+            )
+        )
+    except Exception as exc:
+        results.append(
+            ReportResult(
+                type="severity",
+                label="Alertas por severidade",
+                count=None,
+                status="error",
+                message=f"Falha ao consultar severidade: {exc}",
+                details=[_format_period_label(start, end)],
+            )
+        )
+
+    # Total de eventos (consulta mais pesada)
+    try:
+        events_count, _ = _run_query(events_query, poll_interval=5, max_polls=60)
+        events_total = events_count if events_count is not None else 0
+        results.append(
+            ReportResult(
+                type="events",
+                label="Total de eventos",
+                count=events_total,
+                status="ok",
+                message=f"{events_total} evento(s) no período informado.",
+                details=[_format_period_label(start, end)],
+            )
+        )
+    except Exception as exc:
+        results.append(
+            ReportResult(
+                type="events",
+                label="Total de eventos",
+                count=None,
+                status="error",
+                message=f"Falha ao consultar eventos: {exc}",
+                details=[_format_period_label(start, end)],
+            )
+        )
+
+    # Conectores e ingestão
+    connectors_results = _crowdstrike_connectors_summary(env, logger)
+    results.extend(connectors_results)
+
+    return results
 
 
 def build_environment_report(
@@ -514,7 +674,7 @@ def build_environment_report(
     if normalized_siem == "qradar":
         results = [_qradar_offense_report(env, start, end, api_conf, logger)]
     elif normalized_siem == "crowdstrike ng-siem":
-        results = [_crowdstrike_detections_report(env, start, end, logger)]
+        results = _crowdstrike_detections_report(env, start, end, logger)
     else:
         results = [
             ReportResult(
