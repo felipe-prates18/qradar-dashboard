@@ -40,6 +40,7 @@ from .collectors import collect_crowdstrike_monitoring_data, collect_health_data
 from .alerts import AlertManager
 from . import threat_hunting
 from .services import environment_store, qradar_rules
+from .services import reports
 from .services.jira_client import JiraClient
 
 try:
@@ -533,6 +534,15 @@ def _load_environments_from_db() -> List[Dict[str, Any]]:
         con.close()
 
 
+def _get_environment_from_db(env_id: int) -> Optional[Dict[str, Any]]:
+    con = _con()
+    try:
+        environment_store.ensure_schema(con)
+        return environment_store.get_environment(con, env_id)
+    finally:
+        con.close()
+
+
 def _normalize_siem_value(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -617,6 +627,12 @@ def _config_with_envs(*, siem_filter: Optional[str] = None) -> Dict[str, Any]:
         api_conf["tokens"] = tokens_map
     config["qradar_api"] = api_conf
     return config
+
+
+def _qradar_api_conf_for_env(env: Dict[str, Any]) -> Dict[str, Any]:
+    env_siem = env.get("siem") or DEFAULT_QRADAR_SIEM
+    config = _config_with_envs(siem_filter=env_siem)
+    return config.get("qradar_api") or {}
 
 
 _cache_refresh_task: Optional[asyncio.Task] = None
@@ -1075,6 +1091,18 @@ def home(request: Request, user: str = Depends(verify_user_required_page)):
     return templates.TemplateResponse("index.html", context)
 
 
+@app.get("/reports", response_class=HTMLResponse)
+def reports_page(request: Request, user: str = Depends(verify_user_required_page)):
+    context = {
+        "request": request,
+        "user": user,
+        "title": "Reports",
+        "is_admin": is_admin(user),
+        "can_access_threat_hunting": _threat_hunting_allowed(user),
+    }
+    return templates.TemplateResponse("reports.html", context)
+
+
 @app.get("/painel", response_class=HTMLResponse)
 def wallboard(request: Request):
     session_user = verify_user(request)
@@ -1115,6 +1143,54 @@ def get_monitoring(
     selected_siem = request.query_params.get("siem") if hasattr(request, "query_params") else None
     payload = _get_monitoring_payload(selected_siem)
     return JSONResponse(payload)
+
+
+@app.get("/api/reports/options")
+def get_report_options(user: str = Depends(verify_user_required_api)):
+    envs = _load_environments_from_db()
+    options = [
+        {
+            "id": env.get("id"),
+            "name": env.get("name"),
+            "code": env.get("codigo") or env.get("code"),
+            "siem": _resolved_env_siem(env),
+        }
+        for env in envs
+    ]
+    return JSONResponse({"environments": options})
+
+
+@app.post("/api/reports")
+async def post_reports(request: Request, user: str = Depends(verify_user_required_api)):
+    data = await _extract_request_json(request)
+    env_id = data.get("environment_id")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+
+    if env_id is None:
+        raise HTTPException(status_code=400, detail="environment_id é obrigatório.")
+
+    try:
+        env_id_int = int(env_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="environment_id inválido.")
+
+    env = _get_environment_from_db(env_id_int)
+    if not env:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado.")
+
+    try:
+        start_dt, end_dt = reports.parse_date_range(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        payload = reports.build_environment_report(env, start_dt, end_dt, _qradar_api_conf_for_env(env), logger=logger)
+    except Exception as exc:
+        logger.exception("Erro ao gerar relatório do ambiente %s", env.get("name"))
+        raise HTTPException(status_code=502, detail=f"Falha ao gerar relatório: {exc}")
+
+    return JSONResponse({"report": payload})
 
 
 @app.get("/api/health")
