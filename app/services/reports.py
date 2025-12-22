@@ -15,6 +15,11 @@ from .crowdstrike_client import CrowdstrikeApiError, CrowdstrikeAuthError
 
 DEFAULT_TIMEOUT = 30
 DEFAULT_MAX_RETRIES = 3
+DEFAULT_NGSIEM_REPOSITORY = "search-all"
+DEFAULT_NGSIEM_QUERY = r"""#repo=xdr_indicatorsrepo
+| Ngsiem.event.type="ngsiem-rule-trigger-event"
+| stats(function=count(rule.name))
+"""
 
 
 @dataclass
@@ -289,6 +294,9 @@ def _qradar_offense_report(
 def _crowdstrike_detections_report(
     env: Dict[str, Any], start: datetime, end: datetime, logger: logging.Logger
 ) -> ReportResult:
+    repository = env.get("ngsiem_repository") or DEFAULT_NGSIEM_REPOSITORY
+    query_string = env.get("ngsiem_query") or DEFAULT_NGSIEM_QUERY
+
     def _normalize_base_url(raw: Any) -> Optional[str]:
         if not raw:
             return None
@@ -353,26 +361,81 @@ def _crowdstrike_detections_report(
             details=[_format_period_label(start, end)],
         )
 
-    start_iso = start.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    end_iso = end.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    filter_expr = f"last_behavior:>={start_iso}+last_behavior:<={end_iso}"
+    start_iso = start.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+    end_iso = end.astimezone(timezone.utc).replace(microsecond=0).isoformat()
 
-    detections_url = f"{str(base_url).rstrip('/')}/detects/queries/detects/v1"
-    try:
-        resp = session.get(
-            detections_url,
-            headers={
-                "Authorization": f"Bearer {bearer}",
-                "Accept": "application/json",
-            },
-            params={"filter": filter_expr, "limit": 1},
-            timeout=timeout,
-        )
+    def _start_ngsiem_search(token: str) -> str:
+        url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs"
+        payload = {
+            "isLive": False,
+            "start": start_iso,
+            "end": end_iso,
+            "queryString": query_string,
+            "timeZone": "America/Sao_Paulo",
+            "showQueryEventDistribution": False,
+        }
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        resp = session.post(url, json=payload, headers=headers, timeout=timeout)
         if resp.status_code not in (200, 201):
             raise CrowdstrikeApiError(
-                f"Erro ao consultar detecções (HTTP {resp.status_code})."
+                f"Erro ao iniciar search NG-SIEM (HTTP {resp.status_code})."
             )
-        payload = resp.json()
+        data = resp.json()
+        search_id = data.get("id")
+        if not search_id:
+            raise CrowdstrikeApiError("Resposta sem id de search job.")
+        return search_id
+
+    def _poll_ngsiem_search(token: str, search_id: str) -> Dict[str, Any]:
+        url = f"{str(base_url).rstrip('/')}/humio/api/v1/repositories/{repository}/queryjobs/{search_id}"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+        }
+        attempts = 0
+        while attempts < 12:
+            attempts += 1
+            resp = session.get(url, headers=headers, timeout=timeout)
+            if resp.status_code not in (200, 201):
+                raise CrowdstrikeApiError(
+                    f"Erro ao fazer polling do search (HTTP {resp.status_code})."
+                )
+            data = resp.json()
+            if data.get("done"):
+                return data
+            time.sleep(5)
+        raise CrowdstrikeApiError("Query NG-SIEM não finalizou dentro do tempo limite.")
+
+    def _extract_count(result: Dict[str, Any]) -> Optional[int]:
+        if not isinstance(result, dict):
+            return None
+        events = result.get("events")
+        if isinstance(events, list) and events:
+            first = events[0]
+            attrs = {}
+            if isinstance(first, dict):
+                attrs = first.get("attributes") or first.get("data") or {}
+            if isinstance(attrs, dict):
+                numeric_values = [
+                    v for v in attrs.values() if isinstance(v, (int, float))
+                ]
+                if numeric_values:
+                    return int(numeric_values[0])
+        result_map = result.get("result") if isinstance(result.get("result"), dict) else None
+        if isinstance(result_map, dict):
+            for value in result_map.values():
+                if isinstance(value, (int, float)):
+                    return int(value)
+        return None
+
+    try:
+        logger.info("Iniciando search NG-SIEM ambiente=%s repo=%s", env.get("name"), repository)
+        search_id = _start_ngsiem_search(bearer)
+        result = _poll_ngsiem_search(bearer, search_id)
     except (requests.RequestException, ValueError, CrowdstrikeApiError) as exc:
         logger.exception("Erro ao consultar detecções do Crowdstrike ambiente=%s", env.get("name"))
         return ReportResult(
@@ -384,19 +447,9 @@ def _crowdstrike_detections_report(
             details=[_format_period_label(start, end)],
         )
 
-    pagination = payload.get("meta", {}).get("pagination", {}) if isinstance(payload, dict) else {}
-    total = pagination.get("total")
-    try:
-        total_int = int(total) if total is not None else None
-    except Exception:
-        total_int = None
-
+    total_int = _extract_count(result)
     if total_int is None:
-        resources = payload.get("resources") if isinstance(payload, dict) else None
-        if isinstance(resources, list):
-            total_int = len(resources)
-        else:
-            total_int = 0
+        total_int = 0
 
     if total_int > 0:
         status = "ok"
