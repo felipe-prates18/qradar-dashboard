@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reports</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/favicon.png">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <img src="/static/logo-asper.png" alt="ASPER">
+        <div class="title">
+          <div class="title-row">
+            <h1 id="reports-title">Reports</h1>
+          </div>
+          <div class="sub" id="reports-subtitle">Selecione o ambiente e o período para gerar o relatório.</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span class="user-label small">Logado como {{user}}</span>
+        <div class="header-buttons">
+          <a class="btn secondary" href="/">Monitoramento</a>
+          <a class="btn secondary" href="/me/password">Minha conta</a>
+          {% if can_access_threat_hunting %}
+          <a class="btn secondary" href="/threat-hunting">Hunting Wiki</a>
+          {% endif %}
+          {% if is_admin %}
+          <a class="btn secondary" href="/admin/users">Admin</a>
+          {% endif %}
+          <a class="btn secondary" href="/logout">Sair</a>
+        </div>
+      </div>
+    </header>
+
+    <section class="card">
+      <div id="reports-app-root"></div>
+    </section>
+  </div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+    {% raw %}
+    const { useState, useEffect, useCallback, useMemo } = React;
+
+    const STATUS_ICON = {
+      normal: '🟢',
+      warning: '🟡',
+      critical: '🔴'
+    };
+
+    const STATUS_LABEL = {
+      normal: 'OK',
+      warning: 'Aviso',
+      critical: 'Crítico',
+    };
+
+    function normalizeStatus(value) {
+      const v = (value || '').toString().toLowerCase();
+      if (v === 'critical' || v === 'error') return 'critical';
+      if (v === 'warning') return 'warning';
+      return 'normal';
+    }
+
+    function parseDateValue(raw) {
+      if (typeof raw !== 'string') return null;
+      const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (m) {
+        const [, dd, mm, yyyy] = m;
+        const date = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+
+    function formatDateInputLabel(value) {
+      if (!value) return '—';
+      const parsed = parseDateValue(value);
+      if (!parsed) return value;
+      return parsed.toLocaleDateString('pt-BR');
+    }
+
+    function ReportsApp() {
+      const [envOptions, setEnvOptions] = useState([]);
+      const [selectedEnv, setSelectedEnv] = useState('');
+      const [startDate, setStartDate] = useState(() => {
+        const dt = new Date();
+        dt.setDate(dt.getDate() - 7);
+        return dt.toISOString().slice(0, 10);
+      });
+      const [endDate, setEndDate] = useState(() => new Date().toISOString().slice(0, 10));
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [report, setReport] = useState(null);
+
+      const loadOptions = useCallback(async () => {
+        setError('');
+        try {
+          const resp = await fetch('/api/reports/options');
+          if (!resp.ok) throw new Error('Não foi possível carregar a lista de ambientes.');
+          const payload = await resp.json();
+          const environments = Array.isArray(payload.environments) ? payload.environments : [];
+          setEnvOptions(environments);
+          if (environments.length && !selectedEnv) {
+            setSelectedEnv(String(environments[0].id));
+          }
+        } catch (err) {
+          console.error(err);
+          setError(err.message || 'Erro ao carregar ambientes.');
+        }
+      }, [selectedEnv]);
+
+      useEffect(() => {
+        loadOptions();
+      }, [loadOptions]);
+
+      useEffect(() => {
+        const subtitleEl = document.getElementById('reports-subtitle');
+        if (!subtitleEl) return;
+        if (loading) {
+          subtitleEl.textContent = 'Gerando relatório…';
+          return;
+        }
+        if (report && report.environment) {
+          subtitleEl.textContent = `${report.environment.name || 'Ambiente'} – período: ${formatDateInputLabel(startDate)} a ${formatDateInputLabel(endDate)}`;
+        } else {
+          subtitleEl.textContent = 'Selecione o ambiente e o período para gerar o relatório.';
+        }
+      }, [loading, report, startDate, endDate]);
+
+      const handleSubmit = useCallback(async (event) => {
+        event.preventDefault();
+        if (!selectedEnv) {
+          setError('Selecione um ambiente para consultar.');
+          return;
+        }
+        setLoading(true);
+        setError('');
+        setReport(null);
+        try {
+          const resp = await fetch('/api/reports', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              environment_id: Number(selectedEnv),
+              start_date: startDate,
+              end_date: endDate,
+            }),
+          });
+          const payload = await resp.json();
+          if (!resp.ok) {
+            throw new Error(payload && payload.detail ? payload.detail : 'Falha ao gerar relatório.');
+          }
+          const reportPayload = payload && payload.report ? payload.report : null;
+          if (!reportPayload) throw new Error('Resposta do relatório vazia.');
+          setReport(reportPayload);
+        } catch (err) {
+          console.error(err);
+          setError(err.message || 'Erro ao gerar relatório.');
+        } finally {
+          setLoading(false);
+        }
+      }, [selectedEnv, startDate, endDate]);
+
+      const envLabel = useMemo(() => {
+        if (!report || !report.environment) return '';
+        const pieces = [];
+        if (report.environment.name) pieces.push(report.environment.name);
+        if (report.environment.code) pieces.push(`(${report.environment.code})`);
+        if (report.environment.siem) pieces.push(`• ${report.environment.siem}`);
+        return pieces.join(' ');
+      }, [report]);
+
+      const summaryStatus = useMemo(() => normalizeStatus(report && report.status), [report]);
+
+      return (
+        <div className="monitor-app reports-app">
+          <div className="meta-row">
+            <div className="meta-left">
+              <div className="meta-description">
+                <span className="meta-title">Reports</span>
+                <span className="meta-subtitle">Selecione o ambiente e o período da coleta.</span>
+              </div>
+            </div>
+            {report && report.total !== undefined ? (
+              <div className="meta-right report-summary-pill">
+                <span className="metric-label">Total</span>
+                <span className="metric-value">{report.total}</span>
+              </div>
+            ) : null}
+          </div>
+
+          <form className="card-panel report-form form-grid" onSubmit={handleSubmit}>
+            <div className="form-field">
+              <label htmlFor="report-env">Ambiente</label>
+              <select
+                id="report-env"
+                value={selectedEnv}
+                onChange={(e) => setSelectedEnv(e.target.value)}
+                disabled={loading || envOptions.length === 0}
+                required
+              >
+                {envOptions.length === 0 ? (
+                  <option value="">Nenhum ambiente configurado</option>
+                ) : (
+                  envOptions.map((env) => (
+                    <option key={env.id} value={env.id}>
+                      {env.name} {env.code ? `(${env.code})` : ''} — {env.siem || 'QRadar'}
+                    </option>
+                  ))
+                )}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="report-start">Data inicial</label>
+              <input
+                id="report-start"
+                type="date"
+                className="date-input"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                max={endDate}
+                required
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="report-end">Data final</label>
+              <input
+                id="report-end"
+                type="date"
+                className="date-input"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                min={startDate}
+                required
+              />
+            </div>
+            <div className="form-field form-field--full">
+              <button className={`btn${loading ? ' is-loading' : ''}`} type="submit" disabled={loading || envOptions.length === 0}>
+                {loading ? 'Consultando…' : 'Consultar'}
+              </button>
+            </div>
+          </form>
+
+          {error ? <div className="error-message">{error}</div> : null}
+
+          {!report && !error ? (
+            <div className="empty-state">Selecione o ambiente e o período e clique em Consultar.</div>
+          ) : null}
+
+          {report ? (
+            <div className="report-results">
+              <div className="report-summary card-panel single-report">
+                <div className="report-summary-header">
+                  <div>
+                    <div className="report-env">{envLabel || 'Ambiente selecionado'}</div>
+                    <div className="report-period">Período: {formatDateInputLabel(startDate)} a {formatDateInputLabel(endDate)}</div>
+                  </div>
+                  <span className={`status-pill ${summaryStatus === 'critical' ? 'is-critical' : summaryStatus === 'warning' ? 'is-warning' : ''}`}>
+                    {STATUS_ICON[summaryStatus] || STATUS_ICON.normal} {STATUS_LABEL[summaryStatus] || 'OK'}
+                  </span>
+                </div>
+                <div className="report-total">
+                  <div className="metric-label">Total de ocorrências</div>
+                  <div className="metric-value">{report.total}</div>
+                </div>
+                {(report.results || []).length ? (
+                  <div className="report-breakdown">
+                    <h4>Detalhes</h4>
+                    <ul className="report-details">
+                      {(report.results || []).map((item, idx) => (
+                        <li key={`detail-${idx}`}>
+                          <strong>{item.label || 'Métrica'}:</strong> {item.count !== null && item.count !== undefined ? item.count : '—'} — {item.message || '—'}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    const rootEl = document.getElementById('reports-app-root');
+    if (rootEl) {
+      const root = ReactDOM.createRoot(rootEl);
+      root.render(<ReportsApp />);
+    }
+    {% endraw %}
+  </script>
+</body>
+</html>
