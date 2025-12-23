@@ -19,7 +19,9 @@
               <button type="button" class="tab-button is-active" data-tab="monitor" role="tab" aria-selected="true">Monitoramento</button>
               <button type="button" class="tab-button" data-tab="health" role="tab" aria-selected="false">Health Check</button>
               <button type="button" class="tab-button" data-tab="jira" role="tab" aria-selected="false">Jira</button>
+              {% if can_access_reports %}
               <button type="button" class="tab-button" data-tab="reports" role="tab" aria-selected="false">Reports</button>
+              {% endif %}
             </div>
           </div>
           <div class="sub" id="dashboard-subtitle">Carregando status do monitoramento…</div>
@@ -35,7 +37,9 @@
           {% if is_admin %}
           <a class="btn secondary" href="/admin/users">Admin</a>
           {% endif %}
+          {% if can_access_reports %}
           <a class="btn secondary" href="/reports">Reports</a>
+          {% endif %}
           <a class="btn secondary" href="/logout">Sair</a>
         </div>
       </div>
@@ -1975,6 +1979,41 @@
       );
     }
 
+    const CONNECTOR_STATUS_LABEL = {
+      active: 'Ativos',
+      error: 'Com erro',
+      paused: 'Pausados',
+      pending: 'Pendentes',
+      other: 'Outros',
+    };
+
+    function formatDateTime(value) {
+      if (!value) return '—';
+      const parsed = parseDateValue(value);
+      if (!parsed) return value;
+      return parsed.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+    }
+
+    function normalizeConnectorStatus(value) {
+      const text = (value || '').toString().toLowerCase();
+      if (!text) return 'other';
+      if (text === 'active' || text === 'ok' || text === 'enabled') return 'active';
+      if (text === 'error' || text === 'failed' || text === 'critical') return 'error';
+      if (text === 'paused' || text === 'stopped' || text === 'suspended') return 'paused';
+      if (text === 'pending' || text === 'new' || text === 'waiting') return 'pending';
+      return text;
+    }
+
+    function formatVolume(entry) {
+      if (!entry) return '—';
+      if (entry.last_ingested_volume_one_day) return entry.last_ingested_volume_one_day;
+      if (typeof entry.last_ingested_volume_bytes === 'number') {
+        const gb = entry.last_ingested_volume_bytes / (1024 ** 3);
+        return `${gb.toFixed(2)} GB`;
+      }
+      return formatConnectorVolume(entry);
+    }
+
     function ReportsApp() {
       const [envOptions, setEnvOptions] = useState([]);
       const [selectedEnv, setSelectedEnv] = useState('');
@@ -2067,6 +2106,41 @@
       }, [report]);
 
       const summaryStatus = useMemo(() => normalizeStatus(report && report.status), [report]);
+      const connectorResult = useMemo(
+        () => (report?.results || []).find((item) => (item.type || '').toLowerCase() === 'connectors'),
+        [report]
+      );
+      const connectorsList = useMemo(
+        () => (connectorResult && Array.isArray(connectorResult.extra?.connectors) ? connectorResult.extra.connectors : []),
+        [connectorResult]
+      );
+      const connectorBreakdown = useMemo(
+        () => (connectorResult && connectorResult.extra && connectorResult.extra.status_breakdown ? connectorResult.extra.status_breakdown : {}),
+        [connectorResult]
+      );
+      const connectorsTotal = connectorResult && connectorResult.count !== undefined && connectorResult.count !== null
+        ? connectorResult.count
+        : connectorsList.length;
+      const lastIngestion = connectorResult && connectorResult.extra ? connectorResult.extra.latest_last_ingested_at : null;
+      const ingestionGb = connectorResult && connectorResult.extra ? connectorResult.extra.ingestion_gb_one_day : null;
+      const connectorStatusCards = useMemo(() => {
+        const order = ['active', 'error', 'paused', 'pending'];
+        const cards = order.map((key) => ({
+          key,
+          label: CONNECTOR_STATUS_LABEL[key],
+          value: connectorBreakdown[key] || 0,
+        }));
+        const accounted = cards.reduce((sum, item) => sum + item.value, 0);
+        const others = connectorsTotal - accounted;
+        if (others > 0) {
+          cards.push({ key: 'other', label: CONNECTOR_STATUS_LABEL.other, value: others });
+        }
+        return cards;
+      }, [connectorBreakdown, connectorsTotal]);
+      const operationalResults = useMemo(
+        () => (report?.results || []).filter((item) => (item.type || '').toLowerCase() !== 'connectors'),
+        [report]
+      );
 
       return (
         <div className="monitor-app reports-app">
@@ -2143,7 +2217,7 @@
 
           {report ? (
             <div className="report-results">
-              <div className="report-summary card-panel">
+              <div className="report-summary card-panel executive-card">
                 <div className="report-summary-header">
                   <div>
                     <div className="report-env">{envLabel || 'Ambiente selecionado'}</div>
@@ -2153,41 +2227,130 @@
                     {STATUS_ICON[summaryStatus] || STATUS_ICON.normal} {STATUS_LABEL[summaryStatus] || 'OK'}
                   </span>
                 </div>
-                <div className="report-total">
-                  <div className="metric-label">Total de ocorrências</div>
-                  <div className="metric-value">{report.total}</div>
+                <div className="executive-metrics">
+                  <div className="metric-tile">
+                    <span className="metric-label">Total de ocorrências</span>
+                    <span className="metric-value">{report.total}</span>
+                  </div>
+                  <div className="metric-tile">
+                    <span className="metric-label">Conectores</span>
+                    <span className="metric-value">{connectorsTotal || 0}</span>
+                    <span className="metric-hint">Panorama geral do ambiente</span>
+                  </div>
+                  <div className="metric-tile">
+                    <span className="metric-label">Última ingestão</span>
+                    <span className="metric-value">{formatDateTime(lastIngestion)}</span>
+                    <span className="metric-hint">Atualizado via API</span>
+                  </div>
+                  <div className="metric-tile">
+                    <span className="metric-label">Ingestão 24h (GB)</span>
+                    <span className="metric-value">{ingestionGb !== null && ingestionGb !== undefined ? ingestionGb.toFixed(2) : '—'}</span>
+                    <span className="metric-hint">Volume somado dos conectores</span>
+                  </div>
                 </div>
               </div>
 
-              <div className="report-cards">
-                {(report.results || []).map((item, idx) => {
-                  const status = normalizeStatus(item.status || 'warning');
-                  const pillClass = status === 'critical' ? 'status-pill is-critical' : status === 'warning' ? 'status-pill is-warning' : 'status-pill';
-                  const statusIcon = STATUS_ICON[status] || STATUS_ICON.normal;
-                  const statusLabel = STATUS_LABEL[status] || 'OK';
-                  return (
-                    <div className="report-card card-panel" key={`${item.type || 'item'}-${idx}`}>
-                      <div className="report-card-header">
-                        <div>
-                          <div className="report-card-title">{item.label || 'Métrica'}</div>
-                          <div className="report-card-subtitle">{item.message || '—'}</div>
-                        </div>
-                        <span className={pillClass}>{statusIcon} {statusLabel}</span>
-                      </div>
-                      <div className="report-card-body">
-                        <div className="report-metric">
-                          <span className="report-metric-label">Quantidade</span>
-                          <span className="report-metric-value">{item.count !== null && item.count !== undefined ? item.count : '—'}</span>
-                        </div>
-                        {item.details && item.details.length ? (
-                          <ul className="report-details">
-                            {item.details.map((detail, i) => <li key={`detail-${idx}-${i}`}>{detail}</li>)}
-                          </ul>
-                        ) : null}
-                      </div>
+              <div className="report-grid">
+                <div className="card-panel insights-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">Visão executiva</p>
+                      <h3>Resumo do período</h3>
                     </div>
-                  );
-                })}
+                  </div>
+                  <div className="report-cards report-cards--insights">
+                    {operationalResults.map((item, idx) => {
+                      const status = normalizeStatus(item.status || 'warning');
+                      const pillClass = status === 'critical' ? 'status-pill is-critical' : status === 'warning' ? 'status-pill is-warning' : 'status-pill';
+                      const statusIcon = STATUS_ICON[status] || STATUS_ICON.normal;
+                      const statusLabel = STATUS_LABEL[status] || 'OK';
+                      return (
+                        <div className="report-card card-panel" key={`${item.type || 'item'}-${idx}`}>
+                          <div className="report-card-header">
+                            <div>
+                              <div className="report-card-title">{item.label || 'Métrica'}</div>
+                              <div className="report-card-subtitle">{item.message || '—'}</div>
+                            </div>
+                            <span className={pillClass}>{statusIcon} {statusLabel}</span>
+                          </div>
+                          <div className="report-card-body">
+                            <div className="report-metric">
+                              <span className="report-metric-label">Quantidade</span>
+                              <span className="report-metric-value">{item.count !== null && item.count !== undefined ? item.count : '—'}</span>
+                            </div>
+                            {item.details && item.details.length ? (
+                              <ul className="report-details">
+                                {item.details.map((detail, i) => <li key={`detail-${idx}-${i}`}>{detail}</li>)}
+                              </ul>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="card-panel connectors-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">Conectores</p>
+                      <h3>Estado operacional</h3>
+                    </div>
+                  </div>
+                  <div className="connector-status-list">
+                    {connectorStatusCards.map((card) => (
+                      <div className="connector-status-row" key={card.key}>
+                        <span className="connector-status-label">{card.label}</span>
+                        <span className="connector-status-value">{card.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="table-wrapper connectors-table">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Conector</th>
+                          <th>Status</th>
+                          <th>Última ingestão</th>
+                          <th>Volume (24h)</th>
+                          <th>Origem</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {connectorsList.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="muted">Nenhum conector retornado pela API.</td>
+                          </tr>
+                        ) : (
+                          connectorsList.map((connector, idx) => {
+                            const status = normalizeConnectorStatus(connector.status);
+                            const pillClass = status === 'error'
+                              ? 'status-pill is-critical'
+                              : status === 'paused'
+                              ? 'status-pill is-warning'
+                              : status === 'pending'
+                              ? 'status-pill is-warning'
+                              : 'status-pill';
+                            return (
+                              <tr key={`${connector.id || 'connector'}-${idx}`}>
+                                <td>
+                                  <div className="connector-name">{connector.name || 'Conector'}</div>
+                                  <div className="connector-meta">{connector.vendor || connector.product || '—'}</div>
+                                </td>
+                                <td>
+                                  <span className={pillClass}>{connector.status_raw || connector.status || '—'}</span>
+                                </td>
+                                <td>{formatDateTime(connector.last_ingested_at)}</td>
+                                <td>{formatVolume(connector)}</td>
+                                <td>{connector.type || '—'}</td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
             </div>
           ) : null}

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -27,6 +27,7 @@ from .auth import (
     WALLBOARD_COOKIE_NAME,
     wallboard_token_request_allowed,
     has_threat_hunting_access,
+    has_reports_access,
     ensure_user_schema,
     list_permissions,
     set_user_permissions,
@@ -1059,6 +1060,14 @@ def _threat_hunting_allowed(username: Optional[str]) -> bool:
     return is_admin(username) or has_threat_hunting_access(username)
 
 
+def _reports_allowed(username: Optional[str]) -> bool:
+    if not username:
+        return False
+    if username == "__wallboard__":
+        return False
+    return is_admin(username) or has_reports_access(username)
+
+
 def _require_threat_hunting_page_access(
     user: str = Depends(verify_user_required_page),
 ) -> str:
@@ -1066,6 +1075,22 @@ def _require_threat_hunting_page_access(
         raise AuthenticationError(
             "Você não tem permissão para acessar o módulo de Threat Hunting."
         )
+    return user
+
+
+def _require_reports_page_access(
+    user: str = Depends(verify_user_required_page),
+) -> str:
+    if not _reports_allowed(user):
+        raise AuthenticationError("Você não tem permissão para acessar os reports.")
+    return user
+
+
+def _require_reports_api_access(
+    user: str = Depends(verify_user_required_api),
+) -> str:
+    if not _reports_allowed(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso aos reports não autorizado.")
     return user
 
 
@@ -1087,18 +1112,20 @@ def home(request: Request, user: str = Depends(verify_user_required_page)):
         "title": "Monitoramento",
         "is_admin": is_admin(user) if user != "__wallboard__" else False,
         "can_access_threat_hunting": _threat_hunting_allowed(user),
+        "can_access_reports": _reports_allowed(user),
     }
     return templates.TemplateResponse("index.html", context)
 
 
 @app.get("/reports", response_class=HTMLResponse)
-def reports_page(request: Request, user: str = Depends(verify_user_required_page)):
+def reports_page(request: Request, user: str = Depends(_require_reports_page_access)):
     context = {
         "request": request,
         "user": user,
         "title": "Reports",
         "is_admin": is_admin(user),
         "can_access_threat_hunting": _threat_hunting_allowed(user),
+        "can_access_reports": _reports_allowed(user),
     }
     return templates.TemplateResponse("reports.html", context)
 
@@ -1146,7 +1173,7 @@ def get_monitoring(
 
 
 @app.get("/api/reports/options")
-def get_report_options(user: str = Depends(verify_user_required_api)):
+def get_report_options(user: str = Depends(_require_reports_api_access)):
     envs = _load_environments_from_db()
     options = [
         {
@@ -1161,7 +1188,7 @@ def get_report_options(user: str = Depends(verify_user_required_api)):
 
 
 @app.post("/api/reports")
-async def post_reports(request: Request, user: str = Depends(verify_user_required_api)):
+async def post_reports(request: Request, user: str = Depends(_require_reports_api_access)):
     data = await _extract_request_json(request)
     env_id = data.get("environment_id")
     start_date = data.get("start_date")
