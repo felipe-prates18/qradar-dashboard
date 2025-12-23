@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -36,6 +36,7 @@ class ReportResult:
     status: str
     message: str
     details: Sequence[str]
+    extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -45,6 +46,7 @@ class ReportResult:
             "status": self.status,
             "message": self.message,
             "details": list(self.details or []),
+            "extra": dict(self.extra or {}),
         }
 
 
@@ -99,6 +101,60 @@ def _resolve_overall_status(results: Sequence[ReportResult]) -> str:
     return worst
 
 
+def _normalize_connector_status(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "other"
+    if text in {"ok", "active", "enabled", "running", "on"}:
+        return "active"
+    if text in {"error", "failed", "failure", "critical"}:
+        return "error"
+    if text in {"paused", "suspended", "stopped"}:
+        return "paused"
+    if text in {"pending", "new", "waiting", "queued"}:
+        return "pending"
+    return text
+
+
+def _normalize_timestamp_value(value: Any) -> Tuple[Optional[datetime], Optional[str]]:
+    if value is None:
+        return None, None
+
+    if isinstance(value, (int, float)):
+        try:
+            ts = float(value)
+            if ts > 10**12:
+                ts = ts / 1000.0
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            return dt, dt.isoformat()
+        except Exception:
+            return None, str(value)
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None, None
+        try:
+            normalized = text.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(normalized)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt, dt.isoformat()
+        except Exception:
+            try:
+                ts = float(text)
+                if ts > 10**12:
+                    ts = ts / 1000.0
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                return dt, dt.isoformat()
+            except Exception:
+                return None, text
+
+    return None, None
+
+
 def _crowdstrike_connectors_summary(env: Dict[str, Any], logger: logging.Logger) -> List[ReportResult]:
     base_url = env.get("base_url") or env.get("api_base_url")
     client_id = env.get("client_id")
@@ -148,18 +204,54 @@ def _crowdstrike_connectors_summary(env: Dict[str, Any], logger: logging.Logger)
     connectors_count = len(connectors)
     status_counter: Dict[str, int] = {}
     details: List[str] = []
+    connector_entries: List[Dict[str, Any]] = []
+    latest_last_ingested: Optional[datetime] = None
     for item in connectors:
         status_raw = item.get("status") or "unknown"
-        status_norm = str(status_raw).strip().lower()
+        status_norm = _normalize_connector_status(status_raw)
         status_counter[status_norm] = status_counter.get(status_norm, 0) + 1
         name = item.get("name") or item.get("id") or "Conector"
         vendor = item.get("vendor") or item.get("product")
-        details.append(f"{name} ({vendor or '—'}) – Status: {status_raw}")
+        last_ingested_dt, last_ingested_str = _normalize_timestamp_value(item.get("last_ingested_at"))
+        if last_ingested_dt and (latest_last_ingested is None or last_ingested_dt > latest_last_ingested):
+            latest_last_ingested = last_ingested_dt
+        connector_entries.append(
+            {
+                "id": item.get("id"),
+                "name": name,
+                "vendor": vendor,
+                "product": item.get("product"),
+                "type": item.get("type"),
+                "status": status_norm,
+                "status_raw": status_raw,
+                "last_ingested_at": last_ingested_str,
+                "last_ingested_volume_one_day": item.get("last_ingested_volume_one_day"),
+                "last_ingested_volume_bytes": item.get("last_ingested_volume_bytes"),
+            }
+        )
+        detail_parts = [f"{name} ({vendor or '—'}) – Status: {status_raw}"]
+        if last_ingested_str:
+            detail_parts.append(f"Última ingestão: {last_ingested_str}")
+        details.append(" | ".join(detail_parts))
 
     status_parts = [f"{k or 'unknown'}: {v}" for k, v in status_counter.items()]
     ingestion_gb = ingestion_summary.get("total_gb_one_day_decimal")
     ingestion_msg = f"Ingestão 24h: {ingestion_gb:.2f} GB" if ingestion_gb is not None else "Ingestão 24h: —"
     status_msg = "; ".join(status_parts) if status_parts else "Sem status informado."
+    latest_ingested_str = latest_last_ingested.isoformat() if latest_last_ingested else None
+
+    status_labels = {
+        "active": "Ativos",
+        "error": "Com erro",
+        "paused": "Pausados",
+        "pending": "Pendentes",
+    }
+    breakdown_readable = "; ".join(
+        f"{status_labels.get(status, status.title())}: {count}"
+        for status, count in status_counter.items()
+    )
+    status_sentence = breakdown_readable if breakdown_readable else "Nenhum conector retornado."
+    latest_ingestion_sentence = f"Última ingestão: {latest_last_ingested.strftime('%d/%m/%Y %H:%M UTC')}" if latest_last_ingested else "Última ingestão não informada."
 
     results.append(
         ReportResult(
@@ -167,8 +259,14 @@ def _crowdstrike_connectors_summary(env: Dict[str, Any], logger: logging.Logger)
             label="Conectores",
             count=connectors_count,
             status="ok",
-            message=f"{connectors_count} conector(es). {status_msg}. {ingestion_msg}",
+            message=f"{connectors_count} conector(es). {status_sentence}. {latest_ingestion_sentence} {ingestion_msg}",
             details=details,
+            extra={
+                "status_breakdown": status_counter,
+                "connectors": connector_entries,
+                "latest_last_ingested_at": latest_ingested_str,
+                "ingestion_gb_one_day": ingestion_gb,
+            },
         )
     )
     return results
