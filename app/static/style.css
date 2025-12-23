@@ -3389,3 +3389,121 @@ pre {
   border: 1px solid rgba(38, 99, 77, 0.6);
   background: rgba(29, 157, 111, 0.12);
 }
+
+.executive-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.executive-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.metric-tile {
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(135deg, rgba(29, 157, 111, 0.12), rgba(12, 38, 32, 0.95));
+  padding: 12px 14px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 90px;
+  min-width: 200px;
+  flex: 1 1 200px;
+}
+
+.metric-tile .metric-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.metric-tile .metric-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--green-strong);
+  line-height: 1.2;
+}
+
+.metric-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.report-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+@media (max-width: 1200px) {
+  .report-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.connectors-panel,
+.insights-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.connector-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.connector-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.connector-status-row:last-child {
+  border-bottom: none;
+}
+
+.connector-status-row .connector-status-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.connector-status-row .connector-status-value {
+  font-weight: 800;
+  color: var(--green-strong);
+  font-size: 18px;
+}
+
+.connectors-table .connector-name {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.connectors-table .connector-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.report-cards.report-cards--insights {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
