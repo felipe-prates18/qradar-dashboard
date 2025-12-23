@@ -421,13 +421,12 @@
                           <th>Status</th>
                           <th>Última ingestão</th>
                           <th>Volume (24h)</th>
-                          <th>Origem</th>
                         </tr>
                       </thead>
                       <tbody>
                         {connectorsList.length === 0 ? (
                           <tr>
-                            <td colSpan={5} className="muted">Nenhum conector retornado pela API.</td>
+                            <td colSpan={4} className="muted">Nenhum conector retornado pela API.</td>
                           </tr>
                         ) : (
                           connectorsList.map((connector, idx) => {
@@ -450,7 +449,6 @@
                                 </td>
                                 <td>{formatDateTime(connector.last_ingested_at)}</td>
                                 <td>{formatVolume(connector)}</td>
-                                <td>{connector.type || '—'}</td>
                               </tr>
                             );
                           })

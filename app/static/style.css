@@ -3397,8 +3397,8 @@ pre {
 }
 
 .executive-metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 6px;
 }
@@ -3412,6 +3412,8 @@ pre {
   flex-direction: column;
   gap: 4px;
   min-height: 90px;
+  min-width: 200px;
+  flex: 1 1 200px;
 }
 
 .metric-tile .metric-label {
