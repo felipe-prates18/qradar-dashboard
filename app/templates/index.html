@@ -2251,6 +2251,45 @@
               </div>
 
               <div className="report-grid">
+                <div className="card-panel insights-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">Visão executiva</p>
+                      <h3>Resumo do período</h3>
+                    </div>
+                  </div>
+                  <div className="report-cards report-cards--insights">
+                    {operationalResults.map((item, idx) => {
+                      const status = normalizeStatus(item.status || 'warning');
+                      const pillClass = status === 'critical' ? 'status-pill is-critical' : status === 'warning' ? 'status-pill is-warning' : 'status-pill';
+                      const statusIcon = STATUS_ICON[status] || STATUS_ICON.normal;
+                      const statusLabel = STATUS_LABEL[status] || 'OK';
+                      return (
+                        <div className="report-card card-panel" key={`${item.type || 'item'}-${idx}`}>
+                          <div className="report-card-header">
+                            <div>
+                              <div className="report-card-title">{item.label || 'Métrica'}</div>
+                              <div className="report-card-subtitle">{item.message || '—'}</div>
+                            </div>
+                            <span className={pillClass}>{statusIcon} {statusLabel}</span>
+                          </div>
+                          <div className="report-card-body">
+                            <div className="report-metric">
+                              <span className="report-metric-label">Quantidade</span>
+                              <span className="report-metric-value">{item.count !== null && item.count !== undefined ? item.count : '—'}</span>
+                            </div>
+                            {item.details && item.details.length ? (
+                              <ul className="report-details">
+                                {item.details.map((detail, i) => <li key={`detail-${idx}-${i}`}>{detail}</li>)}
+                              </ul>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="card-panel connectors-panel">
                   <div className="panel-heading">
                     <div>
@@ -2258,11 +2297,11 @@
                       <h3>Estado operacional</h3>
                     </div>
                   </div>
-                  <div className="connector-status-grid">
+                  <div className="connector-status-list">
                     {connectorStatusCards.map((card) => (
-                      <div className="connector-status-card" key={card.key}>
-                        <div className="connector-status-label">{card.label}</div>
-                        <div className="connector-status-value">{card.value}</div>
+                      <div className="connector-status-row" key={card.key}>
+                        <span className="connector-status-label">{card.label}</span>
+                        <span className="connector-status-value">{card.value}</span>
                       </div>
                     ))}
                   </div>
@@ -2310,45 +2349,6 @@
                         )}
                       </tbody>
                     </table>
-                  </div>
-                </div>
-
-                <div className="card-panel insights-panel">
-                  <div className="panel-heading">
-                    <div>
-                      <p className="eyebrow">Visão executiva</p>
-                      <h3>Resumo do período</h3>
-                    </div>
-                  </div>
-                  <div className="report-cards report-cards--insights">
-                    {operationalResults.map((item, idx) => {
-                      const status = normalizeStatus(item.status || 'warning');
-                      const pillClass = status === 'critical' ? 'status-pill is-critical' : status === 'warning' ? 'status-pill is-warning' : 'status-pill';
-                      const statusIcon = STATUS_ICON[status] || STATUS_ICON.normal;
-                      const statusLabel = STATUS_LABEL[status] || 'OK';
-                      return (
-                        <div className="report-card card-panel" key={`${item.type || 'item'}-${idx}`}>
-                          <div className="report-card-header">
-                            <div>
-                              <div className="report-card-title">{item.label || 'Métrica'}</div>
-                              <div className="report-card-subtitle">{item.message || '—'}</div>
-                            </div>
-                            <span className={pillClass}>{statusIcon} {statusLabel}</span>
-                          </div>
-                          <div className="report-card-body">
-                            <div className="report-metric">
-                              <span className="report-metric-label">Quantidade</span>
-                              <span className="report-metric-value">{item.count !== null && item.count !== undefined ? item.count : '—'}</span>
-                            </div>
-                            {item.details && item.details.length ? (
-                              <ul className="report-details">
-                                {item.details.map((detail, i) => <li key={`detail-${idx}-${i}`}>{detail}</li>)}
-                              </ul>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })}
                   </div>
                 </div>
               </div>
