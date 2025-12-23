@@ -21,6 +21,8 @@ SESSION_DURATION = timedelta(hours=12)
 WALLBOARD_COOKIE_NAME = "wallboard_token"
 THREAT_HUNTING_PERMISSION_CODE = "threat_hunting"
 THREAT_HUNTING_PERMISSION_NAME = "Threat Hunting"
+REPORTS_PERMISSION_CODE = "reports"
+REPORTS_PERMISSION_NAME = "Reports"
 
 with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
@@ -89,16 +91,21 @@ def _ensure_permission_tables(cur) -> bool:
         ON user_permissions(permission_id)
         """
     )
-    cur.execute(
-        "SELECT id FROM permissions WHERE code=? LIMIT 1",
-        (THREAT_HUNTING_PERMISSION_CODE,),
+    default_permissions = (
+        (THREAT_HUNTING_PERMISSION_CODE, THREAT_HUNTING_PERMISSION_NAME),
+        (REPORTS_PERMISSION_CODE, REPORTS_PERMISSION_NAME),
     )
-    if cur.fetchone() is None:
+    for code, name in default_permissions:
         cur.execute(
-            "INSERT INTO permissions (code, name) VALUES (?, ?)",
-            (THREAT_HUNTING_PERMISSION_CODE, THREAT_HUNTING_PERMISSION_NAME),
+            "SELECT id FROM permissions WHERE code=? LIMIT 1",
+            (code,),
         )
-        changed = True
+        if cur.fetchone() is None:
+            cur.execute(
+                "INSERT INTO permissions (code, name) VALUES (?, ?)",
+                (code, name),
+            )
+            changed = True
     return changed
 
 
@@ -437,6 +444,10 @@ def is_admin(username: str) -> bool:
 def has_threat_hunting_access(username: str) -> bool:
     return has_permission(username, THREAT_HUNTING_PERMISSION_CODE)
 
+
+def has_reports_access(username: str) -> bool:
+    return has_permission(username, REPORTS_PERMISSION_CODE)
+
 @auth_router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
@@ -549,4 +560,3 @@ def change_password_submit(
     _update_password_hash(row["id"], hash_password(new_password))
     context["success"] = "Senha alterada com sucesso."
     return templates.TemplateResponse("change_password.html", context)
-
