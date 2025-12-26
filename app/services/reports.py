@@ -947,13 +947,22 @@ def _crowdstrike_use_cases_report(
             ),
         ]
 
-    rules: List[Dict[str, Any]] = []
-    if isinstance(payload, list):
-        rules = payload
-    elif isinstance(payload, dict):
-        resources = payload.get("resources") or payload.get("items") or payload.get("data")
-        if isinstance(resources, list):
-            rules = resources
+    def _extract_ngsiem_rules(raw: Any) -> List[Any]:
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, dict):
+            for key in ("resources", "items", "data", "rules"):
+                candidate = raw.get(key)
+                if isinstance(candidate, list):
+                    return candidate
+                if isinstance(candidate, dict):
+                    for nested_key in ("resources", "items", "data", "rules"):
+                        nested = candidate.get(nested_key)
+                        if isinstance(nested, list):
+                            return nested
+        return []
+
+    rules = _extract_ngsiem_rules(payload)
 
     created_details: List[str] = []
     modified_details: List[str] = []
@@ -961,6 +970,8 @@ def _crowdstrike_use_cases_report(
     modified_count = 0
 
     for rule in rules:
+        if not isinstance(rule, dict):
+            continue
         name = rule.get("name") or "Use Case"
         status_raw = rule.get("status") or "Desconhecido"
         created_dt, created_raw = _normalize_timestamp_value(rule.get("created_on"))
