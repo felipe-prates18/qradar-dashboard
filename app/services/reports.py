@@ -156,6 +156,12 @@ def _normalize_timestamp_value(value: Any) -> Tuple[Optional[datetime], Optional
     return None, None
 
 
+def _format_detail_timestamp(value: Optional[datetime], fallback: Optional[str] = None) -> Optional[str]:
+    if value is None:
+        return fallback
+    return value.astimezone(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
+
+
 def _summarize_ingestion_average(
     env: Dict[str, Any],
     start: datetime,
@@ -694,6 +700,332 @@ def _qradar_log_sources_summary(
     )
 
 
+def _qradar_use_cases_report(
+    env: Dict[str, Any], start: datetime, end: datetime, api_conf: Dict[str, Any], logger: logging.Logger
+) -> List[ReportResult]:
+    token = _resolve_qradar_token(env, api_conf)
+    if not token:
+        return [
+            ReportResult(
+                type="use_cases_created",
+                label="Use Cases criados",
+                count=None,
+                status="error",
+                message="Token da API do QRadar não configurado.",
+                details=[],
+            ),
+            ReportResult(
+                type="use_cases_modified",
+                label="Use Cases alterados",
+                count=None,
+                status="error",
+                message="Token da API do QRadar não configurado.",
+                details=[],
+            ),
+        ]
+
+    base_url = _build_qradar_base_url(env, api_conf)
+    if not base_url:
+        return [
+            ReportResult(
+                type="use_cases_created",
+                label="Use Cases criados",
+                count=None,
+                status="error",
+                message="Host/Base URL do QRadar não configurado.",
+                details=[],
+            ),
+            ReportResult(
+                type="use_cases_modified",
+                label="Use Cases alterados",
+                count=None,
+                status="error",
+                message="Host/Base URL do QRadar não configurado.",
+                details=[],
+            ),
+        ]
+
+    verify_tls = _to_bool(env.get("api_verify_tls"), _to_bool(api_conf.get("verify_tls"), False))
+    timeout = _parse_timeout(env.get("api_timeout"), api_conf.get("timeout", DEFAULT_TIMEOUT))
+    version = env.get("api_version") or api_conf.get("version")
+
+    headers = {
+        "SEC": token,
+        "Accept": "application/json",
+    }
+    if version:
+        headers["Version"] = str(version)
+
+    url = f"{base_url}/analytics/rules"
+    params = {"fields": "name,enabled,creation_date,modification_date"}
+    rules: List[Any] = []
+    page_size = 200
+    range_start = 0
+    total: Optional[int] = None
+
+    try:
+        while True:
+            range_end = range_start + page_size - 1
+            headers["Range"] = f"items={range_start}-{range_end}"
+            logger.info(
+                "Consultando use cases QRadar ambiente=%s range=%s-%s",
+                env.get("name") or env.get("host"),
+                range_start,
+                range_end,
+            )
+            response = requests.get(url, headers=headers, params=params, timeout=timeout, verify=verify_tls)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, list):
+                rules.extend(payload)
+            if total is None:
+                total = _parse_total_from_content_range(response.headers.get("Content-Range"))
+            if total is None or len(rules) >= total or not payload:
+                break
+            range_start = range_end + 1
+    except (requests.RequestException, ValueError) as exc:
+        logger.exception("Erro ao consultar use cases do QRadar ambiente=%s", env.get("name"))
+        return [
+            ReportResult(
+                type="use_cases_created",
+                label="Use Cases criados",
+                count=None,
+                status="error",
+                message=f"Falha ao consultar use cases: {exc}",
+                details=[_format_period_label(start, end)],
+            ),
+            ReportResult(
+                type="use_cases_modified",
+                label="Use Cases alterados",
+                count=None,
+                status="error",
+                message=f"Falha ao consultar use cases: {exc}",
+                details=[_format_period_label(start, end)],
+            ),
+        ]
+
+    created_details: List[str] = []
+    modified_details: List[str] = []
+    created_count = 0
+    modified_count = 0
+
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        name = rule.get("name") or "Use Case"
+        status_label = "Ativo" if _to_bool(rule.get("enabled"), False) else "Inativo"
+        created_dt, created_raw = _normalize_timestamp_value(rule.get("creation_date"))
+        modified_dt, modified_raw = _normalize_timestamp_value(rule.get("modification_date"))
+        created_label = _format_detail_timestamp(created_dt, created_raw)
+        modified_label = _format_detail_timestamp(modified_dt, modified_raw)
+
+        if created_dt and start <= created_dt <= end:
+            created_count += 1
+            detail = f"{name} ({status_label})"
+            if created_label:
+                detail = f"{detail} – Criado em {created_label}"
+            created_details.append(detail)
+
+        if modified_dt and start <= modified_dt <= end:
+            modified_count += 1
+            detail = f"{name} ({status_label})"
+            if modified_label:
+                detail = f"{detail} – Alterado em {modified_label}"
+            modified_details.append(detail)
+
+    created_status = "ok" if created_count > 0 else "warning"
+    created_message = (
+        f"{created_count} use case(s) criado(s) no período informado."
+        if created_count > 0
+        else "Nenhum use case criado no período selecionado."
+    )
+    modified_status = "ok" if modified_count > 0 else "warning"
+    modified_message = (
+        f"{modified_count} use case(s) alterado(s) no período informado."
+        if modified_count > 0
+        else "Nenhum use case alterado no período selecionado."
+    )
+
+    return [
+        ReportResult(
+            type="use_cases_created",
+            label="Use Cases criados",
+            count=created_count,
+            status=created_status,
+            message=created_message,
+            details=created_details or [_format_period_label(start, end)],
+        ),
+        ReportResult(
+            type="use_cases_modified",
+            label="Use Cases alterados",
+            count=modified_count,
+            status=modified_status,
+            message=modified_message,
+            details=modified_details or [_format_period_label(start, end)],
+        ),
+    ]
+
+
+def _fetch_crowdstrike_bearer(
+    *,
+    base_url: str,
+    client_id: str,
+    client_secret: str,
+    timeout: int,
+    session: requests.Session,
+    logger: logging.Logger,
+    env_name: Optional[str],
+) -> str:
+    token_url = f"{str(base_url).rstrip('/')}/oauth2/token"
+    token_resp = session.post(
+        token_url,
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "client_credentials",
+        },
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        timeout=timeout,
+    )
+    if token_resp.status_code not in (200, 201):
+        logger.info(
+            "Falha ao autenticar no Crowdstrike ambiente=%s status=%s body=%s",
+            env_name,
+            token_resp.status_code,
+            token_resp.text,
+        )
+        raise CrowdstrikeAuthError(f"Erro ao autenticar no Crowdstrike (HTTP {token_resp.status_code}).")
+    token_payload = token_resp.json()
+    bearer = token_payload.get("access_token")
+    if not bearer:
+        raise CrowdstrikeAuthError("access_token não retornado pelo OAuth2 do Crowdstrike")
+    return str(bearer)
+
+
+def _crowdstrike_use_cases_report(
+    *,
+    base_url: str,
+    bearer: str,
+    start: datetime,
+    end: datetime,
+    timeout: int,
+    session: requests.Session,
+    logger: logging.Logger,
+    env_name: Optional[str],
+) -> List[ReportResult]:
+    url = f"{str(base_url).rstrip('/')}/correlation-rules/queries/rules/v1"
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {bearer}",
+    }
+    try:
+        logger.info("Consultando use cases NG-SIEM ambiente=%s", env_name)
+        response = session.get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.exception("Erro ao consultar use cases do NG-SIEM ambiente=%s", env_name)
+        return [
+            ReportResult(
+                type="use_cases_created",
+                label="Use Cases criados",
+                count=None,
+                status="error",
+                message=f"Falha ao consultar use cases: {exc}",
+                details=[_format_period_label(start, end)],
+            ),
+            ReportResult(
+                type="use_cases_modified",
+                label="Use Cases alterados",
+                count=None,
+                status="error",
+                message=f"Falha ao consultar use cases: {exc}",
+                details=[_format_period_label(start, end)],
+            ),
+        ]
+
+    def _extract_ngsiem_rules(raw: Any) -> List[Any]:
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, dict):
+            for key in ("resources", "items", "data", "rules"):
+                candidate = raw.get(key)
+                if isinstance(candidate, list):
+                    return candidate
+                if isinstance(candidate, dict):
+                    for nested_key in ("resources", "items", "data", "rules"):
+                        nested = candidate.get(nested_key)
+                        if isinstance(nested, list):
+                            return nested
+        return []
+
+    rules = _extract_ngsiem_rules(payload)
+
+    created_details: List[str] = []
+    modified_details: List[str] = []
+    created_count = 0
+    modified_count = 0
+
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        name = rule.get("name") or "Use Case"
+        status_raw = rule.get("status") or "Desconhecido"
+        created_dt, created_raw = _normalize_timestamp_value(rule.get("created_on"))
+        modified_dt, modified_raw = _normalize_timestamp_value(rule.get("last_updated_on"))
+        created_label = _format_detail_timestamp(created_dt, created_raw)
+        modified_label = _format_detail_timestamp(modified_dt, modified_raw)
+
+        if created_dt and start <= created_dt <= end:
+            created_count += 1
+            detail = f"{name} (Status: {status_raw})"
+            if created_label:
+                detail = f"{detail} – Criado em {created_label}"
+            created_details.append(detail)
+
+        if modified_dt and start <= modified_dt <= end:
+            modified_count += 1
+            detail = f"{name} (Status: {status_raw})"
+            if modified_label:
+                detail = f"{detail} – Alterado em {modified_label}"
+            modified_details.append(detail)
+
+    created_status = "ok" if created_count > 0 else "warning"
+    created_message = (
+        f"{created_count} use case(s) criado(s) no período informado."
+        if created_count > 0
+        else "Nenhum use case criado no período selecionado."
+    )
+    modified_status = "ok" if modified_count > 0 else "warning"
+    modified_message = (
+        f"{modified_count} use case(s) alterado(s) no período informado."
+        if modified_count > 0
+        else "Nenhum use case alterado no período selecionado."
+    )
+
+    return [
+        ReportResult(
+            type="use_cases_created",
+            label="Use Cases criados",
+            count=created_count,
+            status=created_status,
+            message=created_message,
+            details=created_details or [_format_period_label(start, end)],
+        ),
+        ReportResult(
+            type="use_cases_modified",
+            label="Use Cases alterados",
+            count=modified_count,
+            status=modified_status,
+            message=modified_message,
+            details=modified_details or [_format_period_label(start, end)],
+        ),
+    ]
+
+
 def _crowdstrike_detections_report(
     env: Dict[str, Any], start: datetime, end: datetime, logger: logging.Logger
 ) -> List[ReportResult]:
@@ -732,29 +1064,16 @@ def _crowdstrike_detections_report(
     timeout = _parse_timeout(env.get("api_timeout"), DEFAULT_TIMEOUT)
     session = _build_session()
 
-    token_url = f"{str(base_url).rstrip('/')}/oauth2/token"
     try:
-        token_resp = session.post(
-            token_url,
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "grant_type": "client_credentials",
-            },
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
+        bearer = _fetch_crowdstrike_bearer(
+            base_url=base_url,
+            client_id=client_id,
+            client_secret=client_secret,
             timeout=timeout,
+            session=session,
+            logger=logger,
+            env_name=env.get("name"),
         )
-        if token_resp.status_code not in (200, 201):
-            raise CrowdstrikeAuthError(
-                f"Erro ao autenticar no Crowdstrike (HTTP {token_resp.status_code})."
-            )
-        token_payload = token_resp.json()
-        bearer = token_payload.get("access_token")
-        if not bearer:
-            raise CrowdstrikeAuthError("access_token não retornado pelo OAuth2 do Crowdstrike")
     except (requests.RequestException, ValueError, CrowdstrikeAuthError) as exc:
         logger.exception("Erro ao autenticar no Crowdstrike ambiente=%s", env.get("name"))
         return ReportResult(
@@ -974,6 +1293,18 @@ def _crowdstrike_detections_report(
             )
         )
 
+    use_cases_results = _crowdstrike_use_cases_report(
+        base_url=base_url,
+        bearer=bearer,
+        start=start,
+        end=end,
+        timeout=timeout,
+        session=session,
+        logger=logger,
+        env_name=env.get("name"),
+    )
+    results.extend(use_cases_results)
+
     # Conectores e ingestão
     connectors_results = _crowdstrike_connectors_summary(env, start, end, logger)
     results.extend(connectors_results)
@@ -998,6 +1329,7 @@ def build_environment_report(
             _qradar_offense_report(env, start, end, api_conf, logger),
             _qradar_log_sources_summary(env, start, end, api_conf, logger),
         ]
+        results.extend(_qradar_use_cases_report(env, start, end, api_conf, logger))
     elif normalized_siem == "crowdstrike ng-siem":
         results = _crowdstrike_detections_report(env, start, end, logger)
     else:
