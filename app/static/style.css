@@ -3091,6 +3091,16 @@ button.summary-chip:focus-visible {
   font-size: 14px;
 }
 
+.warning-message {
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(240, 173, 78, 0.55);
+  background: rgba(240, 173, 78, 0.12);
+  color: #ffe4b3;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
 .empty-state {
   padding: 24px;
   border-radius: 18px;

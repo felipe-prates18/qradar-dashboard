@@ -13,6 +13,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .crowdstrike_client import CrowdstrikeApiError, CrowdstrikeAuthError, CrowdstrikeClient
+from . import ingestion_store
 
 DEFAULT_TIMEOUT = 30
 DEFAULT_MAX_RETRIES = 3
@@ -155,7 +156,83 @@ def _normalize_timestamp_value(value: Any) -> Tuple[Optional[datetime], Optional
     return None, None
 
 
-def _crowdstrike_connectors_summary(env: Dict[str, Any], logger: logging.Logger) -> List[ReportResult]:
+def _summarize_ingestion_average(
+    env: Dict[str, Any],
+    start: datetime,
+    end: datetime,
+    unit: str,
+    logger: logging.Logger,
+) -> Dict[str, Any]:
+    env_id = env.get("id")
+    if env_id is None:
+        return {
+            "average": None,
+            "unit": unit,
+            "status": "warning",
+            "message": "Não foi possível calcular a média de ingestão (ambiente sem ID).",
+        }
+
+    try:
+        samples = ingestion_store.fetch_ingestion_samples(
+            env_id,
+            start.date(),
+            end.date(),
+            unit,
+        )
+    except Exception:
+        logger.exception("Erro ao consultar ingestão armazenada ambiente=%s", env.get("name"))
+        return {
+            "average": None,
+            "unit": unit,
+            "status": "warning",
+            "message": "Falha ao consultar a ingestão armazenada para o período.",
+        }
+
+    if not samples:
+        return {
+            "average": None,
+            "unit": unit,
+            "status": "warning",
+            "message": "Não há dados de ingestão armazenados para o período selecionado.",
+        }
+
+    values = [item["value"] for item in samples if item.get("value") is not None]
+    if not values:
+        return {
+            "average": None,
+            "unit": unit,
+            "status": "warning",
+            "message": "Não há dados de ingestão válidos para o período selecionado.",
+        }
+
+    average = sum(values) / len(values)
+    expected_days = (end.date() - start.date()).days + 1
+    status = "ok"
+    message = ""
+
+    if len(values) < expected_days:
+        start_label = samples[0]["sample_date"].strftime("%d/%m/%Y")
+        end_label = samples[-1]["sample_date"].strftime("%d/%m/%Y")
+        message = (
+            "Dados insuficientes para o período selecionado. "
+            f"Média calculada de {start_label} a {end_label}."
+        )
+        status = "warning"
+
+    return {
+        "average": average,
+        "unit": unit,
+        "status": status,
+        "message": message,
+    }
+
+
+def _crowdstrike_connectors_summary(
+    env: Dict[str, Any],
+    start: datetime,
+    end: datetime,
+    logger: logging.Logger,
+) -> List[ReportResult]:
     base_url = env.get("base_url") or env.get("api_base_url")
     client_id = env.get("client_id")
     client_secret = env.get("client_secret")
@@ -234,10 +311,13 @@ def _crowdstrike_connectors_summary(env: Dict[str, Any], logger: logging.Logger)
             detail_parts.append(f"Última ingestão: {last_ingested_str}")
         details.append(" | ".join(detail_parts))
 
-    status_parts = [f"{k or 'unknown'}: {v}" for k, v in status_counter.items()]
     ingestion_gb = ingestion_summary.get("total_gb_one_day_decimal")
-    ingestion_msg = f"Ingestão 24h: {ingestion_gb:.2f} GB" if ingestion_gb is not None else "Ingestão 24h: —"
-    status_msg = "; ".join(status_parts) if status_parts else "Sem status informado."
+    ingestion_avg = _summarize_ingestion_average(env, start, end, "GB", logger)
+    ingestion_msg = (
+        f"Ingestão 24h: {ingestion_avg['average']:.2f} GB"
+        if ingestion_avg.get("average") is not None
+        else "Ingestão 24h: —"
+    )
     latest_ingested_str = latest_last_ingested.isoformat() if latest_last_ingested else None
 
     status_labels = {
@@ -253,19 +333,34 @@ def _crowdstrike_connectors_summary(env: Dict[str, Any], logger: logging.Logger)
     status_sentence = breakdown_readable if breakdown_readable else "Nenhum conector retornado."
     latest_ingestion_sentence = f"Última ingestão: {latest_last_ingested.strftime('%d/%m/%Y %H:%M UTC')}" if latest_last_ingested else "Última ingestão não informada."
 
+    warning_messages: List[str] = []
+    if connectors_count == 0:
+        warning_messages.append("Nenhum conector retornado pela API.")
+    if ingestion_avg.get("status") == "warning" and ingestion_avg.get("message"):
+        warning_messages.append(ingestion_avg["message"])
+
+    status = "warning" if warning_messages else "ok"
+    message = (
+        " ".join(warning_messages)
+        if warning_messages
+        else f"{connectors_count} conector(es). {status_sentence}. {latest_ingestion_sentence} {ingestion_msg}"
+    )
+
     results.append(
         ReportResult(
             type="connectors",
             label="Conectores",
             count=connectors_count,
-            status="ok",
-            message=f"{connectors_count} conector(es). {status_sentence}. {latest_ingestion_sentence} {ingestion_msg}",
+            status=status,
+            message=message,
             details=details,
             extra={
                 "status_breakdown": status_counter,
                 "connectors": connector_entries,
                 "latest_last_ingested_at": latest_ingested_str,
                 "ingestion_gb_one_day": ingestion_gb,
+                "ingestion_value": ingestion_avg.get("average"),
+                "ingestion_unit": ingestion_avg.get("unit"),
             },
         )
     )
@@ -467,6 +562,135 @@ def _qradar_offense_report(
         status=status,
         message=message,
         details=[_format_period_label(start, end)],
+    )
+
+
+def _qradar_log_sources_summary(
+    env: Dict[str, Any], start: datetime, end: datetime, api_conf: Dict[str, Any], logger: logging.Logger
+) -> ReportResult:
+    token = _resolve_qradar_token(env, api_conf)
+    if not token:
+        return ReportResult(
+            type="connectors",
+            label="Log sources",
+            count=None,
+            status="error",
+            message="Token da API do QRadar não configurado.",
+            details=[],
+        )
+
+    base_url = _build_qradar_base_url(env, api_conf)
+    if not base_url:
+        return ReportResult(
+            type="connectors",
+            label="Log sources",
+            count=None,
+            status="error",
+            message="Host/Base URL do QRadar não configurado.",
+            details=[],
+        )
+
+    verify_tls = _to_bool(env.get("api_verify_tls"), _to_bool(api_conf.get("verify_tls"), False))
+    timeout = _parse_timeout(env.get("api_timeout"), api_conf.get("timeout", DEFAULT_TIMEOUT))
+    version = env.get("api_version") or api_conf.get("version")
+
+    headers = {
+        "SEC": token,
+        "Accept": "application/json",
+    }
+    if version:
+        headers["Version"] = str(version)
+
+    url = f"{base_url}/config/event_sources/log_source_management/log_sources"
+    try:
+        logger.info("Consultando log sources do QRadar ambiente=%s", env.get("name") or env.get("host"))
+        response = requests.get(url, headers=headers, timeout=timeout, verify=verify_tls)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.exception("Erro ao consultar log sources do QRadar ambiente=%s", env.get("name"))
+        return ReportResult(
+            type="connectors",
+            label="Log sources",
+            count=None,
+            status="error",
+            message=f"Falha ao consultar log sources: {exc}",
+            details=[],
+        )
+
+    log_sources = payload if isinstance(payload, list) else []
+    connectors_count = len(log_sources)
+    status_counter: Dict[str, int] = {}
+    connector_entries: List[Dict[str, Any]] = []
+    details: List[str] = []
+    latest_last_ingested: Optional[datetime] = None
+
+    for item in log_sources:
+        name = item.get("name") or item.get("description") or f"Log source {item.get('id')}"
+        description = item.get("description")
+        status_obj = item.get("status") or {}
+        status_raw = status_obj.get("status") or ("enabled" if item.get("enabled") else "disabled")
+        status_norm = _normalize_connector_status(status_raw)
+        status_counter[status_norm] = status_counter.get(status_norm, 0) + 1
+
+        last_ingested_dt, last_ingested_str = _normalize_timestamp_value(item.get("last_event_time"))
+        if last_ingested_dt and (latest_last_ingested is None or last_ingested_dt > latest_last_ingested):
+            latest_last_ingested = last_ingested_dt
+
+        average_eps = item.get("average_eps")
+        avg_eps_value = None
+        try:
+            if average_eps is not None:
+                avg_eps_value = float(average_eps)
+        except Exception:
+            avg_eps_value = None
+        if avg_eps_value == 0:
+            avg_eps_value = None
+
+        connector_entries.append(
+            {
+                "id": item.get("id"),
+                "name": name,
+                "vendor": description,
+                "product": item.get("type_id"),
+                "status": status_norm,
+                "status_raw": status_raw,
+                "last_ingested_at": last_ingested_str,
+                "last_ingested_volume_one_day": f"{avg_eps_value:.0f} EPS" if avg_eps_value is not None else None,
+            }
+        )
+
+        detail_parts = [f"{name} ({description or '—'}) – Status: {status_raw}"]
+        if last_ingested_str:
+            detail_parts.append(f"Última ingestão: {last_ingested_str}")
+        details.append(" | ".join(detail_parts))
+
+    ingestion_avg = _summarize_ingestion_average(env, start, end, "EPS", logger)
+    latest_ingested_str = latest_last_ingested.isoformat() if latest_last_ingested else None
+
+    warning_messages: List[str] = []
+    if connectors_count == 0:
+        warning_messages.append("Nenhum log source retornado pela API.")
+    if ingestion_avg.get("status") == "warning" and ingestion_avg.get("message"):
+        warning_messages.append(ingestion_avg["message"])
+
+    status = "warning" if warning_messages else "ok"
+    message = " ".join(warning_messages) if warning_messages else f"{connectors_count} log source(s) ativos."
+
+    return ReportResult(
+        type="connectors",
+        label="Log sources",
+        count=connectors_count,
+        status=status,
+        message=message,
+        details=details,
+        extra={
+            "status_breakdown": status_counter,
+            "connectors": connector_entries,
+            "latest_last_ingested_at": latest_ingested_str,
+            "ingestion_value": ingestion_avg.get("average"),
+            "ingestion_unit": ingestion_avg.get("unit"),
+        },
     )
 
 
@@ -751,7 +975,7 @@ def _crowdstrike_detections_report(
         )
 
     # Conectores e ingestão
-    connectors_results = _crowdstrike_connectors_summary(env, logger)
+    connectors_results = _crowdstrike_connectors_summary(env, start, end, logger)
     results.extend(connectors_results)
 
     return results
@@ -770,7 +994,10 @@ def build_environment_report(
     api_conf = api_conf or {}
 
     if normalized_siem == "qradar":
-        results = [_qradar_offense_report(env, start, end, api_conf, logger)]
+        results = [
+            _qradar_offense_report(env, start, end, api_conf, logger),
+            _qradar_log_sources_summary(env, start, end, api_conf, logger),
+        ]
     elif normalized_siem == "crowdstrike ng-siem":
         results = _crowdstrike_detections_report(env, start, end, logger)
     else:

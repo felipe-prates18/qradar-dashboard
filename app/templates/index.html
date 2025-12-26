@@ -2014,6 +2014,36 @@
       return formatConnectorVolume(entry);
     }
 
+    function formatIngestionMetric(value, unit) {
+      if (value === null || value === undefined) return '—';
+      const safeUnit = unit || 'GB';
+      const decimals = safeUnit.toUpperCase() === 'EPS' ? 0 : 2;
+      return `${Number(value).toFixed(decimals)} ${safeUnit}`;
+    }
+
+    function exportConnectorsCsv(connectors) {
+      if (!Array.isArray(connectors) || connectors.length === 0) return;
+      const headers = ['Conector', 'Status', 'Última ingestão', 'Volume (24h)'];
+      const rows = connectors.map((connector) => [
+        connector.name || 'Conector',
+        connector.status_raw || connector.status || '—',
+        formatDateTime(connector.last_ingested_at),
+        formatVolume(connector),
+      ]);
+      const csvLines = [headers, ...rows]
+        .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+      const blob = new Blob([`\uFEFF${csvLines}`], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `log_sources_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
     function ReportsApp() {
       const [envOptions, setEnvOptions] = useState([]);
       const [selectedEnv, setSelectedEnv] = useState('');
@@ -2122,7 +2152,9 @@
         ? connectorResult.count
         : connectorsList.length;
       const lastIngestion = connectorResult && connectorResult.extra ? connectorResult.extra.latest_last_ingested_at : null;
-      const ingestionGb = connectorResult && connectorResult.extra ? connectorResult.extra.ingestion_gb_one_day : null;
+      const ingestionValue = connectorResult && connectorResult.extra ? connectorResult.extra.ingestion_value : null;
+      const ingestionUnit = connectorResult && connectorResult.extra ? connectorResult.extra.ingestion_unit : null;
+      const ingestionWarning = connectorResult && connectorResult.status === 'warning' ? connectorResult.message : '';
       const connectorStatusCards = useMemo(() => {
         const order = ['active', 'error', 'paused', 'pending'];
         const cards = order.map((key) => ({
@@ -2244,7 +2276,7 @@
                   </div>
                   <div className="metric-tile">
                     <span className="metric-label">Ingestão 24h (GB)</span>
-                    <span className="metric-value">{ingestionGb !== null && ingestionGb !== undefined ? ingestionGb.toFixed(2) : '—'}</span>
+                    <span className="metric-value">{formatIngestionMetric(ingestionValue, ingestionUnit)}</span>
                     <span className="metric-hint">Volume somado dos conectores</span>
                   </div>
                 </div>
@@ -2296,7 +2328,18 @@
                       <p className="eyebrow">Conectores</p>
                       <h3>Estado operacional</h3>
                     </div>
+                    <button
+                      type="button"
+                      className="btn secondary small"
+                      onClick={() => exportConnectorsCsv(connectorsList)}
+                      disabled={!connectorsList.length}
+                    >
+                      Exportar CSV
+                    </button>
                   </div>
+                  {ingestionWarning ? (
+                    <div className="warning-message">{ingestionWarning}</div>
+                  ) : null}
                   <div className="connector-status-list">
                     {connectorStatusCards.map((card) => (
                       <div className="connector-status-row" key={card.key}>
