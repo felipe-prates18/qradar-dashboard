@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from .constants import QRADAR_CONSOLE_INTERNAL_LOG_SOURCE_TYPES
 from .services.crowdstrike_client import CrowdstrikeApiError, CrowdstrikeClient
+from .services import ingestion_store
 from .services.zabbix_client import ZabbixClient
 from .services.ssh_client import SSHClient
 
@@ -41,6 +42,23 @@ def _pct(value: Any) -> str:
         return f"{float(value):.1f}%" if value is not None else "—"
     except Exception:
         return "—"
+
+
+def _parse_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        text = str(value).strip().replace(",", ".")
+    except Exception:
+        return None
+    if not text or text in {"—", "-", "Erro"}:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
 
 
 def _determine_workers(total: int, default: int = 4) -> int:
@@ -197,6 +215,18 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
             )
         except Exception:
             logger.exception("Erro ao coletar EPS ambiente=%s", env_code)
+
+        eps_value = _parse_float(eps_cur)
+        if eps_value is not None:
+            try:
+                ingestion_store.record_daily_ingestion(
+                    env.get("id"),
+                    env.get("siem") or "QRadar",
+                    eps_value,
+                    "EPS",
+                )
+            except Exception:
+                logger.exception("Erro ao registrar ingestão diária ambiente=%s", env_code)
 
         return (
             idx_env,
@@ -1321,6 +1351,18 @@ def collect_crowdstrike_monitoring_data(
             "total_gib_one_day_binary": None,
         }
         summary_payload = {**summary_defaults, **ingestion_summary}
+
+        ingestion_value = summary_payload.get("total_gb_one_day_decimal")
+        if ingestion_value is not None:
+            try:
+                ingestion_store.record_daily_ingestion(
+                    env.get("id"),
+                    env.get("siem") or "Crowdstrike NG-SIEM",
+                    ingestion_value,
+                    "GB",
+                )
+            except Exception:
+                logger.exception("Erro ao registrar ingestão diária Crowdstrike ambiente=%s", env_name)
 
         return (
             idx_env,
