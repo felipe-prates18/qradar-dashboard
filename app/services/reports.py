@@ -758,7 +758,7 @@ def _qradar_use_cases_report(
 
     url = f"{base_url}/analytics/rules"
     params = {"fields": "name,enabled,creation_date,modification_date"}
-    rules: List[Dict[str, Any]] = []
+    rules: List[Any] = []
     page_size = 200
     range_start = 0
     total: Optional[int] = None
@@ -810,6 +810,8 @@ def _qradar_use_cases_report(
     modified_count = 0
 
     for rule in rules:
+        if not isinstance(rule, dict):
+            continue
         name = rule.get("name") or "Use Case"
         status_label = "Ativo" if _to_bool(rule.get("enabled"), False) else "Inativo"
         created_dt, created_raw = _normalize_timestamp_value(rule.get("creation_date"))
