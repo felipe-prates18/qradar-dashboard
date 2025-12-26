@@ -2021,6 +2021,29 @@
       return `${Number(value).toFixed(decimals)} ${safeUnit}`;
     }
 
+    function exportConnectorsCsv(connectors) {
+      if (!Array.isArray(connectors) || connectors.length === 0) return;
+      const headers = ['Conector', 'Status', 'Última ingestão', 'Volume (24h)'];
+      const rows = connectors.map((connector) => [
+        connector.name || 'Conector',
+        connector.status_raw || connector.status || '—',
+        formatDateTime(connector.last_ingested_at),
+        formatVolume(connector),
+      ]);
+      const csvLines = [headers, ...rows]
+        .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+      const blob = new Blob([`\uFEFF${csvLines}`], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `log_sources_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
     function ReportsApp() {
       const [envOptions, setEnvOptions] = useState([]);
       const [selectedEnv, setSelectedEnv] = useState('');
@@ -2305,6 +2328,14 @@
                       <p className="eyebrow">Conectores</p>
                       <h3>Estado operacional</h3>
                     </div>
+                    <button
+                      type="button"
+                      className="btn secondary small"
+                      onClick={() => exportConnectorsCsv(connectorsList)}
+                      disabled={!connectorsList.length}
+                    >
+                      Exportar CSV
+                    </button>
                   </div>
                   {ingestionWarning ? (
                     <div className="warning-message">{ingestionWarning}</div>

@@ -644,6 +644,8 @@ def _qradar_log_sources_summary(
                 avg_eps_value = float(average_eps)
         except Exception:
             avg_eps_value = None
+        if avg_eps_value == 0:
+            avg_eps_value = None
 
         connector_entries.append(
             {
