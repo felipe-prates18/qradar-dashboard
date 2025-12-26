@@ -120,6 +120,13 @@
       return '—';
     }
 
+    function formatIngestionMetric(value, unit) {
+      if (value === null || value === undefined) return '—';
+      const safeUnit = unit || 'GB';
+      const decimals = safeUnit.toUpperCase() === 'EPS' ? 0 : 2;
+      return `${Number(value).toFixed(decimals)} ${safeUnit}`;
+    }
+
     function ReportsApp() {
       const [envOptions, setEnvOptions] = useState([]);
       const [selectedEnv, setSelectedEnv] = useState('');
@@ -228,7 +235,9 @@
         ? connectorResult.count
         : connectorsList.length;
       const lastIngestion = connectorResult && connectorResult.extra ? connectorResult.extra.latest_last_ingested_at : null;
-      const ingestionGb = connectorResult && connectorResult.extra ? connectorResult.extra.ingestion_gb_one_day : null;
+      const ingestionValue = connectorResult && connectorResult.extra ? connectorResult.extra.ingestion_value : null;
+      const ingestionUnit = connectorResult && connectorResult.extra ? connectorResult.extra.ingestion_unit : null;
+      const ingestionWarning = connectorResult && connectorResult.status === 'warning' ? connectorResult.message : '';
       const connectorStatusCards = useMemo(() => {
         const order = ['active', 'error', 'paused', 'pending'];
         const cards = order.map((key) => ({
@@ -352,7 +361,7 @@
                   </div>
                   <div className="metric-tile">
                     <span className="metric-label">Ingestão 24h (GB)</span>
-                    <span className="metric-value">{ingestionGb !== null && ingestionGb !== undefined ? ingestionGb.toFixed(2) : '—'}</span>
+                    <span className="metric-value">{formatIngestionMetric(ingestionValue, ingestionUnit)}</span>
                     <span className="metric-hint">Volume somado dos conectores</span>
                   </div>
                 </div>
@@ -405,6 +414,9 @@
                       <h3>Estado operacional</h3>
                     </div>
                   </div>
+                  {ingestionWarning ? (
+                    <div className="warning-message">{ingestionWarning}</div>
+                  ) : null}
                   <div className="connector-status-list">
                     {connectorStatusCards.map((card) => (
                       <div className="connector-status-row" key={card.key}>
