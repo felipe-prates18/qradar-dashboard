@@ -282,7 +282,7 @@ class AlertManager:
                 self.logger.debug(
                     "Dados de saúde obtidos com sucesso | chaves=%s", list(health.keys())
                 )
-                self._process_health_alerts(health, now)
+                self._process_health_alerts(health, now, force_send=force_send)
             else:
                 self.logger.info("Dados de saúde vazios recebidos para alertas")
         else:
@@ -294,7 +294,7 @@ class AlertManager:
             self.logger.exception("Falha ao processar alertas do Jira")
 
         try:
-            self._process_url_alerts(now)
+            self._process_url_alerts(now, force_send=force_send)
         except Exception:
             self.logger.exception("Falha ao processar alertas de URLs monitoradas")
 
@@ -818,14 +818,16 @@ class AlertManager:
                 len(row.get("appliances") or []),
             )
 
-            self._check_usage_alerts(env_label, code, "Console", row, now)
+            self._check_usage_alerts(env_label, code, "Console", row, now, force_send=force_send)
 
             appliances = row.get("appliances") or []
             for appliance in appliances:
                 component = appliance.get("name") or appliance.get("zabbix_host") or "Appliance"
-                self._check_usage_alerts(env_label, code, component, appliance, now)
+                self._check_usage_alerts(
+                    env_label, code, component, appliance, now, force_send=force_send
+                )
 
-            self._check_eps_alert(row, env_label, code, now)
+            self._check_eps_alert(row, env_label, code, now, force_send=force_send)
             self._check_license_alert(
                 row, env_label, code, now, force_send=force_send
             )
@@ -837,6 +839,8 @@ class AlertManager:
         component: str,
         metrics_container: Dict[str, Any],
         now: datetime,
+        *,
+        force_send: bool = False,
     ) -> None:
         for metric_key in ("cpu", "memory", "storage"):
             percent = _parse_percent(metrics_container.get(metric_key))
@@ -851,7 +855,7 @@ class AlertManager:
                 if state.get("first_seen") is None:
                     state["first_seen"] = now
                     self._mark_state_dirty()
-                if not state.get("alert_sent") and now - state["first_seen"] >= timedelta(hours=1):
+                if (force_send or not state.get("alert_sent")) and now - state["first_seen"] >= timedelta(hours=1):
                     message = (
                         f"{env_label} - {component}: consumo crítico de {metric_key.upper()} "
                         f"por mais de 1 hora ({percent:.1f}%)."
@@ -894,7 +898,7 @@ class AlertManager:
 
             if metric_key == "storage":
                 if percent is not None and percent >= 90:
-                    if not self._storage_alerts.get(key):
+                    if force_send or not self._storage_alerts.get(key):
                         message = (
                             f"{env_label} - {component}: armazenamento atingiu {percent:.1f}% de uso."
                         )
@@ -934,7 +938,9 @@ class AlertManager:
                     self._resource_state[key]["alert_sent"] = False
                     self._mark_state_dirty()
 
-    def _check_eps_alert(self, row: Dict[str, Any], env_label: str, code: str, now: datetime) -> None:
+    def _check_eps_alert(
+        self, row: Dict[str, Any], env_label: str, code: str, now: datetime, *, force_send: bool = False
+    ) -> None:
         license_eps = _parse_int(row.get("license_eps"))
         eps_current = _parse_int(row.get("eps_current"))
         if not license_eps or license_eps <= 0 or eps_current is None:
@@ -954,7 +960,7 @@ class AlertManager:
                 self._mark_state_dirty()
             if now - state["first_exceeded"] >= timedelta(hours=24):
                 last_sent = state.get("last_sent_date")
-                if last_sent != now.date():
+                if force_send or last_sent != now.date():
                     message = (
                         f"{env_label}: EPS atual ({eps_current}) excede o limite de licença ({license_eps}) "
                         "há mais de 24 horas."
@@ -1114,7 +1120,9 @@ class AlertManager:
                 self._license_state.pop(code, None)
                 self._mark_state_dirty()
 
-    def _process_health_alerts(self, health: Dict[str, Any], now: datetime) -> None:
+    def _process_health_alerts(
+        self, health: Dict[str, Any], now: datetime, *, force_send: bool = False
+    ) -> None:
         rows = health.get("rows") or []
         self.logger.debug("Processando %d registros de saúde", len(rows))
 
@@ -1129,19 +1137,25 @@ class AlertManager:
                 len(row.get("connectivity") or []),
             )
 
-            self._check_postfix_alert(row, env_label, code, now)
-            self._check_offense_alert(row, env_label, code, now)
-            self._check_connectivity_alert(row, env_label, code, now)
+            self._check_postfix_alert(row, env_label, code, now, force_send=force_send)
+            self._check_offense_alert(row, env_label, code, now, force_send=force_send)
+            self._check_connectivity_alert(row, env_label, code, now, force_send=force_send)
 
     def _check_postfix_alert(
-        self, row: Dict[str, Any], env_label: str, code: str, now: datetime
+        self,
+        row: Dict[str, Any],
+        env_label: str,
+        code: str,
+        now: datetime,
+        *,
+        force_send: bool = False,
     ) -> None:
         services = row.get("services") or []
         postfix_entry = next((svc for svc in services if (svc.get("name") or "").endswith("postfix.service")), None)
         if postfix_entry:
             status = str(postfix_entry.get("status") or "").lower()
             if status != "active":
-                if not self._postfix_state.get(code):
+                if force_send or not self._postfix_state.get(code):
                     message = f"{env_label}: serviço postfix está inativo (status: {status or 'desconhecido'})."
                     facts = (
                         {"title": "Ambiente", "value": env_label},
@@ -1168,13 +1182,19 @@ class AlertManager:
                     self._mark_state_dirty()
 
     def _check_offense_alert(
-        self, row: Dict[str, Any], env_label: str, code: str, now: datetime
+        self,
+        row: Dict[str, Any],
+        env_label: str,
+        code: str,
+        now: datetime,
+        *,
+        force_send: bool = False,
     ) -> None:
         offense_check = row.get("offense_check") or {}
         status = str(offense_check.get("status") or "").lower()
         count = offense_check.get("count")
         if status != "ok" or (isinstance(count, int) and count == 0):
-            if not self._offense_state.get(code):
+            if force_send or not self._offense_state.get(code):
                 message = f"{env_label}: nenhuma ofensa registrada nas últimas 24 horas."
                 facts = (
                     {"title": "Ambiente", "value": env_label},
@@ -1202,7 +1222,13 @@ class AlertManager:
                 self._mark_state_dirty()
 
     def _check_connectivity_alert(
-        self, row: Dict[str, Any], env_label: str, code: str, now: datetime
+        self,
+        row: Dict[str, Any],
+        env_label: str,
+        code: str,
+        now: datetime,
+        *,
+        force_send: bool = False,
     ) -> None:
         connectivity = row.get("connectivity") or []
         for entry in connectivity:
@@ -1212,7 +1238,7 @@ class AlertManager:
             key = (code, target)
 
             if reachable is False or status in {"error", "critical", "failed"}:
-                if not self._connectivity_state.get(key):
+                if force_send or not self._connectivity_state.get(key):
                     message = f"{env_label}: perda de comunicação com {target}."
                     facts = (
                         {"title": "Ambiente", "value": env_label},
@@ -1241,7 +1267,7 @@ class AlertManager:
                     self._connectivity_state.pop(key, None)
                     self._mark_state_dirty()
 
-    def _process_url_alerts(self, now: datetime) -> None:
+    def _process_url_alerts(self, now: datetime, *, force_send: bool = False) -> None:
         if not self._url_checks:
             self.logger.debug("Nenhuma URL configurada para monitoramento.")
             return
@@ -1306,7 +1332,7 @@ class AlertManager:
                     url,
                     error_message or status_label or "indisponível",
                 )
-                if not self._url_state.get(key):
+                if force_send or not self._url_state.get(key):
                     message = f"{name}: falha ao acessar URL monitorada."
                     facts = (
                         {"title": "Destino", "value": name},
@@ -1414,7 +1440,7 @@ class AlertManager:
                     f"{hours_without:.1f}" if hours_without is not None else "n/d",
                     last_seen.isoformat() if last_seen else "n/a",
                 )
-                if previous != severity:
+                if force_send or previous != severity:
                     last_ticket_text = (
                         last_seen.strftime("%d/%m/%Y %H:%M:%S UTC")
                         if last_seen
