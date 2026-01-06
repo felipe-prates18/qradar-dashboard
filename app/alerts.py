@@ -72,7 +72,10 @@ def _parse_expiration(raw: Any) -> Optional[datetime]:
 
 class _AlertLoggerAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
-        return f"Alerta - {msg}", kwargs
+        text = str(msg)
+        if text.startswith("Alerta - "):
+            return text, kwargs
+        return f"Alerta - {text}", kwargs
 
 
 class AlertManager:
