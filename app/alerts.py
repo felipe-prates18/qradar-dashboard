@@ -173,6 +173,21 @@ class AlertManager:
         )
         self._state_dirty = False
 
+        self.logger.debug(
+            "Configuração de alertas carregada | webhook=%s jira_webhook=%s interval=%ss url_checks=%d jira_clients=%d",
+            "configurado" if self.webhook_url else "ausente",
+            "configurado" if self._jira_webhook_url else "ausente",
+            self.interval,
+            len(self._url_checks),
+            len(self._jira_clients),
+        )
+        self.logger.debug(
+            "Parâmetros Jira | warning_hours=%s critical_hours=%s clients=%s",
+            self._jira_warning_hours,
+            self._jira_critical_hours,
+            self._jira_clients,
+        )
+
         self._load_state()
 
     async def start(self) -> None:
@@ -233,6 +248,11 @@ class AlertManager:
 
     def _perform_checks(self, *, force_send: bool = False) -> None:
         now = datetime.now()
+        self.logger.debug(
+            "Iniciando verificações de alertas | force_send=%s timestamp=%s",
+            force_send,
+            now.isoformat(),
+        )
         try:
             monitoring = self._fetch_monitoring()
         except Exception:
@@ -247,6 +267,10 @@ class AlertManager:
 
         if monitoring is not None:
             if monitoring:
+                self.logger.debug(
+                    "Dados de monitoramento obtidos com sucesso | chaves=%s",
+                    list(monitoring.keys()),
+                )
                 self._process_monitoring_alerts(monitoring, now, force_send=force_send)
             else:
                 self.logger.info("Dados de monitoramento vazios recebidos para alertas")
@@ -255,6 +279,9 @@ class AlertManager:
 
         if health is not None:
             if health:
+                self.logger.debug(
+                    "Dados de saúde obtidos com sucesso | chaves=%s", list(health.keys())
+                )
                 self._process_health_alerts(health, now)
             else:
                 self.logger.info("Dados de saúde vazios recebidos para alertas")
@@ -273,6 +300,7 @@ class AlertManager:
 
         if monitoring is None and health is None:
             self.logger.warning("Nenhum dado disponível para avaliação de alertas")
+        self.logger.debug("Finalizando verificações de alertas | force_send=%s", force_send)
 
         self._save_state_if_dirty()
 
@@ -400,6 +428,11 @@ class AlertManager:
             return
 
         try:
+            self.logger.debug(
+                "Webhooks selecionados para envio | titulo='%s' destinos=%s",
+                title,
+                [label for label, _ in targets],
+            )
             for label, url in targets:
                 try:
                     self.logger.debug(
@@ -582,6 +615,10 @@ class AlertManager:
             return
 
         if not self._state_file.exists():
+            self.logger.debug(
+                "Arquivo de estado dos alertas não encontrado. Inicializando sem estado persistido. | caminho=%s",
+                self._state_file,
+            )
             return
 
         try:
@@ -659,6 +696,18 @@ class AlertManager:
 
         self.logger.info(
             "Estado dos alertas carregado de %s", self._state_file,
+        )
+        self.logger.debug(
+            "Resumo do estado carregado | recursos=%d storage=%d eps=%d license=%d postfix=%d offense=%d connectivity=%d url=%d jira=%d",
+            len(self._resource_state),
+            len(self._storage_alerts),
+            len(self._eps_state),
+            len(self._license_state),
+            len(self._postfix_state),
+            len(self._offense_state),
+            len(self._connectivity_state),
+            len(self._url_state),
+            len(self._jira_state),
         )
 
     def _serialize_state(self) -> Dict[str, Any]:
@@ -762,6 +811,12 @@ class AlertManager:
         for row in rows:
             env_label = self._env_label(row)
             code = row.get("code") or env_label
+            self.logger.debug(
+                "Processando monitoramento | ambiente=%s codigo=%s appliances=%d",
+                env_label,
+                code,
+                len(row.get("appliances") or []),
+            )
 
             self._check_usage_alerts(env_label, code, "Console", row, now)
 
@@ -1066,6 +1121,13 @@ class AlertManager:
         for row in rows:
             env_label = self._env_label(row)
             code = row.get("code") or env_label
+            self.logger.debug(
+                "Processando saúde | ambiente=%s codigo=%s serviços=%d conectividade=%d",
+                env_label,
+                code,
+                len(row.get("services") or []),
+                len(row.get("connectivity") or []),
+            )
 
             self._check_postfix_alert(row, env_label, code, now)
             self._check_offense_alert(row, env_label, code, now)
@@ -1181,8 +1243,10 @@ class AlertManager:
 
     def _process_url_alerts(self, now: datetime) -> None:
         if not self._url_checks:
+            self.logger.debug("Nenhuma URL configurada para monitoramento.")
             return
 
+        self.logger.debug("Iniciando verificação de %d URLs monitoradas", len(self._url_checks))
         for entry in self._url_checks:
             name = entry.get("name") or "URL monitorada"
             url = entry.get("url")
@@ -1277,6 +1341,7 @@ class AlertManager:
 
     def _process_jira_alerts(self, now: datetime, *, force_send: bool = False) -> None:
         if not self._jira_config:
+            self.logger.debug("Configuração de Jira ausente. Ignorando verificação.")
             return
 
         if not self._jira_webhook_url:
@@ -1291,6 +1356,11 @@ class AlertManager:
 
         allowed_hours = {7, 19}
         if not force_send and now.hour not in allowed_hours:
+            self.logger.debug(
+                "Hora atual (%sh) fora da janela de verificação do Jira %s.",
+                now.hour,
+                sorted(allowed_hours),
+            )
             return
 
         dispatch_key = (now.date(), now.hour)
@@ -1302,9 +1372,20 @@ class AlertManager:
             )
             return
 
+        self.logger.info(
+            "Iniciando verificação de alertas do Jira | force_send=%s clientes=%d janela=%sh/%sh",
+            force_send,
+            len(self._jira_clients),
+            self._jira_warning_hours,
+            self._jira_critical_hours,
+        )
         jira_client = JiraClient(self._jira_config, logger=self.logger)
         last_seen_map = jira_client.last_issue_by_client(
             self._jira_clients, window_hours=self._jira_critical_hours
+        )
+        self.logger.debug(
+            "Dados de últimos tickets do Jira coletados | clientes_com_resultado=%d",
+            len(last_seen_map),
         )
 
         now_utc = datetime.now(timezone.utc)
@@ -1326,6 +1407,13 @@ class AlertManager:
 
             previous = self._jira_state.get(client)
             if severity:
+                self.logger.debug(
+                    "Cliente %s sem tickets | severidade=%s horas_sem=%s ultimo=%s",
+                    client,
+                    severity,
+                    f"{hours_without:.1f}" if hours_without is not None else "n/d",
+                    last_seen.isoformat() if last_seen else "n/a",
+                )
                 if previous != severity:
                     last_ticket_text = (
                         last_seen.strftime("%d/%m/%Y %H:%M:%S UTC")
