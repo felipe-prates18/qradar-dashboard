@@ -119,11 +119,13 @@ class AlertManager:
         self._eps_state: Dict[str, Dict[str, Any]] = {}
         self._license_state: Dict[str, Dict[str, Any]] = {}
         self._license_send_time = time(hour=15, minute=0)
+        self._daily_reset_time = time(hour=6, minute=0)
         self._postfix_state: Dict[str, bool] = {}
         self._offense_state: Dict[str, bool] = {}
         self._connectivity_state: Dict[Tuple[str, str], bool] = {}
         self._jira_state: Dict[str, str] = {}
         self._jira_last_dispatch: Optional[Tuple[date, int]] = None
+        self._daily_reset_date: Optional[date] = None
         self._url_state: Dict[str, bool] = {}
         self._url_timeout = self._parse_timeout_value(alerts_conf.get("url_timeout", 30))
         self._url_retry_attempts = max(1, int(alerts_conf.get("url_retry_attempts", 2)))
@@ -256,6 +258,7 @@ class AlertManager:
             force_send,
             now.isoformat(),
         )
+        self._reset_state_if_needed(now)
         try:
             monitoring = self._fetch_monitoring()
         except Exception:
@@ -697,6 +700,10 @@ class AlertManager:
             if stored_date and isinstance(stored_hour, int):
                 self._jira_last_dispatch = (stored_date, stored_hour)
 
+        reset_date = self._parse_date_value(content.get("daily_reset_date"))
+        if reset_date:
+            self._daily_reset_date = reset_date
+
         self.logger.info(
             "Estado dos alertas carregado de %s", self._state_file,
         )
@@ -783,6 +790,9 @@ class AlertManager:
             "url_state": url_state,
             "jira_state": self._jira_state,
             "jira_last_dispatch": jira_dispatch,
+            "daily_reset_date": self._daily_reset_date.isoformat()
+            if self._daily_reset_date
+            else None,
         }
 
     def _save_state_if_dirty(self) -> None:
@@ -805,6 +815,29 @@ class AlertManager:
 
     def _mark_state_dirty(self) -> None:
         self._state_dirty = True
+
+    def _reset_state_if_needed(self, now: datetime) -> None:
+        if now.time() < self._daily_reset_time:
+            return
+        today = now.date()
+        if self._daily_reset_date == today:
+            return
+        self.logger.info(
+            "Resetando estado dos alertas para novo ciclo diário | data=%s",
+            today.isoformat(),
+        )
+        self._resource_state.clear()
+        self._storage_alerts.clear()
+        self._eps_state.clear()
+        self._license_state.clear()
+        self._postfix_state.clear()
+        self._offense_state.clear()
+        self._connectivity_state.clear()
+        self._url_state.clear()
+        self._jira_state.clear()
+        self._jira_last_dispatch = None
+        self._daily_reset_date = today
+        self._mark_state_dirty()
 
     def _process_monitoring_alerts(
         self, monitoring: Dict[str, Any], now: datetime, *, force_send: bool = False
