@@ -20,7 +20,13 @@ class JiraClient:
         if not self.base_url or not self.email or not self.api_token:
             raise ValueError("Configuração do Jira incompleta: base_url, email e api_token são obrigatórios")
 
-    def _search_issues(self, jql: str, next_page_token: Optional[str] = None) -> Dict[str, Any]:
+    def _search_issues(
+        self,
+        jql: str,
+        next_page_token: Optional[str] = None,
+        *,
+        max_results: Optional[int] = None,
+    ) -> Dict[str, Any]:
         url = f"{self.base_url}/rest/api/3/search/jql"
         auth = HTTPBasicAuth(self.email, self.api_token)
         headers = {
@@ -29,7 +35,7 @@ class JiraClient:
         }
         params: Dict[str, Any] = {
             "jql": jql,
-            "maxResults": self.max_results,
+            "maxResults": max_results if max_results is not None else self.max_results,
             "fields": f"key,summary,created,{self.customfield_clients_id}",
         }
         if next_page_token:
@@ -80,50 +86,29 @@ class JiraClient:
                 break
         return issues
 
-    def fetch_latest_issues_for_clients(
-        self, clients: Iterable[str]
-    ) -> Dict[str, Dict[str, Any]]:
-        normalized_clients = {str(c).strip() for c in clients if str(c).strip()}
-        if not normalized_clients:
-            return {}
+    def fetch_latest_issue_for_client(self, client: str) -> Optional[Dict[str, Any]]:
+        normalized = str(client).strip()
+        if not normalized:
+            return None
 
-        missing = set(normalized_clients)
-        results: Dict[str, Dict[str, Any]] = {}
-        jql = f"project = {self.project_key} ORDER BY created DESC"
-        next_token: Optional[str] = None
-
-        while missing:
-            data = self._search_issues(jql, next_page_token=next_token)
-            issues = data.get("issues", []) or []
-            if not issues:
-                break
-
-            for issue in issues:
-                fields = issue.get("fields", {}) or {}
-                created_raw = fields.get("created")
-                created_at = self._parse_created(created_raw)
-                if created_at is None:
-                    continue
-                client_field = fields.get(self.customfield_clients_id)
-                client_names = self._extract_client_names(client_field)
-
-                for client in client_names:
-                    normalized = str(client).strip()
-                    if normalized not in missing:
-                        continue
-                    results[normalized] = {
-                        "key": issue.get("key"),
-                        "summary": fields.get("summary") or "",
-                        "created_at": created_at,
-                    }
-                    missing.remove(normalized)
-                if not missing:
-                    break
-
-            next_token = data.get("nextPageToken")
-            if not next_token:
-                break
-        return results
+        jql = (
+            f'project = {self.project_key} AND "{self.customfield_clients_id}" = "{normalized}" '
+            "ORDER BY created DESC"
+        )
+        data = self._search_issues(jql, max_results=1)
+        issues = data.get("issues", []) or []
+        if not issues:
+            return None
+        issue = issues[0]
+        fields = issue.get("fields", {}) or {}
+        created_at = self._parse_created(fields.get("created"))
+        if created_at is None:
+            return None
+        return {
+            "key": issue.get("key"),
+            "summary": fields.get("summary") or "",
+            "created_at": created_at,
+        }
 
     @staticmethod
     def _extract_client_names(field_value: Any) -> List[str]:
@@ -188,14 +173,18 @@ class JiraClient:
                 if previous is None or created_at > previous:
                     last_seen[normalized] = created_at
 
-        missing_clients = [client for client, last_seen_at in last_seen.items() if last_seen_at is None]
+        missing_clients = [
+            client for client, last_seen_at in last_seen.items() if last_seen_at is None
+        ]
         if missing_clients:
             self.logger.info(
                 "Nenhum ticket recente para %d clientes. Buscando último ticket fora da janela.",
                 len(missing_clients),
             )
-            fallback_issues = self.fetch_latest_issues_for_clients(missing_clients)
-            for client, issue in fallback_issues.items():
+            for client in missing_clients:
+                issue = self.fetch_latest_issue_for_client(client)
+                if not issue:
+                    continue
                 created_at = issue.get("created_at")
                 if isinstance(created_at, datetime):
                     last_seen[client] = created_at
@@ -262,8 +251,10 @@ class JiraClient:
                 "Nenhum ticket recente para %d clientes. Buscando último ticket fora da janela.",
                 len(missing_clients),
             )
-            fallback_issues = self.fetch_latest_issues_for_clients(missing_clients)
-            for client, issue in fallback_issues.items():
+            for client in missing_clients:
+                issue = self.fetch_latest_issue_for_client(client)
+                if not issue:
+                    continue
                 summary_entry = client_summary.get(client)
                 if not summary_entry:
                     continue
