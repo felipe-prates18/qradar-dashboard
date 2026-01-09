@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -15,6 +16,7 @@ class JiraClient:
         self.project_key = config.get("project_key") or "CSIRT"
         self.customfield_clients_id = config.get("customfield_clients_id") or "customfield_10191"
         self.max_results = int(config.get("max_results", 200))
+        self.max_retries = int(config.get("max_retries", 3))
         if not self.base_url or not self.email or not self.api_token:
             raise ValueError("Configuração do Jira incompleta: base_url, email e api_token são obrigatórios")
 
@@ -32,17 +34,41 @@ class JiraClient:
         }
         if next_page_token:
             params["nextPageToken"] = next_page_token
+        attempts = max(0, self.max_retries)
 
-        response = requests.get(url, headers=headers, params=params, auth=auth, timeout=20)
-        if response.status_code != 200:
+        for attempt in range(attempts + 1):
+            response = requests.get(url, headers=headers, params=params, auth=auth, timeout=20)
+            if response.status_code == 200:
+                return response.json()
+            if response.status_code == 429 and attempt < attempts:
+                retry_after = response.headers.get("Retry-After")
+                wait_seconds = None
+                if retry_after:
+                    try:
+                        wait_seconds = float(retry_after)
+                    except ValueError:
+                        wait_seconds = None
+                if wait_seconds is None:
+                    wait_seconds = 2 ** (attempt + 1)
+                self.logger.warning(
+                    "Limite de requisições no Jira (429). Tentando novamente em %.1fs (%d/%d).",
+                    wait_seconds,
+                    attempt + 1,
+                    attempts,
+                )
+                time.sleep(wait_seconds)
+                continue
             raise RuntimeError(
                 f"Erro ao buscar issues do Jira | status={response.status_code} corpo={response.text[:1000]}"
             )
-        return response.json()
+        raise RuntimeError("Erro ao buscar issues do Jira | falha após tentativas de retry")
 
     def fetch_recent_issues(self, hours: int = 24) -> List[Dict[str, Any]]:
         window_hours = max(1, int(hours))
         jql = f"project = {self.project_key} AND created >= -{window_hours}h ORDER BY created DESC"
+        return self._fetch_issues_by_jql(jql)
+
+    def _fetch_issues_by_jql(self, jql: str) -> List[Dict[str, Any]]:
         issues: List[Dict[str, Any]] = []
         next_token: Optional[str] = None
 
@@ -53,6 +79,51 @@ class JiraClient:
             if not next_token:
                 break
         return issues
+
+    def fetch_latest_issues_for_clients(
+        self, clients: Iterable[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        normalized_clients = {str(c).strip() for c in clients if str(c).strip()}
+        if not normalized_clients:
+            return {}
+
+        missing = set(normalized_clients)
+        results: Dict[str, Dict[str, Any]] = {}
+        jql = f"project = {self.project_key} ORDER BY created DESC"
+        next_token: Optional[str] = None
+
+        while missing:
+            data = self._search_issues(jql, next_page_token=next_token)
+            issues = data.get("issues", []) or []
+            if not issues:
+                break
+
+            for issue in issues:
+                fields = issue.get("fields", {}) or {}
+                created_raw = fields.get("created")
+                created_at = self._parse_created(created_raw)
+                if created_at is None:
+                    continue
+                client_field = fields.get(self.customfield_clients_id)
+                client_names = self._extract_client_names(client_field)
+
+                for client in client_names:
+                    normalized = str(client).strip()
+                    if normalized not in missing:
+                        continue
+                    results[normalized] = {
+                        "key": issue.get("key"),
+                        "summary": fields.get("summary") or "",
+                        "created_at": created_at,
+                    }
+                    missing.remove(normalized)
+                if not missing:
+                    break
+
+            next_token = data.get("nextPageToken")
+            if not next_token:
+                break
+        return results
 
     @staticmethod
     def _extract_client_names(field_value: Any) -> List[str]:
@@ -116,6 +187,18 @@ class JiraClient:
                 previous = last_seen.get(normalized)
                 if previous is None or created_at > previous:
                     last_seen[normalized] = created_at
+
+        missing_clients = [client for client, last_seen_at in last_seen.items() if last_seen_at is None]
+        if missing_clients:
+            self.logger.info(
+                "Nenhum ticket recente para %d clientes. Buscando último ticket fora da janela.",
+                len(missing_clients),
+            )
+            fallback_issues = self.fetch_latest_issues_for_clients(missing_clients)
+            for client, issue in fallback_issues.items():
+                created_at = issue.get("created_at")
+                if isinstance(created_at, datetime):
+                    last_seen[client] = created_at
         return last_seen
 
     def summarize_clients(
@@ -168,6 +251,27 @@ class JiraClient:
                         "summary": fields.get("summary") or "",
                         "created_at": created_at,
                     }
+
+        missing_clients = [
+            client
+            for client, summary_entry in client_summary.items()
+            if summary_entry.get("issues_in_window", 0) == 0
+        ]
+        if missing_clients:
+            self.logger.info(
+                "Nenhum ticket recente para %d clientes. Buscando último ticket fora da janela.",
+                len(missing_clients),
+            )
+            fallback_issues = self.fetch_latest_issues_for_clients(missing_clients)
+            for client, issue in fallback_issues.items():
+                summary_entry = client_summary.get(client)
+                if not summary_entry:
+                    continue
+                summary_entry["last_issue"] = {
+                    "key": issue.get("key"),
+                    "summary": issue.get("summary") or "",
+                    "created_at": issue.get("created_at"),
+                }
 
         for client, summary_entry in client_summary.items():
             last_issue = summary_entry.get("last_issue")
