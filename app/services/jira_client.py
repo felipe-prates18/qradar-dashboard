@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -15,6 +16,7 @@ class JiraClient:
         self.project_key = config.get("project_key") or "CSIRT"
         self.customfield_clients_id = config.get("customfield_clients_id") or "customfield_10191"
         self.max_results = int(config.get("max_results", 200))
+        self.max_retries = int(config.get("max_retries", 3))
         if not self.base_url or not self.email or not self.api_token:
             raise ValueError("Configuração do Jira incompleta: base_url, email e api_token são obrigatórios")
 
@@ -32,13 +34,34 @@ class JiraClient:
         }
         if next_page_token:
             params["nextPageToken"] = next_page_token
+        attempts = max(0, self.max_retries)
 
-        response = requests.get(url, headers=headers, params=params, auth=auth, timeout=20)
-        if response.status_code != 200:
+        for attempt in range(attempts + 1):
+            response = requests.get(url, headers=headers, params=params, auth=auth, timeout=20)
+            if response.status_code == 200:
+                return response.json()
+            if response.status_code == 429 and attempt < attempts:
+                retry_after = response.headers.get("Retry-After")
+                wait_seconds = None
+                if retry_after:
+                    try:
+                        wait_seconds = float(retry_after)
+                    except ValueError:
+                        wait_seconds = None
+                if wait_seconds is None:
+                    wait_seconds = 2 ** (attempt + 1)
+                self.logger.warning(
+                    "Limite de requisições no Jira (429). Tentando novamente em %.1fs (%d/%d).",
+                    wait_seconds,
+                    attempt + 1,
+                    attempts,
+                )
+                time.sleep(wait_seconds)
+                continue
             raise RuntimeError(
                 f"Erro ao buscar issues do Jira | status={response.status_code} corpo={response.text[:1000]}"
             )
-        return response.json()
+        raise RuntimeError("Erro ao buscar issues do Jira | falha após tentativas de retry")
 
     def fetch_recent_issues(self, hours: int = 24) -> List[Dict[str, Any]]:
         window_hours = max(1, int(hours))
