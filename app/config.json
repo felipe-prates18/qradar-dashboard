@@ -5,7 +5,7 @@
   },
   "zabbix": {
     "url": "http://172.31.1.17/zabbix/api_jsonrpc.php",
-    "api_token": "d69493dcf9e4b4792f03a1e70480c2cc4d189c630ffe910d7795e7a42083d14d",
+    "api_token": "23a162adfb82e607622462f3996f8033b19fab7b157226a9d56eea87643a6859",
     "verify_tls": false,
     "enabled": true
   },
