@@ -1,0 +1,14 @@
+services:
+  qradar-monitoring:
+    build: .
+    container_name: qradar-monitoring
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      PYTHONPATH: /app
+    volumes:
+      - ./users.db:/app/users.db
+      - ./app/config.json:/app/app/config.json:ro
+      - ./logging.ini:/app/logging.ini:ro
+      - ./keys:/app/keys:ro
+    restart: unless-stopped
