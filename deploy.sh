@@ -2,50 +2,43 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE_NAME="${SERVICE_NAME:-qradar-monitoring}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-VENV_DIR="${VENV_DIR:-${APP_DIR}/.venv}"
-SERVICE_USER="${SERVICE_USER:-$(whoami)}"
-SERVICE_GROUP="${SERVICE_GROUP:-${SERVICE_USER}}"
 PORT="${PORT:-8000}"
+COMPOSE_FILE="${COMPOSE_FILE:-${APP_DIR}/docker-compose.yml}"
 
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "Python executable not found: $PYTHON_BIN" >&2
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is required but was not found in PATH." >&2
   exit 1
 fi
 
-echo "Installing system dependencies (requires sudo)..."
-sudo apt-get update
-sudo apt-get install -y python3-venv python3-pip
+if docker compose version >/dev/null 2>&1; then
+  DOCKER_COMPOSE=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+  DOCKER_COMPOSE=(docker-compose)
+else
+  echo "Docker Compose is required but was not found." >&2
+  exit 1
+fi
 
-echo "Creating virtual environment at $VENV_DIR..."
-"$PYTHON_BIN" -m venv "$VENV_DIR"
-"$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
+if [[ ! -f "$COMPOSE_FILE" ]]; then
+  echo "Compose file not found: $COMPOSE_FILE" >&2
+  exit 1
+fi
 
-echo "Writing systemd unit to /etc/systemd/system/${SERVICE_NAME}.service..."
-sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<SYSTEMD_UNIT
-[Unit]
-Description=QRadar Monitoring FastAPI application
-After=network.target
+if [[ ! -f "$APP_DIR/users.db" ]]; then
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "users.db not found and sqlite3 is unavailable to create one." >&2
+    exit 1
+  fi
+  echo "users.db not found; creating an empty database at $APP_DIR/users.db"
+  sqlite3 "$APP_DIR/users.db" "VACUUM;"
+fi
 
-[Service]
-Type=simple
-User=${SERVICE_USER}
-Group=${SERVICE_GROUP}
-WorkingDirectory=${APP_DIR}
-Environment="PYTHONPATH=${APP_DIR}"
-ExecStart=${VENV_DIR}/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --log-config=${APP_DIR}/logging.ini
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
+if [[ ! -f "$APP_DIR/app/config.json" ]]; then
+  echo "config.json not found at $APP_DIR/app/config.json" >&2
+  exit 1
+fi
 
-[Install]
-WantedBy=multi-user.target
-SYSTEMD_UNIT
-
-echo "Reloading systemd daemon and enabling service..."
-sudo systemctl daemon-reload
-sudo systemctl enable --now ${SERVICE_NAME}.service
+echo "Building and starting containers with Docker Compose..."
+PORT="$PORT" "${DOCKER_COMPOSE[@]}" -f "$COMPOSE_FILE" up -d --build
 
 echo "Deployment complete. The service should now be running on port ${PORT}."
