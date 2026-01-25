@@ -3,24 +3,11 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-8000}"
-COMPOSE_FILE="${COMPOSE_FILE:-${APP_DIR}/docker-compose.yml}"
+HOST="${HOST:-0.0.0.0}"
+VENV_DIR="${VENV_DIR:-${APP_DIR}/.venv}"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "Docker is required but was not found in PATH." >&2
-  exit 1
-fi
-
-if docker compose version >/dev/null 2>&1; then
-  DOCKER_COMPOSE=(docker compose)
-elif command -v docker-compose >/dev/null 2>&1; then
-  DOCKER_COMPOSE=(docker-compose)
-else
-  echo "Docker Compose is required but was not found." >&2
-  exit 1
-fi
-
-if [[ ! -f "$COMPOSE_FILE" ]]; then
-  echo "Compose file not found: $COMPOSE_FILE" >&2
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required but was not found in PATH." >&2
   exit 1
 fi
 
@@ -38,7 +25,19 @@ if [[ ! -f "$APP_DIR/app/config.json" ]]; then
   exit 1
 fi
 
-echo "Building and starting containers with Docker Compose..."
-PORT="$PORT" "${DOCKER_COMPOSE[@]}" -f "$COMPOSE_FILE" up -d --build
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "Creating virtual environment at $VENV_DIR"
+  python3 -m venv "$VENV_DIR"
+fi
 
-echo "Deployment complete. The service should now be running on port ${PORT}."
+# shellcheck source=/dev/null
+source "$VENV_DIR/bin/activate"
+
+pip install --upgrade pip >/dev/null
+pip install -r "$APP_DIR/requirements.txt"
+
+echo "Starting QRadar Monitoring App on ${HOST}:${PORT}..."
+exec uvicorn app.main:app \
+  --host "$HOST" \
+  --port "$PORT" \
+  --log-config "$APP_DIR/logging.ini"
