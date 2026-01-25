@@ -1,14 +1,18 @@
+version: "3.9"
+
 services:
-  qradar-monitoring:
-    build: .
-    container_name: qradar-monitoring
+  qradar-dashboard:
+    image: qradar-dashboard:latest
+    container_name: qradar-dashboard
+
+    # Porta 3000 do host -> 8000 do container
     ports:
-      - "${PORT:-8000}:8000"
-    environment:
-      PYTHONPATH: /app
+      - "3000:8000"
+
+    # Se quiser persistir alguns arquivos no host, monte como volumes:
     volumes:
-      - ./users.db:/app/users.db
-      - ./app/config.json:/app/app/config.json:ro
-      - ./logging.ini:/app/logging.ini:ro
-      - ./keys:/app/keys:ro
+      - /opt/qradar-dashboard/alerts_state.json:/opt/qradar-dashboard/alerts_state.json
+      - /opt/qradar-dashboard/users.db:/opt/qradar-dashboard/users.db
+      - /opt/qradar-dashboard/keys:/opt/qradar-dashboard/keys
+
     restart: unless-stopped
