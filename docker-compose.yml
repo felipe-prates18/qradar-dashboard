@@ -5,11 +5,13 @@ services:
     image: qradar-dashboard:latest
     container_name: qradar-dashboard
 
-    # Porta 3000 do host -> 8000 do container
+    # Porta 9000 do host -> 8000 da aplicação no container
+    # Porta 9001 do host -> 22 (SSH) no container
     ports:
-      - "3000:8000"
+      - "9000:8000"
+      - "9001:22"
 
-    # Se quiser persistir alguns arquivos no host, monte como volumes:
+    # Persistência de arquivos importantes
     volumes:
       - /opt/qradar-dashboard/alerts_state.json:/opt/qradar-dashboard/alerts_state.json
       - /opt/qradar-dashboard/users.db:/opt/qradar-dashboard/users.db
