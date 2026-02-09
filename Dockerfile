@@ -1,17 +1,34 @@
-FROM python:3.11-slim
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        python3-venv \
+        build-essential \
+        bash \
+        libffi-dev \
+        libssl-dev \
+        sqlite3 \
+        openssh-server \
+        vim && \
+    rm -rf /var/lib/apt/lists/*
+
+# Habilita diretório do SSH
+RUN mkdir -p /var/run/sshd
+
+# Symlink python
+RUN ln -s /usr/bin/python3 /usr/bin/python || true
+
+# Configura senha root e habilita login root + autenticação por senha
+RUN echo "root:mp1066*2G*" | chpasswd && \
+    sed -i 's/#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#\?PasswordAuthentication .*/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
 WORKDIR /opt/qradar-dashboard
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       build-essential \
-       bash \
-       libffi-dev \
-       libssl-dev \
-       sqlite3 \
-    && rm -rf /var/lib/apt/lists/*
-
-# >>> CRIAR DIRETÓRIO DE LOG AQUI <<<
 RUN mkdir -p /var/log/qradarapp
 
 COPY requirements.txt .
@@ -26,4 +43,7 @@ COPY keys ./keys
 
 ENV PYTHONPATH=/opt/qradar-dashboard
 
-CMD ["bash", "-c", "chmod +x ./deploy.sh && ./deploy.sh"]
+EXPOSE 22
+EXPOSE 8000
+
+CMD ["/bin/bash", "-c", "/usr/sbin/sshd && chmod +x /opt/qradar-dashboard/deploy.sh && exec /opt/qradar-dashboard/deploy.sh"]
