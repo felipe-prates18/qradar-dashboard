@@ -8,7 +8,7 @@ services:
     # Porta 9050 do host -> 9050 da aplicação no container
     # Porta 9001 do host -> 22 (SSH) no container
     ports:
-      - "9050:9050"
+      - "9000:9050"
       - "9001:22"
 
     # Persistência de arquivos importantes
