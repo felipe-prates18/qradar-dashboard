@@ -44,6 +44,6 @@ COPY keys ./keys
 ENV PYTHONPATH=/opt/qradar-dashboard
 
 EXPOSE 22
-EXPOSE 9050
+EXPOSE 9030
 
 CMD ["/bin/bash", "-c", "/usr/sbin/sshd && chmod +x /opt/qradar-dashboard/deploy.sh && exec /opt/qradar-dashboard/deploy.sh"]
