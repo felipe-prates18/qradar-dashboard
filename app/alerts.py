@@ -111,7 +111,7 @@ class AlertManager:
         self.dashboard_url_base = (
             alerts_conf.get("dashboard_url")
             or alerts_conf.get("dashboard_base_url")
-            or "http://172.31.1.253:9050/login"
+            or "http://172.31.1.253:9030/login"
         )
 
         self._resource_state: Dict[Tuple[str, str, str], Dict[str, Any]] = {}

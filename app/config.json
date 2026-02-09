@@ -1,7 +1,7 @@
 {
   "server": {
     "host": "127.0.0.1",
-    "port": 9050
+    "port": 9030
   },
   "zabbix": {
     "url": "http://172.31.1.17/zabbix/api_jsonrpc.php",
