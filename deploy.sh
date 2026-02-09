@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PORT="${PORT:-9050}"
+PORT="${PORT:-9030}"
 HOST="${HOST:-0.0.0.0}"
 VENV_DIR="${VENV_DIR:-${APP_DIR}/.venv}"
 
