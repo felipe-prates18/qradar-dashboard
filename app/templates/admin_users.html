@@ -561,10 +561,13 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
+          const respBody = await resp.json().catch(() => ({}));
           if (!resp.ok) {
-            const msg = (await resp.json()).detail || 'Erro ao salvar ambiente';
+            const msg = respBody.detail || `Erro ao salvar ambiente (HTTP ${resp.status})`;
+            console.error('[ENV_FORM] Falha ao salvar ambiente', { status: resp.status, payload, respBody });
             throw new Error(msg);
           }
+          console.info('[ENV_FORM] Ambiente salvo com sucesso', { method, url, payload, respBody });
           closeEditModal();
           await loadEnvironments();
         } catch (err) {

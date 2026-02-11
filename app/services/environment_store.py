@@ -194,8 +194,8 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
     )
 
     cur = con.cursor()
-    logger.info(
-        "Persistindo ambiente id=%s name=%s siem=%s license_gb_day=%s",
+    logger.warning(
+        "[ENV_STORE] Persistindo ambiente id=%s name=%s siem=%s license_gb_day=%s",
         env_id,
         payload.get("name"),
         payload.get("siem"),

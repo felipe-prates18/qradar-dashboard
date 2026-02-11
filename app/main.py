@@ -1311,8 +1311,8 @@ async def api_create_environment(
         raise HTTPException(status_code=403, detail="Admin required")
     raw_payload = await _extract_request_json(request)
     payload = _normalize_environment_payload(raw_payload)
-    logger.info(
-        "Criando ambiente payload_raw=%s payload_normalized=%s",
+    logger.warning(
+        "[ENV_ADMIN] Criando ambiente payload_raw=%s payload_normalized=%s",
         _safe_environment_payload_for_log(raw_payload),
         _safe_environment_payload_for_log(payload),
     )
@@ -1323,8 +1323,8 @@ async def api_create_environment(
         environment_store.ensure_schema(con)
         env_id = environment_store.save_environment(con, payload)
         saved = environment_store.get_environment(con, env_id)
-        logger.info(
-            "Ambiente criado id=%s name=%s license_gb_day=%s",
+        logger.warning(
+            "[ENV_ADMIN] Ambiente criado id=%s name=%s license_gb_day=%s",
             env_id,
             payload.get("name"),
             (saved or {}).get("license_gb_day"),
@@ -1353,8 +1353,8 @@ async def api_update_environment(
             raise HTTPException(status_code=404, detail="Ambiente não encontrado")
         if payload.get("license_gb_day") is None:
             payload["license_gb_day"] = existing.get("license_gb_day")
-        logger.info(
-            "Atualizando ambiente id=%s payload_raw=%s payload_normalized=%s existing_license=%s",
+        logger.warning(
+            "[ENV_ADMIN] Atualizando ambiente id=%s payload_raw=%s payload_normalized=%s existing_license=%s",
             env_id,
             _safe_environment_payload_for_log(raw_payload),
             _safe_environment_payload_for_log(payload),
@@ -1362,8 +1362,8 @@ async def api_update_environment(
         )
         environment_store.save_environment(con, payload, env_id=env_id)
         updated = environment_store.get_environment(con, env_id)
-        logger.info(
-            "Ambiente atualizado id=%s name=%s license_gb_day=%s",
+        logger.warning(
+            "[ENV_ADMIN] Ambiente atualizado id=%s name=%s license_gb_day=%s",
             env_id,
             payload.get("name"),
             (updated or {}).get("license_gb_day"),
