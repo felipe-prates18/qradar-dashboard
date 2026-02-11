@@ -439,6 +439,20 @@ def _get_monitoring_payload(selected_siem: Optional[str] = None) -> Dict[str, An
     return payload
 
 
+def _get_alert_monitoring_payload() -> Dict[str, Any]:
+    qradar_payload = _get_monitoring_payload(DEFAULT_QRADAR_SIEM)
+    crowdstrike_payload = _get_monitoring_payload(CROWDSTRIKE_SIEM)
+
+    rows: List[Dict[str, Any]] = []
+    rows.extend(qradar_payload.get("rows") or [])
+    rows.extend(crowdstrike_payload.get("rows") or [])
+
+    return {
+        "updated_at": datetime.now().strftime("%d/%m/%Y, %H:%M:%S"),
+        "rows": rows,
+    }
+
+
 def _get_health_payload() -> Dict[str, Any]:
     payload = _health_cache.get_cached()
     if payload is None:
@@ -642,7 +656,7 @@ _cache_refresh_stop: Optional[asyncio.Event] = None
 
 alert_manager = AlertManager(
     _config_with_envs(siem_filter=DEFAULT_QRADAR_SIEM),
-    fetch_monitoring=_get_monitoring_payload,
+    fetch_monitoring=_get_alert_monitoring_payload,
     fetch_health=_get_health_payload,
     logger=logger,
 )
