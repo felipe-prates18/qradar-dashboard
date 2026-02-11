@@ -946,12 +946,28 @@ def _parse_json_array(raw: Any) -> list:
     return []
 
 
+def _safe_environment_payload_for_log(payload: Dict[str, Any]) -> Dict[str, Any]:
+    safe = dict(payload or {})
+    for key in ("api_token", "client_secret", "ssh_key"):
+        if safe.get(key):
+            safe[key] = "***"
+    return safe
+
+
 def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     def _normalize_text(value: Any) -> Optional[str]:
         if value is None:
             return None
         text = str(value).strip()
         return text or None
+
+    license_gb_day = _normalize_text(
+        data.get("license_gb_day")
+        or data.get("licenseGbDay")
+        or data.get("license_gb_dia")
+    )
+    if license_gb_day:
+        license_gb_day = license_gb_day.replace(",", ".")
 
     payload = {
         "name": _normalize_text(data.get("name")) or "",
@@ -968,6 +984,7 @@ def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "api_token": _normalize_text(data.get("api_token")),
         "client_id": _normalize_text(data.get("client_id")),
         "client_secret": _normalize_text(data.get("client_secret")),
+        "license_gb_day": license_gb_day,
         "base_url": _normalize_text(data.get("base_url")),
     }
     return payload
@@ -1280,12 +1297,24 @@ async def api_create_environment(
         raise HTTPException(status_code=403, detail="Admin required")
     raw_payload = await _extract_request_json(request)
     payload = _normalize_environment_payload(raw_payload)
+    logger.info(
+        "Criando ambiente payload_raw=%s payload_normalized=%s",
+        _safe_environment_payload_for_log(raw_payload),
+        _safe_environment_payload_for_log(payload),
+    )
     if not payload.get("name"):
         raise HTTPException(status_code=400, detail="Nome do ambiente é obrigatório")
     con = _con()
     try:
         environment_store.ensure_schema(con)
         env_id = environment_store.save_environment(con, payload)
+        saved = environment_store.get_environment(con, env_id)
+        logger.info(
+            "Ambiente criado id=%s name=%s license_gb_day=%s",
+            env_id,
+            payload.get("name"),
+            (saved or {}).get("license_gb_day"),
+        )
     finally:
         con.close()
     _invalidate_environment_caches()
@@ -1308,7 +1337,23 @@ async def api_update_environment(
         existing = environment_store.get_environment(con, env_id)
         if not existing:
             raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+        if payload.get("license_gb_day") is None:
+            payload["license_gb_day"] = existing.get("license_gb_day")
+        logger.info(
+            "Atualizando ambiente id=%s payload_raw=%s payload_normalized=%s existing_license=%s",
+            env_id,
+            _safe_environment_payload_for_log(raw_payload),
+            _safe_environment_payload_for_log(payload),
+            existing.get("license_gb_day"),
+        )
         environment_store.save_environment(con, payload, env_id=env_id)
+        updated = environment_store.get_environment(con, env_id)
+        logger.info(
+            "Ambiente atualizado id=%s name=%s license_gb_day=%s",
+            env_id,
+            payload.get("name"),
+            (updated or {}).get("license_gb_day"),
+        )
     finally:
         con.close()
     _invalidate_environment_caches()
