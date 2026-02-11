@@ -397,13 +397,15 @@
       }
       environments.forEach((env) => {
         const tr = document.createElement('tr');
+        const row = env && typeof env === 'object' ? env : {};
+        const siemLabel = row.siem || '';
         tr.innerHTML = `
-          <td>${env.name || ''}</td>
-          <td>${env.codigo || ''}</td>
-          <td>${env.host || ''}</td>
-          <td>${resolvedEnv.siem || ''}</td>
+          <td>${row.name || ''}</td>
+          <td>${row.codigo || ''}</td>
+          <td>${row.host || ''}</td>
+          <td>${siemLabel}</td>
           <td class="actions-col">
-            <button class="btn small tertiary" type="button" data-edit-env="${env.id}">Editar</button>
+            <button class="btn small tertiary" type="button" data-edit-env="${row.id || ''}">Editar</button>
           </td>
         `;
         tableBody.appendChild(tr);
@@ -460,32 +462,32 @@
       if (!form || !formTitle) return;
       form.reset();
       form.dataset.envId = env && env.id ? env.id : '';
-      const resolvedEnv = env?.id ? (await fetchEnvironmentById(env.id)) || env : env;
-      formTitle.textContent = resolvedEnv ? 'Editar ambiente' : 'Adicionar ambiente';
-      form.querySelector('[name="name"]').value = resolvedEnv?.name || '';
-      form.querySelector('[name="codigo"]').value = resolvedEnv?.codigo || '';
+      const envData = env?.id ? (await fetchEnvironmentById(env.id)) || env : env;
+      formTitle.textContent = envData ? 'Editar ambiente' : 'Adicionar ambiente';
+      form.querySelector('[name="name"]').value = envData?.name || '';
+      form.querySelector('[name="codigo"]').value = envData?.codigo || '';
       if (siemSelect) {
-        const existingOption = Array.from(siemSelect.options).find((opt) => opt.value === (resolvedEnv?.siem || ''));
-        if (!existingOption && resolvedEnv?.siem) {
-          const customOption = new Option(resolvedEnv.siem, resolvedEnv.siem, true, true);
+        const existingOption = Array.from(siemSelect.options).find((opt) => opt.value === (envData?.siem || ''));
+        if (!existingOption && envData?.siem) {
+          const customOption = new Option(envData.siem, envData.siem, true, true);
           siemSelect.add(customOption, siemSelect.firstChild);
         }
-        siemSelect.value = resolvedEnv?.siem || '';
+        siemSelect.value = envData?.siem || '';
         toggleSiemSections(siemSelect.value);
       }
-      form.querySelector('[name="api_token"]').value = resolvedEnv?.api_token || '';
-      form.querySelector('[name="host"]').value = resolvedEnv?.host || '';
-      form.querySelector('[name="collector"]').value = resolvedEnv?.collector || '';
-      form.querySelector('[name="ssh_user"]').value = resolvedEnv?.ssh_user || '';
-      form.querySelector('[name="ssh_key"]').value = resolvedEnv?.ssh_key || '';
-      form.querySelector('[name="jmx_port"]').value = resolvedEnv?.jmx_port || '';
-      form.querySelector('[name="jmx_bean"]').value = resolvedEnv?.jmx_bean || '';
-      form.querySelector('[name="appliances"]').value = formatJson(resolvedEnv?.appliances);
-      form.querySelector('[name="connectivity_targets"]').value = formatJson(resolvedEnv?.connectivity_targets);
-      form.querySelector('[name="client_id"]').value = resolvedEnv?.client_id || '';
-      form.querySelector('[name="client_secret"]').value = resolvedEnv?.client_secret || '';
-      form.querySelector('[name="license_gb_day"]').value = resolvedEnv?.license_gb_day ?? '';
-      form.querySelector('[name="base_url"]').value = resolvedEnv?.base_url || '';
+      form.querySelector('[name="api_token"]').value = envData?.api_token || '';
+      form.querySelector('[name="host"]').value = envData?.host || '';
+      form.querySelector('[name="collector"]').value = envData?.collector || '';
+      form.querySelector('[name="ssh_user"]').value = envData?.ssh_user || '';
+      form.querySelector('[name="ssh_key"]').value = envData?.ssh_key || '';
+      form.querySelector('[name="jmx_port"]').value = envData?.jmx_port || '';
+      form.querySelector('[name="jmx_bean"]').value = envData?.jmx_bean || '';
+      form.querySelector('[name="appliances"]').value = formatJson(envData?.appliances);
+      form.querySelector('[name="connectivity_targets"]').value = formatJson(envData?.connectivity_targets);
+      form.querySelector('[name="client_id"]').value = envData?.client_id || '';
+      form.querySelector('[name="client_secret"]').value = envData?.client_secret || '';
+      form.querySelector('[name="license_gb_day"]').value = envData?.license_gb_day ?? '';
+      form.querySelector('[name="base_url"]').value = envData?.base_url || '';
       if (formError) formError.hidden = true;
       toggleModal(editModal, true);
     };
