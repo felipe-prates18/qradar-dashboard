@@ -321,6 +321,10 @@
           <label for="env-client-secret">Client Secret</label>
           <input type="text" id="env-client-secret" name="client_secret" placeholder="Client Secret do SIEM">
         </div>
+        <div class="form-field" data-siem-section="other" hidden>
+          <label for="env-license-gb-day">Licença em GB/dia</label>
+          <input type="text" id="env-license-gb-day" name="license_gb_day" inputmode="decimal" placeholder="Ex: 150">
+        </div>
         <div class="form-field form-field--full" data-siem-section="other" hidden>
           <label for="env-base-url">Base URL</label>
           <input type="text" id="env-base-url" name="base_url" placeholder="https://example.siem.local">
@@ -417,8 +421,9 @@
     const toggleSiemSections = (siem) => {
       const value = (siem || '').toString().trim().toLowerCase();
       const isQRadar = value === 'qradar';
+      const isCrowdstrike = value === 'crowdstrike ng-siem';
       updateVisibility(qradarSections, isQRadar);
-      updateVisibility(otherSections, !isQRadar && Boolean(value));
+      updateVisibility(otherSections, isCrowdstrike);
     };
 
     const loadEnvironments = async () => {
@@ -467,6 +472,7 @@
       form.querySelector('[name="connectivity_targets"]').value = formatJson(env?.connectivity_targets);
       form.querySelector('[name="client_id"]').value = env?.client_id || '';
       form.querySelector('[name="client_secret"]').value = env?.client_secret || '';
+      form.querySelector('[name="license_gb_day"]').value = env?.license_gb_day || '';
       form.querySelector('[name="base_url"]').value = env?.base_url || '';
       if (formError) formError.hidden = true;
       toggleModal(editModal, true);
@@ -523,6 +529,7 @@
           connectivity_targets: parseJsonField(form.querySelector('[name="connectivity_targets"]').value),
           client_id: form.querySelector('[name="client_id"]').value,
           client_secret: form.querySelector('[name="client_secret"]').value,
+          license_gb_day: form.querySelector('[name="license_gb_day"]').value,
           base_url: form.querySelector('[name="base_url"]').value,
         };
 
