@@ -321,6 +321,10 @@
           <label for="env-client-secret">Client Secret</label>
           <input type="text" id="env-client-secret" name="client_secret" placeholder="Client Secret do SIEM">
         </div>
+        <div class="form-field" data-siem-section="other" hidden>
+          <label for="env-license-gb-day">Licença em GB/dia</label>
+          <input type="text" id="env-license-gb-day" name="license_gb_day" inputmode="decimal" placeholder="Ex: 150">
+        </div>
         <div class="form-field form-field--full" data-siem-section="other" hidden>
           <label for="env-base-url">Base URL</label>
           <input type="text" id="env-base-url" name="base_url" placeholder="https://example.siem.local">
@@ -393,13 +397,15 @@
       }
       environments.forEach((env) => {
         const tr = document.createElement('tr');
+        const row = env && typeof env === 'object' ? env : {};
+        const siemLabel = row.siem || '';
         tr.innerHTML = `
-          <td>${env.name || ''}</td>
-          <td>${env.codigo || ''}</td>
-          <td>${env.host || ''}</td>
-          <td>${env.siem || ''}</td>
+          <td>${row.name || ''}</td>
+          <td>${row.codigo || ''}</td>
+          <td>${row.host || ''}</td>
+          <td>${siemLabel}</td>
           <td class="actions-col">
-            <button class="btn small tertiary" type="button" data-edit-env="${env.id}">Editar</button>
+            <button class="btn small tertiary" type="button" data-edit-env="${row.id || ''}">Editar</button>
           </td>
         `;
         tableBody.appendChild(tr);
@@ -417,8 +423,9 @@
     const toggleSiemSections = (siem) => {
       const value = (siem || '').toString().trim().toLowerCase();
       const isQRadar = value === 'qradar';
+      const isCrowdstrike = value === 'crowdstrike ng-siem';
       updateVisibility(qradarSections, isQRadar);
-      updateVisibility(otherSections, !isQRadar && Boolean(value));
+      updateVisibility(otherSections, isCrowdstrike);
     };
 
     const loadEnvironments = async () => {
@@ -440,34 +447,47 @@
       loadEnvironments();
     };
 
-    const openEditModal = (env) => {
+    const fetchEnvironmentById = async (envId) => {
+      if (!envId) return null;
+      try {
+        const resp = await fetch(`/api/admin/environments/${envId}`);
+        if (!resp.ok) return null;
+        return await resp.json();
+      } catch (err) {
+        return null;
+      }
+    };
+
+    const openEditModal = async (env) => {
       if (!form || !formTitle) return;
       form.reset();
       form.dataset.envId = env && env.id ? env.id : '';
-      formTitle.textContent = env ? 'Editar ambiente' : 'Adicionar ambiente';
-      form.querySelector('[name="name"]').value = env?.name || '';
-      form.querySelector('[name="codigo"]').value = env?.codigo || '';
+      const envData = env?.id ? (await fetchEnvironmentById(env.id)) || env : env;
+      formTitle.textContent = envData ? 'Editar ambiente' : 'Adicionar ambiente';
+      form.querySelector('[name="name"]').value = envData?.name || '';
+      form.querySelector('[name="codigo"]').value = envData?.codigo || '';
       if (siemSelect) {
-        const existingOption = Array.from(siemSelect.options).find((opt) => opt.value === (env?.siem || ''));
-        if (!existingOption && env?.siem) {
-          const customOption = new Option(env.siem, env.siem, true, true);
+        const existingOption = Array.from(siemSelect.options).find((opt) => opt.value === (envData?.siem || ''));
+        if (!existingOption && envData?.siem) {
+          const customOption = new Option(envData.siem, envData.siem, true, true);
           siemSelect.add(customOption, siemSelect.firstChild);
         }
-        siemSelect.value = env?.siem || '';
+        siemSelect.value = envData?.siem || '';
         toggleSiemSections(siemSelect.value);
       }
-      form.querySelector('[name="api_token"]').value = env?.api_token || '';
-      form.querySelector('[name="host"]').value = env?.host || '';
-      form.querySelector('[name="collector"]').value = env?.collector || '';
-      form.querySelector('[name="ssh_user"]').value = env?.ssh_user || '';
-      form.querySelector('[name="ssh_key"]').value = env?.ssh_key || '';
-      form.querySelector('[name="jmx_port"]').value = env?.jmx_port || '';
-      form.querySelector('[name="jmx_bean"]').value = env?.jmx_bean || '';
-      form.querySelector('[name="appliances"]').value = formatJson(env?.appliances);
-      form.querySelector('[name="connectivity_targets"]').value = formatJson(env?.connectivity_targets);
-      form.querySelector('[name="client_id"]').value = env?.client_id || '';
-      form.querySelector('[name="client_secret"]').value = env?.client_secret || '';
-      form.querySelector('[name="base_url"]').value = env?.base_url || '';
+      form.querySelector('[name="api_token"]').value = envData?.api_token || '';
+      form.querySelector('[name="host"]').value = envData?.host || '';
+      form.querySelector('[name="collector"]').value = envData?.collector || '';
+      form.querySelector('[name="ssh_user"]').value = envData?.ssh_user || '';
+      form.querySelector('[name="ssh_key"]').value = envData?.ssh_key || '';
+      form.querySelector('[name="jmx_port"]').value = envData?.jmx_port || '';
+      form.querySelector('[name="jmx_bean"]').value = envData?.jmx_bean || '';
+      form.querySelector('[name="appliances"]').value = formatJson(envData?.appliances);
+      form.querySelector('[name="connectivity_targets"]').value = formatJson(envData?.connectivity_targets);
+      form.querySelector('[name="client_id"]').value = envData?.client_id || '';
+      form.querySelector('[name="client_secret"]').value = envData?.client_secret || '';
+      form.querySelector('[name="license_gb_day"]').value = envData?.license_gb_day ?? '';
+      form.querySelector('[name="base_url"]').value = envData?.base_url || '';
       if (formError) formError.hidden = true;
       toggleModal(editModal, true);
     };
@@ -479,7 +499,9 @@
     }
 
     if (openFormBtn) {
-      openFormBtn.addEventListener('click', () => openEditModal(null));
+      openFormBtn.addEventListener('click', () => {
+        void openEditModal(null);
+      });
     }
 
     closeListButtons.forEach((btn) => {
@@ -490,7 +512,7 @@
       listModal.addEventListener('click', (event) => {
         if (event.target.dataset.editEnv) {
           const env = findEnvironment(event.target.dataset.editEnv);
-          openEditModal(env);
+          void openEditModal(env);
         }
       });
     }
@@ -523,6 +545,7 @@
           connectivity_targets: parseJsonField(form.querySelector('[name="connectivity_targets"]').value),
           client_id: form.querySelector('[name="client_id"]').value,
           client_secret: form.querySelector('[name="client_secret"]').value,
+          license_gb_day: form.querySelector('[name="license_gb_day"]').value,
           base_url: form.querySelector('[name="base_url"]').value,
         };
 
