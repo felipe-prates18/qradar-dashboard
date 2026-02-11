@@ -115,3 +115,66 @@ def fetch_ingestion_samples(
         return samples
     finally:
         con.close()
+
+
+def fetch_daily_ingestion(
+    env_id: Optional[int],
+    sample_date: date,
+    unit: str,
+) -> Optional[Dict[str, Any]]:
+    if env_id is None:
+        return None
+
+    con = open_connection()
+    try:
+        ensure_schema(con)
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT sample_date, value, created_at
+            FROM ingestion_daily
+            WHERE environment_id=? AND unit=? AND sample_date=?
+            LIMIT 1
+            """,
+            (env_id, unit, sample_date.isoformat()),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "sample_date": row["sample_date"],
+            "value": float(row["value"]),
+            "created_at": row["created_at"],
+        }
+    finally:
+        con.close()
+
+
+def fetch_latest_ingestion(env_id: Optional[int], unit: str) -> Optional[Dict[str, Any]]:
+    if env_id is None:
+        return None
+
+    con = open_connection()
+    try:
+        ensure_schema(con)
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT sample_date, value, created_at
+            FROM ingestion_daily
+            WHERE environment_id=? AND unit=?
+            ORDER BY sample_date DESC, created_at DESC
+            LIMIT 1
+            """,
+            (env_id, unit),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "sample_date": row["sample_date"],
+            "value": float(row["value"]),
+            "created_at": row["created_at"],
+        }
+    finally:
+        con.close()

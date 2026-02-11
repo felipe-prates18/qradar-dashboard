@@ -347,9 +347,13 @@
           (environment.ingestion && environment.ingestion.total_gib_one_day_binary)
       );
       const totalIngested = totalGbDecimal ?? totalGibBinary;
+      const licenseGbDay = parseNumberValue(environment.license_gb_day);
 
       if (connectorsCount === 0) return 'warning';
       if (totalIngested !== null && totalIngested <= 0) return 'warning';
+      if (licenseGbDay !== null && licenseGbDay > 0 && totalGbDecimal !== null && totalGbDecimal > licenseGbDay) {
+        return 'critical';
+      }
       return 'normal';
     }
 
@@ -870,17 +874,32 @@
       const totalGibBinary = parseNumberValue(
         environment.total_gib_one_day_binary ?? (environment.ingestion && environment.ingestion.total_gib_one_day_binary)
       );
+      const licenseGbDay = parseNumberValue(environment.license_gb_day);
       const ingestionDisplay =
         totalGbDecimal !== null
           ? `${totalGbDecimal.toFixed(2)} GB`
           : totalGibBinary !== null
           ? `${totalGibBinary.toFixed(2)} GiB`
           : '—';
+      const licenseDisplay =
+        licenseGbDay !== null && licenseGbDay > 0
+          ? `${licenseGbDay.toFixed(2)} GB/dia`
+          : '—';
+      const overLicense =
+        licenseGbDay !== null && licenseGbDay > 0 && totalGbDecimal !== null && totalGbDecimal > licenseGbDay;
       const ingestionStatus =
         totalGbDecimal === null && totalGibBinary === null
           ? 'warning'
           : (totalGbDecimal ?? totalGibBinary) <= 0
           ? 'warning'
+          : overLicense
+          ? 'critical'
+          : 'normal';
+      const licenseStatus =
+        licenseGbDay === null || licenseGbDay <= 0
+          ? 'warning'
+          : overLicense
+          ? 'critical'
           : 'normal';
       const connectorsStatus =
         connectorsCount === null
@@ -920,6 +939,14 @@
           percent: null,
           status: connectorsStatus,
           tooltip: missingCount ? `Sem métrica em ${missingCount} conector(es)` : ''
+        },
+        {
+          key: 'license',
+          label: 'Licença',
+          value: licenseDisplay,
+          percent: null,
+          status: licenseStatus,
+          tooltip: overLicense ? 'Ingestão 24h acima do contratado' : ''
         }
       ];
 
@@ -953,6 +980,9 @@
               </div>
               <div className="env-meta-line">
                 <span className="env-meta">Janela: {environment.ingestion_window_hours ?? 24}h</span>
+                {environment.ingestion_sample_date ? (
+                  <span className="env-meta">Coleta diária: {environment.ingestion_sample_date}</span>
+                ) : null}
                 {environment.base_url ? (
                   <span className="env-meta">Base URL: {environment.base_url}</span>
                 ) : null}
@@ -1610,7 +1640,7 @@
           <div className="monitor-tags">
             {isCrowdstrikeSelected ? (
               <>
-                <span className="badge">Ingestão 24h via Crowdstrike API</span>
+                <span className="badge">Ingestão 24h (snapshot diário às 00h)</span>
                 <span className="badge warn">Conectores atualizados a cada coleta</span>
               </>
             ) : (
