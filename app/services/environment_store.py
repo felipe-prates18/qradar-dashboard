@@ -97,6 +97,8 @@ def _serialize_row(row) -> Dict[str, Any]:
         "client_secret": row["client_secret"],
         "base_url": row["base_url"],
         "license_gb_day": row["license_gb_day"],
+        "licenseGbDay": row["license_gb_day"],
+        "license_gb_dia": row["license_gb_day"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

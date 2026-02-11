@@ -967,7 +967,11 @@ def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         text = str(value).strip()
         return text or None
 
-    license_gb_day = _normalize_text(data.get("license_gb_day"))
+    license_gb_day = _normalize_text(
+        data.get("license_gb_day")
+        or data.get("licenseGbDay")
+        or data.get("license_gb_dia")
+    )
     if license_gb_day:
         license_gb_day = license_gb_day.replace(",", ".")
 

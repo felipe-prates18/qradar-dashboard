@@ -486,7 +486,8 @@
       form.querySelector('[name="connectivity_targets"]').value = formatJson(envData?.connectivity_targets);
       form.querySelector('[name="client_id"]').value = envData?.client_id || '';
       form.querySelector('[name="client_secret"]').value = envData?.client_secret || '';
-      form.querySelector('[name="license_gb_day"]').value = envData?.license_gb_day ?? '';
+      const licenseValue = envData?.license_gb_day ?? envData?.licenseGbDay ?? envData?.license_gb_dia ?? '';
+      form.querySelector('[name="license_gb_day"]').value = String(licenseValue || '');
       form.querySelector('[name="base_url"]').value = envData?.base_url || '';
       if (formError) formError.hidden = true;
       toggleModal(editModal, true);
