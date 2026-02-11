@@ -274,7 +274,6 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
                     "license_breakdown": [],
                     "appliances": [],
                 }
-
     data: List[Dict[str, Any]] = [row for row in rows if row is not None]
 
     return {
@@ -1308,6 +1307,9 @@ def collect_crowdstrike_monitoring_data(
     def _collect_env(idx_env: int, env: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         env_name = env.get("name") or env.get("host") or env.get("codigo") or "Ambiente"
         env_code = env.get("codigo") or env.get("code")
+        env_id = env.get("id")
+        now_local = datetime.now()
+        today_local = now_local.date()
         errors: List[str] = []
         connectors: List[Dict[str, Any]] = []
         ingestion_summary: Dict[str, Any] = {}
@@ -1352,17 +1354,57 @@ def collect_crowdstrike_monitoring_data(
         }
         summary_payload = {**summary_defaults, **ingestion_summary}
 
-        ingestion_value = summary_payload.get("total_gb_one_day_decimal")
-        if ingestion_value is not None:
+        live_ingestion_value = summary_payload.get("total_gb_one_day_decimal")
+        daily_sample: Optional[Dict[str, Any]] = None
+
+        try:
+            daily_sample = ingestion_store.fetch_daily_ingestion(env_id, today_local, "GB")
+        except Exception:
+            logger.exception(
+                "Erro ao consultar ingestão diária Crowdstrike ambiente=%s data=%s",
+                env_name,
+                today_local.isoformat(),
+            )
+
+        should_capture_today = (
+            daily_sample is None
+            and live_ingestion_value is not None
+            and now_local.hour == 0
+        )
+        if should_capture_today:
             try:
                 ingestion_store.record_daily_ingestion(
-                    env.get("id"),
+                    env_id,
                     env.get("siem") or "Crowdstrike NG-SIEM",
-                    ingestion_value,
+                    live_ingestion_value,
                     "GB",
+                    sample_date=today_local,
+                )
+                daily_sample = ingestion_store.fetch_daily_ingestion(env_id, today_local, "GB")
+                logger.info(
+                    "Ingestão Crowdstrike 24h capturada para o dia %s ambiente=%s",
+                    today_local.isoformat(),
+                    env_name,
                 )
             except Exception:
                 logger.exception("Erro ao registrar ingestão diária Crowdstrike ambiente=%s", env_name)
+
+        if daily_sample is None:
+            try:
+                daily_sample = ingestion_store.fetch_latest_ingestion(env_id, "GB")
+            except Exception:
+                logger.exception(
+                    "Erro ao consultar última ingestão diária Crowdstrike ambiente=%s",
+                    env_name,
+                )
+
+        sample_value = daily_sample.get("value") if daily_sample else None
+        sample_date = daily_sample.get("sample_date") if daily_sample else None
+
+        if sample_value is not None:
+            summary_payload["total_gb_one_day_decimal"] = sample_value
+            summary_payload["total_bytes_one_day"] = int(sample_value * (1000 ** 3))
+            summary_payload["total_gib_one_day_binary"] = sample_value * ((1000 / 1024) ** 3)
 
         return (
             idx_env,
@@ -1370,9 +1412,12 @@ def collect_crowdstrike_monitoring_data(
                 "name": env_name,
                 "code": env_code,
                 "siem": env.get("siem") or "Crowdstrike NG-SIEM",
+                "license_gb_day": env.get("license_gb_day"),
                 "connectors": connectors,
                 **summary_payload,
                 "ingestion_window_hours": 24,
+                "ingestion_sample_date": sample_date,
+                "ingestion_collected_at": daily_sample.get("created_at") if daily_sample else None,
                 "errors": errors,
                 "base_url": env.get("base_url"),
             },
@@ -1395,6 +1440,7 @@ def collect_crowdstrike_monitoring_data(
                     "name": env.get("name") or env.get("codigo") or env.get("host"),
                     "code": env.get("codigo") or env.get("code"),
                     "siem": env.get("siem") or "Crowdstrike NG-SIEM",
+                    "license_gb_day": env.get("license_gb_day"),
                     "connectors": [],
                     "connectors_count": 0,
                     "missing_or_invalid_count": None,
