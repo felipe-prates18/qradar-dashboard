@@ -51,6 +51,19 @@ def _parse_int(value: Any) -> Optional[int]:
         return None
 
 
+def _parse_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            value = value.strip().replace(",", ".")
+            if not value:
+                return None
+        return float(value)
+    except Exception:
+        return None
+
+
 def _parse_expiration(raw: Any) -> Optional[datetime]:
     if raw is None:
         return None
@@ -118,6 +131,7 @@ class AlertManager:
         self._storage_alerts: Dict[Tuple[str, str, str], bool] = {}
         self._eps_state: Dict[str, Dict[str, Any]] = {}
         self._license_state: Dict[str, Dict[str, Any]] = {}
+        self._crowdstrike_license_state: Dict[str, Dict[str, Any]] = {}
         self._license_send_time = time(hour=15, minute=0)
         self._daily_reset_time = time(hour=6, minute=0)
         self._postfix_state: Dict[str, bool] = {}
@@ -668,6 +682,12 @@ class AlertManager:
                 "critical_sent_date": self._parse_date_value(values.get("critical_sent_date")),
             }
 
+        crowdstrike_license_state = content.get("crowdstrike_license_state") or {}
+        for code, values in crowdstrike_license_state.items():
+            self._crowdstrike_license_state[code] = {
+                "last_sent_date": self._parse_date_value(values.get("last_sent_date")),
+            }
+
         postfix_state = content.get("postfix_state") or {}
         self._postfix_state.update({key: bool(value) for key, value in postfix_state.items()})
 
@@ -708,11 +728,12 @@ class AlertManager:
             "Estado dos alertas carregado de %s", self._state_file,
         )
         self.logger.debug(
-            "Resumo do estado carregado | recursos=%d storage=%d eps=%d license=%d postfix=%d offense=%d connectivity=%d url=%d jira=%d",
+            "Resumo do estado carregado | recursos=%d storage=%d eps=%d license=%d crowdstrike_license=%d postfix=%d offense=%d connectivity=%d url=%d jira=%d",
             len(self._resource_state),
             len(self._storage_alerts),
             len(self._eps_state),
             len(self._license_state),
+            len(self._crowdstrike_license_state),
             len(self._postfix_state),
             len(self._offense_state),
             len(self._connectivity_state),
@@ -764,6 +785,13 @@ class AlertManager:
             for code, values in self._license_state.items()
         }
 
+        crowdstrike_license_state = {
+            code: {
+                "last_sent_date": _serialize_date(values.get("last_sent_date")),
+            }
+            for code, values in self._crowdstrike_license_state.items()
+        }
+
         connectivity_state = [
             {"code": code, "target": target}
             for (code, target) in self._connectivity_state.keys()
@@ -784,6 +812,7 @@ class AlertManager:
             "storage_alerts": storage_state,
             "eps_state": eps_state,
             "license_state": license_state,
+            "crowdstrike_license_state": crowdstrike_license_state,
             "postfix_state": self._postfix_state,
             "offense_state": self._offense_state,
             "connectivity_state": connectivity_state,
@@ -830,6 +859,7 @@ class AlertManager:
         self._storage_alerts.clear()
         self._eps_state.clear()
         self._license_state.clear()
+        self._crowdstrike_license_state.clear()
         self._postfix_state.clear()
         self._offense_state.clear()
         self._connectivity_state.clear()
@@ -865,6 +895,9 @@ class AlertManager:
 
             self._check_eps_alert(row, env_label, code, now, force_send=force_send)
             self._check_license_alert(
+                row, env_label, code, now, force_send=force_send
+            )
+            self._check_crowdstrike_ingestion_license_alert(
                 row, env_label, code, now, force_send=force_send
             )
 
@@ -1154,6 +1187,57 @@ class AlertManager:
         else:
             if code in self._license_state:
                 self._license_state.pop(code, None)
+                self._mark_state_dirty()
+
+    def _check_crowdstrike_ingestion_license_alert(
+        self, row: Dict[str, Any], env_label: str, code: str, now: datetime, *, force_send: bool
+    ) -> None:
+        siem_value = str(row.get("siem") or "").strip().lower()
+        if "crowdstrike" not in siem_value:
+            self._crowdstrike_license_state.pop(code, None)
+            return
+
+        license_gb = _parse_float(row.get("license_gb_day"))
+        ingestion_gb = _parse_float(row.get("total_gb_one_day_decimal"))
+
+        if not license_gb or license_gb <= 0 or ingestion_gb is None:
+            self._crowdstrike_license_state.pop(code, None)
+            return
+
+        if code not in self._crowdstrike_license_state:
+            self._crowdstrike_license_state[code] = {"last_sent_date": None}
+            self._mark_state_dirty()
+
+        state = self._crowdstrike_license_state[code]
+
+        if ingestion_gb > license_gb:
+            last_sent = state.get("last_sent_date")
+            if force_send or last_sent != now.date():
+                message = (
+                    f"{env_label}: ingestão de 24h ({ingestion_gb:.2f} GB) excede a licença "
+                    f"contratada ({license_gb:.2f} GB/dia)."
+                )
+                facts = (
+                    {"title": "Ambiente", "value": env_label},
+                    {"title": "Ingestão 24h", "value": f"{ingestion_gb:.2f} GB"},
+                    {"title": "Licença", "value": f"{license_gb:.2f} GB/dia"},
+                    {"title": "Excedente", "value": f"{(ingestion_gb - license_gb):.2f} GB"},
+                )
+                self._send_alert(
+                    "Ingestão acima da licença (Crowdstrike)",
+                    message,
+                    severity="critical",
+                    summary=env_label,
+                    facts=facts,
+                    category="crowdstrike_license",
+                    detected_at=now,
+                    env_code=code,
+                )
+                state["last_sent_date"] = now.date()
+                self._mark_state_dirty()
+        else:
+            if code in self._crowdstrike_license_state:
+                self._crowdstrike_license_state.pop(code, None)
                 self._mark_state_dirty()
 
     def _process_health_alerts(
