@@ -953,6 +953,14 @@ def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         text = str(value).strip()
         return text or None
 
+    license_gb_day = _normalize_text(
+        data.get("license_gb_day")
+        or data.get("licenseGbDay")
+        or data.get("license_gb_dia")
+    )
+    if license_gb_day:
+        license_gb_day = license_gb_day.replace(",", ".")
+
     payload = {
         "name": _normalize_text(data.get("name")) or "",
         "host": _normalize_text(data.get("host")),
@@ -968,6 +976,7 @@ def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "api_token": _normalize_text(data.get("api_token")),
         "client_id": _normalize_text(data.get("client_id")),
         "client_secret": _normalize_text(data.get("client_secret")),
+        "license_gb_day": license_gb_day,
         "base_url": _normalize_text(data.get("base_url")),
     }
     return payload
