@@ -1,8 +1,12 @@
 import json
+import logging
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from sqlite3 import Connection
+
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_schema(con: Connection) -> None:
@@ -190,6 +194,13 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
     )
 
     cur = con.cursor()
+    logger.info(
+        "Persistindo ambiente id=%s name=%s siem=%s license_gb_day=%s",
+        env_id,
+        payload.get("name"),
+        payload.get("siem"),
+        payload.get("license_gb_day"),
+    )
     if env_id:
         cur.execute(
             """
