@@ -1,8 +1,12 @@
 import json
+import logging
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from sqlite3 import Connection
+
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_schema(con: Connection) -> None:
@@ -26,6 +30,7 @@ def ensure_schema(con: Connection) -> None:
             client_id TEXT,
             client_secret TEXT,
             base_url TEXT,
+            license_gb_day TEXT,
             created_at TEXT,
             updated_at TEXT
         )
@@ -53,6 +58,8 @@ def ensure_schema(con: Connection) -> None:
         cur.execute("ALTER TABLE environments ADD COLUMN client_secret TEXT")
     if "base_url" not in existing_columns:
         cur.execute("ALTER TABLE environments ADD COLUMN base_url TEXT")
+    if "license_gb_day" not in existing_columns:
+        cur.execute("ALTER TABLE environments ADD COLUMN license_gb_day TEXT")
     con.commit()
 
 
@@ -93,6 +100,9 @@ def _serialize_row(row) -> Dict[str, Any]:
         "client_id": row["client_id"],
         "client_secret": row["client_secret"],
         "base_url": row["base_url"],
+        "license_gb_day": row["license_gb_day"],
+        "licenseGbDay": row["license_gb_day"],
+        "license_gb_dia": row["license_gb_day"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -105,7 +115,7 @@ def list_environments(con: Connection) -> List[Dict[str, Any]]:
         """
         SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
                appliances_json, connectivity_targets_json, codigo, siem,
-               api_token, client_id, client_secret, base_url, created_at, updated_at
+               api_token, client_id, client_secret, base_url, license_gb_day, created_at, updated_at
         FROM environments
         ORDER BY name COLLATE NOCASE
         """
@@ -120,7 +130,7 @@ def get_environment(con: Connection, env_id: int) -> Optional[Dict[str, Any]]:
         """
         SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
                appliances_json, connectivity_targets_json, codigo, siem,
-               api_token, client_id, client_secret, base_url, created_at, updated_at
+               api_token, client_id, client_secret, base_url, license_gb_day, created_at, updated_at
         FROM environments
         WHERE id=?
         LIMIT 1
@@ -140,7 +150,7 @@ def get_environment_by_name(con: Connection, name: str) -> Optional[Dict[str, An
         """
         SELECT id, name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
                appliances_json, connectivity_targets_json, codigo, siem,
-               api_token, client_id, client_secret, base_url, created_at, updated_at
+               api_token, client_id, client_secret, base_url, license_gb_day, created_at, updated_at
         FROM environments
         WHERE name=?
         LIMIT 1
@@ -180,16 +190,24 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
         payload.get("client_id"),
         payload.get("client_secret"),
         payload.get("base_url"),
+        payload.get("license_gb_day"),
     )
 
     cur = con.cursor()
+    logger.warning(
+        "[ENV_STORE] Persistindo ambiente id=%s name=%s siem=%s license_gb_day=%s",
+        env_id,
+        payload.get("name"),
+        payload.get("siem"),
+        payload.get("license_gb_day"),
+    )
     if env_id:
         cur.execute(
             """
             UPDATE environments
             SET name=?, host=?, collector=?, ssh_user=?, ssh_key=?, jmx_port=?,
                 jmx_bean=?, appliances_json=?, connectivity_targets_json=?,
-                codigo=?, siem=?, api_token=?, client_id=?, client_secret=?, base_url=?, updated_at=?
+                codigo=?, siem=?, api_token=?, client_id=?, client_secret=?, base_url=?, license_gb_day=?, updated_at=?
             WHERE id=?
             """,
             (*fields, now, env_id),
@@ -202,8 +220,8 @@ def save_environment(con: Connection, payload: Dict[str, Any], env_id: Optional[
         INSERT INTO environments (
             name, host, collector, ssh_user, ssh_key, jmx_port, jmx_bean,
             appliances_json, connectivity_targets_json, codigo, siem,
-            api_token, client_id, client_secret, base_url, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            api_token, client_id, client_secret, base_url, license_gb_day, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (*fields, now, now),
     )
