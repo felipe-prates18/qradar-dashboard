@@ -968,6 +968,7 @@ def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         "api_token": _normalize_text(data.get("api_token")),
         "client_id": _normalize_text(data.get("client_id")),
         "client_secret": _normalize_text(data.get("client_secret")),
+        "license_gb_day": _normalize_text(data.get("license_gb_day")),
         "base_url": _normalize_text(data.get("base_url")),
     }
     return payload
