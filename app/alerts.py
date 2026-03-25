@@ -113,6 +113,8 @@ class AlertManager:
         )
         self.license_webhook_url = alerts_conf.get("license_teams_webhook_url")
         self._state_file = Path(alerts_conf.get("state_file") or "alerts_state.json")
+        self._suppress_file = Path(alerts_conf.get("suppress_file") or "suppress_alerts.json")
+        self._suppress: Dict[str, Any] = {}
         self.interval = int(alerts_conf.get("interval_seconds", 600))
         if self.interval < 60:
             self.interval = 60
@@ -211,6 +213,7 @@ class AlertManager:
         )
 
         self._load_state()
+        self._load_suppress()
 
     async def start(self) -> None:
         if self._task is not None:
@@ -284,6 +287,7 @@ class AlertManager:
             now.isoformat(),
         )
         self._reset_state_if_needed(now)
+        self._load_suppress()
         try:
             monitoring = self._fetch_monitoring()
         except Exception:
@@ -640,6 +644,39 @@ class AlertManager:
         if isinstance(raw, (int, float)):
             return f"{raw}s"
         return str(raw)
+
+    def _load_suppress(self) -> None:
+        if not self._suppress_file.exists():
+            self.logger.debug(
+                "Arquivo de supressão não encontrado. Supressões desativadas. | caminho=%s",
+                self._suppress_file,
+            )
+            return
+        try:
+            content = json.loads(self._suppress_file.read_text(encoding="utf-8"))
+            self._suppress = content.get("suppress") or {}
+            self.logger.info(
+                "Supressões de alertas carregadas | ambientes=%d | caminho=%s",
+                len(self._suppress),
+                self._suppress_file,
+            )
+        except Exception:
+            self.logger.exception(
+                "Não foi possível carregar o arquivo de supressão (%s)", self._suppress_file
+            )
+
+    def _is_suppressed(self, code: str, alert_type: str, target: Optional[str] = None) -> bool:
+        env_suppress = self._suppress.get(code)
+        if not env_suppress:
+            return False
+        value = env_suppress.get(alert_type)
+        if value is None:
+            return False
+        if alert_type == "connectivity":
+            if not isinstance(value, list):
+                value = [value]
+            return target in value
+        return bool(value)
 
     def _load_state(self) -> None:
         if not self._state_file:
@@ -1354,6 +1391,9 @@ class AlertManager:
         *,
         force_send: bool = False,
     ) -> None:
+        if self._is_suppressed(code, "postfix"):
+            self.logger.debug("Alerta de postfix suprimido para %s", env_label)
+            return
         services = row.get("services") or []
         postfix_entry = next((svc for svc in services if (svc.get("name") or "").endswith("postfix.service")), None)
         if postfix_entry:
@@ -1400,6 +1440,9 @@ class AlertManager:
         *,
         force_send: bool = False,
     ) -> None:
+        if self._is_suppressed(code, "offense"):
+            self.logger.debug("Alerta de offense suprimido para %s", env_label)
+            return
         offense_check = row.get("offense_check") or {}
         status = str(offense_check.get("status") or "").lower()
         count = offense_check.get("count")
@@ -1454,6 +1497,11 @@ class AlertManager:
             key = (code, target)
 
             if reachable is False or status in {"error", "critical", "failed"}:
+                if self._is_suppressed(code, "connectivity", target):
+                    self.logger.debug(
+                        "Alerta de conectividade suprimido para %s -> %s", env_label, target
+                    )
+                    continue
                 confirmation_key = f"connectivity:{code}:{target}"
                 if force_send:
                     confirmed = not self._connectivity_state.get(key)
