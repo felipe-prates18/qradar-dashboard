@@ -141,6 +141,9 @@ class AlertManager:
         self._jira_last_dispatch: Optional[Tuple[date, int]] = None
         self._daily_reset_date: Optional[date] = None
         self._url_state: Dict[str, bool] = {}
+        self._pending_confirmations: Dict[str, Dict[str, Any]] = {}
+        self._confirmation_required_checks: int = int(alerts_conf.get("confirmation_checks", 5))
+        self._confirmation_interval: int = max(10, int(alerts_conf.get("confirmation_interval_seconds", 30)))
         self._url_timeout = self._parse_timeout_value(alerts_conf.get("url_timeout", 30))
         self._url_retry_attempts = max(1, int(alerts_conf.get("url_retry_attempts", 2)))
         self._url_retry_backoff = max(0, int(alerts_conf.get("url_retry_backoff", 2)))
@@ -244,7 +247,15 @@ class AlertManager:
                 self.logger.exception("Erro ao executar verificações de alertas")
             elapsed = loop.time() - started_at
             self.logger.debug("Ciclo de verificação concluído em %.2fs", elapsed)
-            wait_seconds = max(0, self.interval - elapsed)
+            if self._pending_confirmations:
+                wait_seconds = max(0, self._confirmation_interval - elapsed)
+                self.logger.debug(
+                    "Confirmações pendentes (%d). Próxima verificação em %ds",
+                    len(self._pending_confirmations),
+                    wait_seconds,
+                )
+            else:
+                wait_seconds = max(0, self.interval - elapsed)
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=wait_seconds)
             except asyncio.TimeoutError:
@@ -845,6 +856,79 @@ class AlertManager:
     def _mark_state_dirty(self) -> None:
         self._state_dirty = True
 
+    def _should_confirm_alert(self, key: str, condition_active: bool, now: datetime) -> bool:
+        """Gerencia a janela de confirmação de alertas.
+
+        Retorna True quando a condição foi confirmada pelo número necessário de verificações
+        consecutivas e o alerta deve ser enviado. Retorna False enquanto aguarda confirmação
+        ou quando a condição foi resolvida antes do envio.
+
+        O objetivo é reduzir o ruído de alertas: um problema transitório que se resolve
+        dentro da janela de confirmação não gera alerta.
+        """
+        if not condition_active:
+            if key in self._pending_confirmations:
+                pending = self._pending_confirmations.pop(key)
+                self.logger.info(
+                    "Condição de alerta resolvida dentro da janela de confirmação | "
+                    "chave=%s verificações=%d/%d duração=%s",
+                    key,
+                    pending["check_count"],
+                    self._confirmation_required_checks,
+                    now - pending["first_detected"],
+                )
+            return False
+
+        if key not in self._pending_confirmations:
+            self._pending_confirmations[key] = {
+                "first_detected": now,
+                "check_count": 0,
+            }
+            self.logger.info(
+                "Condição de alerta detectada, iniciando janela de confirmação | "
+                "chave=%s verificações_necessárias=%d intervalo=%ds",
+                key,
+                self._confirmation_required_checks,
+                self._confirmation_interval,
+            )
+            return False
+
+        pending = self._pending_confirmations[key]
+
+        timeout = timedelta(seconds=self._confirmation_interval * (self._confirmation_required_checks + 2))
+        if now - pending["first_detected"] > timeout:
+            self.logger.warning(
+                "Janela de confirmação expirou sem atingir %d verificações | chave=%s. Reiniciando contagem.",
+                self._confirmation_required_checks,
+                key,
+            )
+            self._pending_confirmations[key] = {
+                "first_detected": now,
+                "check_count": 0,
+            }
+            return False
+
+        pending["check_count"] += 1
+        self.logger.info(
+            "Verificação de confirmação de alerta | chave=%s verificações=%d/%d",
+            key,
+            pending["check_count"],
+            self._confirmation_required_checks,
+        )
+
+        if pending["check_count"] >= self._confirmation_required_checks:
+            self._pending_confirmations.pop(key)
+            self.logger.info(
+                "Condição de alerta confirmada após %d verificações consecutivas | "
+                "chave=%s duração=%s",
+                self._confirmation_required_checks,
+                key,
+                now - pending["first_detected"],
+            )
+            return True
+
+        return False
+
     def _reset_state_if_needed(self, now: datetime) -> None:
         if now.time() < self._daily_reset_time:
             return
@@ -1275,7 +1359,12 @@ class AlertManager:
         if postfix_entry:
             status = str(postfix_entry.get("status") or "").lower()
             if status != "active":
-                if force_send or not self._postfix_state.get(code):
+                confirmation_key = f"postfix:{code}"
+                if force_send:
+                    confirmed = not self._postfix_state.get(code)
+                else:
+                    confirmed = self._should_confirm_alert(confirmation_key, True, now)
+                if confirmed:
                     message = f"{env_label}: serviço postfix está inativo (status: {status or 'desconhecido'})."
                     facts = (
                         {"title": "Ambiente", "value": env_label},
@@ -1294,9 +1383,10 @@ class AlertManager:
                     )
                     self._postfix_state[code] = True
                     self._mark_state_dirty()
-                else:
+                elif self._postfix_state.get(code):
                     self.logger.debug("Alerta de postfix já enviado para %s", env_label)
             else:
+                self._should_confirm_alert(f"postfix:{code}", False, now)
                 if code in self._postfix_state:
                     self._postfix_state.pop(code, None)
                     self._mark_state_dirty()
@@ -1314,7 +1404,12 @@ class AlertManager:
         status = str(offense_check.get("status") or "").lower()
         count = offense_check.get("count")
         if status != "ok" or (isinstance(count, int) and count == 0):
-            if force_send or not self._offense_state.get(code):
+            confirmation_key = f"offense:{code}"
+            if force_send:
+                confirmed = not self._offense_state.get(code)
+            else:
+                confirmed = self._should_confirm_alert(confirmation_key, True, now)
+            if confirmed:
                 message = f"{env_label}: nenhuma ofensa registrada nas últimas 24 horas."
                 facts = (
                     {"title": "Ambiente", "value": env_label},
@@ -1334,9 +1429,10 @@ class AlertManager:
                 )
                 self._offense_state[code] = True
                 self._mark_state_dirty()
-            else:
+            elif self._offense_state.get(code):
                 self.logger.debug("Alerta de ofensas já enviado para %s", env_label)
         else:
+            self._should_confirm_alert(f"offense:{code}", False, now)
             if code in self._offense_state:
                 self._offense_state.pop(code, None)
                 self._mark_state_dirty()
@@ -1358,7 +1454,12 @@ class AlertManager:
             key = (code, target)
 
             if reachable is False or status in {"error", "critical", "failed"}:
-                if force_send or not self._connectivity_state.get(key):
+                confirmation_key = f"connectivity:{code}:{target}"
+                if force_send:
+                    confirmed = not self._connectivity_state.get(key)
+                else:
+                    confirmed = self._should_confirm_alert(confirmation_key, True, now)
+                if confirmed:
                     message = f"{env_label}: perda de comunicação com {target}."
                     facts = (
                         {"title": "Ambiente", "value": env_label},
@@ -1378,11 +1479,12 @@ class AlertManager:
                     )
                     self._connectivity_state[key] = True
                     self._mark_state_dirty()
-                else:
+                elif self._connectivity_state.get(key):
                     self.logger.debug(
                         "Alerta de conectividade já enviado para %s -> %s", env_label, target
                     )
             else:
+                self._should_confirm_alert(f"connectivity:{code}:{target}", False, now)
                 if key in self._connectivity_state:
                     self._connectivity_state.pop(key, None)
                     self._mark_state_dirty()
@@ -1445,6 +1547,8 @@ class AlertManager:
 
             key = str(url)
 
+            confirmation_key = f"url:{key}"
+
             if failed:
                 self.logger.warning(
                     "URL monitorada indisponível | destino=%s url=%s status=%s",
@@ -1452,7 +1556,11 @@ class AlertManager:
                     url,
                     error_message or status_label or "indisponível",
                 )
-                if force_send or not self._url_state.get(key):
+                if force_send:
+                    confirmed = not self._url_state.get(key)
+                else:
+                    confirmed = self._should_confirm_alert(confirmation_key, True, now)
+                if confirmed:
                     message = f"{name}: falha ao acessar URL monitorada."
                     facts = (
                         {"title": "Destino", "value": name},
@@ -1481,6 +1589,7 @@ class AlertManager:
                     url,
                     status_label or "OK",
                 )
+                self._should_confirm_alert(confirmation_key, False, now)
                 if key in self._url_state:
                     self._url_state.pop(key, None)
                     self._mark_state_dirty()
