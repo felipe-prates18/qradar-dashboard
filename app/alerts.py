@@ -665,8 +665,20 @@ class AlertManager:
                 "Não foi possível carregar o arquivo de supressão (%s)", self._suppress_file
             )
 
-    def _is_suppressed(self, code: str, alert_type: str, target: Optional[str] = None) -> bool:
+    def _is_suppressed(
+        self, code: str, alert_type: str, target: Optional[str] = None, env_label: Optional[str] = None
+    ) -> bool:
         env_suppress = self._suppress.get(code)
+        if not env_suppress and env_label:
+            env_suppress = self._suppress.get(env_label)
+        if not env_suppress and self._suppress:
+            for key, val in self._suppress.items():
+                if key and (
+                    (code and key.upper() in code.upper())
+                    or (env_label and key.upper() in env_label.upper())
+                ):
+                    env_suppress = val
+                    break
         if not env_suppress:
             return False
         value = env_suppress.get(alert_type)
@@ -1391,7 +1403,7 @@ class AlertManager:
         *,
         force_send: bool = False,
     ) -> None:
-        if self._is_suppressed(code, "postfix"):
+        if self._is_suppressed(code, "postfix", env_label=env_label):
             self.logger.debug("Alerta de postfix suprimido para %s", env_label)
             return
         services = row.get("services") or []
@@ -1440,7 +1452,7 @@ class AlertManager:
         *,
         force_send: bool = False,
     ) -> None:
-        if self._is_suppressed(code, "offense"):
+        if self._is_suppressed(code, "offense", env_label=env_label):
             self.logger.debug("Alerta de offense suprimido para %s", env_label)
             return
         offense_check = row.get("offense_check") or {}
@@ -1497,7 +1509,7 @@ class AlertManager:
             key = (code, target)
 
             if reachable is False or status in {"error", "critical", "failed"}:
-                if self._is_suppressed(code, "connectivity", target):
+                if self._is_suppressed(code, "connectivity", target, env_label=env_label):
                     self.logger.debug(
                         "Alerta de conectividade suprimido para %s -> %s", env_label, target
                     )
