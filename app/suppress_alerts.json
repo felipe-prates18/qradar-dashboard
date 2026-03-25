@@ -1,12 +1,7 @@
 {
   "suppress": {
-    "JBS": {
-      "connectivity": [],
-      "offense": false,
-      "postfix": false
-    },
-    "BANESE": {
-      "connectivity": [],
+    "MMX10": {
+      "connectivity": ["10.14.117.53"],
       "offense": false,
       "postfix": false
     }
