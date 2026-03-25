@@ -1,0 +1,14 @@
+{
+  "suppress": {
+    "JBS": {
+      "connectivity": [],
+      "offense": false,
+      "postfix": false
+    },
+    "BANESE": {
+      "connectivity": [],
+      "offense": false,
+      "postfix": false
+    }
+  }
+}
