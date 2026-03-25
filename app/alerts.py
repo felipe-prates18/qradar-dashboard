@@ -113,7 +113,10 @@ class AlertManager:
         )
         self.license_webhook_url = alerts_conf.get("license_teams_webhook_url")
         self._state_file = Path(alerts_conf.get("state_file") or "alerts_state.json")
-        self._suppress_file = Path(alerts_conf.get("suppress_file") or "suppress_alerts.json")
+        _suppress_path = Path(alerts_conf.get("suppress_file") or "suppress_alerts.json")
+        if not _suppress_path.is_absolute():
+            _suppress_path = Path(__file__).resolve().parent / _suppress_path
+        self._suppress_file = _suppress_path
         self._suppress: Dict[str, Any] = {}
         self.interval = int(alerts_conf.get("interval_seconds", 600))
         if self.interval < 60:
