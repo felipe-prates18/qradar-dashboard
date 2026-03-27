@@ -10,11 +10,9 @@ from urllib3.util.retry import Retry
 
 
 class CrowdstrikeApiError(RuntimeError):
-    """Raised when the Crowdstrike API returns an unexpected response."""
 
 
 class CrowdstrikeAuthError(CrowdstrikeApiError):
-    """Raised when authentication against the Crowdstrike API fails."""
 
 
 _SIZE_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)?\s*$")
