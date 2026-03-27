@@ -787,7 +787,6 @@ def _fetch_rule_statistics(
             return total_enabled, {}, "Limite de paginação excedido ao consultar a API."
 
         if saw_unsupported_fields and idx < len(field_candidates) - 1:
-            # Tenta novamente com o próximo conjunto de campos.
             continue
 
         return total_enabled, {}, None

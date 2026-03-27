@@ -320,7 +320,7 @@ def _collect_jira_monitoring() -> Dict[str, Any]:
 
     try:
         jira_client = JiraClient(jira_config, logger=logger)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Falha ao inicializar cliente do Jira")
         payload["errors"].append(f"Configuração inválida do Jira: {exc}")
         return payload
@@ -329,7 +329,7 @@ def _collect_jira_monitoring() -> Dict[str, Any]:
         summary = jira_client.summarize_clients(
             jira_clients, window_hours=critical_hours
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("Falha ao coletar status do Jira")
         payload["errors"].append("Não foi possível consultar o Jira no momento.")
         return payload

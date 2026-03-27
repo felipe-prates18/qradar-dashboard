@@ -408,7 +408,6 @@ def _normalize_dt(value: Any, *, end_of_day: bool = False) -> datetime:
         try:
             dt_obj = datetime.fromisoformat(text)
         except Exception as exc:
-            # Try parsing date-only values like YYYY-MM-DD.
             try:
                 parsed_date = datetime.strptime(text, "%Y-%m-%d").date()
                 dt_obj = datetime.combine(parsed_date, time.max if end_of_day else time.min)
@@ -1151,7 +1150,6 @@ def _crowdstrike_detections_report(
         if not isinstance(result, dict):
             return None
 
-        # Preferred: events array returned by the results endpoint.
         events = result.get("events")
         if isinstance(events, list) and events:
             for event in events:
@@ -1168,14 +1166,12 @@ def _crowdstrike_detections_report(
                         if isinstance(value, (int, float)):
                             return int(value)
 
-        # Sometimes the result map contains the numeric aggregation directly.
         result_map = result.get("result") if isinstance(result.get("result"), dict) else None
         if isinstance(result_map, dict):
             for value in result_map.values():
                 if isinstance(value, (int, float)):
                     return int(value)
 
-        # Last resort: check meta statistics if available.
         meta = result.get("meta")
         if isinstance(meta, dict):
             stats = meta.get("statistics")
@@ -1199,7 +1195,6 @@ def _crowdstrike_detections_report(
 
     results: List[ReportResult] = []
 
-    # Detecções totais
     try:
         det_count, det_result = _run_query(query_string)
     except Exception as exc:
@@ -1228,7 +1223,6 @@ def _crowdstrike_detections_report(
         )
     )
 
-    # Severidade (alertas por severidade)
     try:
         sev_count, sev_result = _run_query(severity_query)
         sev_events = sev_result.get("events") if isinstance(sev_result, dict) else []
@@ -1267,7 +1261,6 @@ def _crowdstrike_detections_report(
             )
         )
 
-    # Total de eventos (consulta mais pesada)
     try:
         events_count, _ = _run_query(events_query, poll_interval=5, max_polls=60)
         events_total = events_count if events_count is not None else 0
@@ -1305,7 +1298,6 @@ def _crowdstrike_detections_report(
     )
     results.extend(use_cases_results)
 
-    # Conectores e ingestão
     connectors_results = _crowdstrike_connectors_summary(env, start, end, logger)
     results.extend(connectors_results)
 

@@ -122,7 +122,6 @@ class SSHClient:
             limit_keys = {
                 "EPS_LIMIT": True,
                 "nonConsoleEventLimit": True,
-                # consoleEventLimit is informational for breakdown, but we don't add it to the EPS sum
                 "consoleEventLimit": False,
             }
 
@@ -154,7 +153,6 @@ class SSHClient:
                         pending_expirations.append(formatted)
                     continue
 
-            # Attach any expirations that arrived without a matching license block
             for exp in pending_expirations:
                 license_parts.append({
                     "kind": "licenseExpiration",
@@ -164,7 +162,6 @@ class SSHClient:
 
             exp_list = [p.get("expires") for p in license_parts if p.get("expires")]
             if exp_list:
-                # Remove duplicates before sorting the expirations chronologically
                 seen = set()
                 unique = []
                 for item in exp_list:

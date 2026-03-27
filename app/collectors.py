@@ -328,7 +328,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
         try:
             if isinstance(value, (int, float)):
-                # Assume milliseconds when the value is large enough.
                 if abs(value) > 10**12:
                     return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
                 return datetime.fromtimestamp(value, tz=timezone.utc)
@@ -595,7 +594,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             normalized = status_text.strip().lower()
             if not normalized:
                 return False
-            # Evita corresponder expressões como "not ok" ou "nok".
             tokens = [
                 token
                 for token in re.split(r"[^a-z0-9]+", normalized)
@@ -670,7 +668,6 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                         response.status_code == 422
                         and candidate is not None
                     ):
-                        # Tenta próximo conjunto de campos.
                         continue
                     if response.status_code == 422:
                         error_message = (

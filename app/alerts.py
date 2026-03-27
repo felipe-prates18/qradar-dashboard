@@ -1134,7 +1134,6 @@ class AlertManager:
                     self._mark_state_dirty()
 
             if severity != "critical":
-                # Reset the first seen timestamp if the metric returned to normal levels.
                 if key in self._resource_state:
                     self._resource_state[key]["first_seen"] = None
                     self._resource_state[key]["alert_sent"] = False

@@ -1,4 +1,3 @@
-# /opt/qradar-dashboard/app/services/zabbix_client.py
 import logging
 from typing import Optional, Dict, Any, List
 

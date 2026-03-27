@@ -28,7 +28,6 @@ def split_multi_values(value: Optional[str]) -> List[str]:
     if not text:
         return []
     if text.startswith("[") and text.endswith("]"):
-        # Backwards compatibility for any JSON-like representation.
         try:
             import json
 
