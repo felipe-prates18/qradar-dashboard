@@ -908,71 +908,68 @@ class AlertManager:
     def _should_confirm_alert(self, key: str, condition_active: bool, now: datetime) -> bool:
         """Gerencia a janela de confirmação de alertas.
 
-        Retorna True quando a condição foi confirmada pelo número necessário de verificações
-        consecutivas e o alerta deve ser enviado. Retorna False enquanto aguarda confirmação
-        ou quando a condição foi resolvida antes do envio.
+        Retorna True quando a condição permaneceu ativa continuamente por pelo menos
+        confirmation_interval_seconds * confirmation_checks (tempo real decorrido desde a
+        primeira detecção). Retorna False enquanto aguarda confirmação ou quando a condição
+        foi resolvida antes do envio.
 
-        O objetivo é reduzir o ruído de alertas: um problema transitório que se resolve
-        dentro da janela de confirmação não gera alerta.
+        A confirmação é medida em tempo decorrido, e não em número de ciclos de verificação:
+        um ciclo de coleta pode demorar bem mais que confirmation_interval_seconds quando há
+        hosts/URLs fora do ar (checagens sequenciais com timeout), então contar "checagens
+        consecutivas" dentro de uma janela fixa fazia a janela expirar e zerar a contagem
+        antes de confirmar, mesmo com a condição continuamente ativa (ver histórico de
+        "Janela de confirmação expirou" nos logs sem nenhuma confirmação correspondente).
+
+        O objetivo permanece reduzir o ruído de alertas: um problema transitório que se
+        resolve antes do tempo mínimo não gera alerta.
         """
         if not condition_active:
             if key in self._pending_confirmations:
                 pending = self._pending_confirmations.pop(key)
                 self.logger.info(
-                    "Condição de alerta resolvida dentro da janela de confirmação | "
-                    "chave=%s verificações=%d/%d duração=%s",
+                    "Condição de alerta resolvida antes da confirmação | "
+                    "chave=%s verificações=%d duração=%s",
                     key,
                     pending["check_count"],
-                    self._confirmation_required_checks,
                     now - pending["first_detected"],
                 )
             return False
 
+        required_duration = timedelta(
+            seconds=self._confirmation_interval * self._confirmation_required_checks
+        )
+
         if key not in self._pending_confirmations:
             self._pending_confirmations[key] = {
                 "first_detected": now,
-                "check_count": 0,
+                "check_count": 1,
             }
             self.logger.info(
                 "Condição de alerta detectada, iniciando janela de confirmação | "
-                "chave=%s verificações_necessárias=%d intervalo=%ds",
+                "chave=%s duração_necessária=%s",
                 key,
-                self._confirmation_required_checks,
-                self._confirmation_interval,
+                required_duration,
             )
             return False
 
         pending = self._pending_confirmations[key]
-
-        timeout = timedelta(seconds=self._confirmation_interval * (self._confirmation_required_checks + 2))
-        if now - pending["first_detected"] > timeout:
-            self.logger.warning(
-                "Janela de confirmação expirou sem atingir %d verificações | chave=%s. Reiniciando contagem.",
-                self._confirmation_required_checks,
-                key,
-            )
-            self._pending_confirmations[key] = {
-                "first_detected": now,
-                "check_count": 0,
-            }
-            return False
-
         pending["check_count"] += 1
+        elapsed = now - pending["first_detected"]
         self.logger.info(
-            "Verificação de confirmação de alerta | chave=%s verificações=%d/%d",
+            "Verificação de confirmação de alerta | chave=%s verificações=%d duração=%s/%s",
             key,
             pending["check_count"],
-            self._confirmation_required_checks,
+            elapsed,
+            required_duration,
         )
 
-        if pending["check_count"] >= self._confirmation_required_checks:
+        if elapsed >= required_duration:
             self._pending_confirmations.pop(key)
             self.logger.info(
-                "Condição de alerta confirmada após %d verificações consecutivas | "
-                "chave=%s duração=%s",
-                self._confirmation_required_checks,
+                "Condição de alerta confirmada após %s (verificações=%d) | chave=%s",
+                elapsed,
+                pending["check_count"],
                 key,
-                now - pending["first_detected"],
             )
             return True
 

@@ -14,6 +14,10 @@ from .services import ingestion_store
 from .services.zabbix_client import ZabbixClient
 from .services.ssh_client import SSHClient
 
+# Lembra, por ambiente, qual conjunto de campos da API de log sources foi
+# aceito da última vez, para não repetir o fallback 422 a cada ciclo.
+_LOG_SOURCE_FIELD_CACHE: Dict[str, int] = {}
+
 
 def _filter_console_log_source_types(values: Iterable[str]) -> List[str]:
     filtered: List[str] = []
@@ -103,6 +107,34 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
             metrics.get("storage"),
         )
 
+        def _apply_ssh_override(metric_key: str, label: str, ssh_value: Optional[float]) -> None:
+            if ssh_value is not None:
+                logger.info(
+                    "%s coletado via SSH ambiente=%s valor=%s (zabbix=%s)",
+                    label,
+                    env_code,
+                    ssh_value,
+                    metrics.get(metric_key),
+                )
+                metrics[metric_key] = ssh_value
+            else:
+                logger.warning(
+                    "Coleta de %s via SSH indisponível ambiente=%s, mantendo valor do Zabbix=%s",
+                    label,
+                    env_code,
+                    metrics.get(metric_key),
+                )
+
+        for metric_key, label, ssh_fn in (
+            ("storage", "storage /store", ssh.read_storage_percent),
+            ("cpu", "CPU", ssh.read_cpu_percent),
+            ("memory", "memória", ssh.read_memory_percent),
+        ):
+            try:
+                _apply_ssh_override(metric_key, label, ssh_fn(env))
+            except Exception:
+                logger.exception("Erro ao coletar %s via SSH ambiente=%s", label, env_code)
+
         appliances_out: List[Dict[str, Any]] = []
 
         appliances = list(env.get("appliances", []) or [])
@@ -136,6 +168,48 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
                 appliance_metrics.get("memory"),
                 appliance_metrics.get("storage"),
             )
+
+            target_ip = ssh.resolve_appliance_ssh_target(env, appliance_entry)
+            if not target_ip:
+                logger.warning(
+                    "Nenhum IP resolvido para appliance=%s ambiente=%s; usando apenas Zabbix",
+                    appliance_name,
+                    env_code,
+                )
+            else:
+                for metric_key, label, ssh_fn in (
+                    ("storage", "storage /store", ssh.read_appliance_storage_percent),
+                    ("cpu", "CPU", ssh.read_appliance_cpu_percent),
+                    ("memory", "memória", ssh.read_appliance_memory_percent),
+                ):
+                    try:
+                        ssh_value = ssh_fn(env, target_ip)
+                        if ssh_value is not None:
+                            logger.info(
+                                "%s de appliance coletado via SSH ambiente=%s appliance=%s valor=%s (zabbix=%s)",
+                                label,
+                                env_code,
+                                appliance_name,
+                                ssh_value,
+                                appliance_metrics.get(metric_key),
+                            )
+                            appliance_metrics[metric_key] = ssh_value
+                        else:
+                            logger.warning(
+                                "Coleta de %s via SSH indisponível ambiente=%s appliance=%s, mantendo Zabbix=%s",
+                                label,
+                                env_code,
+                                appliance_name,
+                                appliance_metrics.get(metric_key),
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Erro ao coletar %s via SSH ambiente=%s appliance=%s",
+                            label,
+                            env_code,
+                            appliance_name,
+                        )
+
             return {
                 "name": appliance_name,
                 "cpu": _pct(appliance_metrics.get("cpu")),
@@ -231,6 +305,7 @@ def collect_monitoring_data(config: Dict[str, Any], logger: Optional[logging.Log
         return (
             idx_env,
             {
+                "id": env.get("id"),
                 "name": name,
                 "code": env.get("codigo") or env.get("code"),
                 "siem": env.get("siem") or "QRadar",
@@ -507,7 +582,10 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
             "id,name,status,last_event_time,enabled",
             None,
         ]
-        field_index = 0
+        cache_key = str(env.get("name") or env.get("host") or "")
+        field_index = _LOG_SOURCE_FIELD_CACHE.get(cache_key, 0)
+        if field_index >= len(field_candidates):
+            field_index = 0
 
         def _build_params() -> Dict[str, str]:
             fields_value = field_candidates[field_index]
@@ -864,6 +942,7 @@ def collect_health_data(config: Dict[str, Any], logger: Optional[logging.Logger]
                     )
                     continue
                 response.raise_for_status()
+                _LOG_SOURCE_FIELD_CACHE[cache_key] = field_index
                 payload = response.json()
                 if not isinstance(payload, list):
                     raise ValueError("Resposta inesperada da API de log sources")

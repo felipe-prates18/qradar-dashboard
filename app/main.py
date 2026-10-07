@@ -8,12 +8,15 @@ import sqlite3
 from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from fastapi import FastAPI, Request, Form, Depends, HTTPException, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from .auth import (
     auth_router,
@@ -26,23 +29,18 @@ from .auth import (
     has_wallboard_token,
     WALLBOARD_COOKIE_NAME,
     wallboard_token_request_allowed,
-    has_threat_hunting_access,
-    has_reports_access,
     ensure_user_schema,
     list_permissions,
     set_user_permissions,
-    get_user_permission_codes,
-    THREAT_HUNTING_PERMISSION_CODE,
 )
 import requests
 from requests.exceptions import RequestException
 
 from .collectors import collect_crowdstrike_monitoring_data, collect_health_data, collect_monitoring_data
 from .alerts import AlertManager
-from . import threat_hunting
-from .services import environment_store, qradar_rules
-from .services import reports
+from .services import environment_store
 from .services.jira_client import JiraClient
+from .services.ssh_client import SSHClient
 
 try:
     from urllib3.exceptions import InsecureRequestWarning
@@ -59,38 +57,40 @@ with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
 
 CONFIG = {key: value for key, value in _RAW_CONFIG.items() if key != "qradar_envs"}
 
-THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS = [
-    "Firewall",
-    "Windows",
-    "Linux",
-    "WAF",
-    "EDR",
-    "Cloud",
-    "VPN",
-    "Proxy",
-    "Email",
-    "Banco de Dados",
-]
-
-THREAT_HUNTING_SIEM_SUGGESTIONS = [
-    "QRadar",
-    "Elastic",
-    "Microsoft Sentinel",
-    "Splunk",
-    "Wazuh",
-    "Crowdstrike NG-SIEM",
-    "Google SecOps",
-    "Cortex SIEM",
-]
-
 DEFAULT_QRADAR_SIEM = "QRadar"
 CROWDSTRIKE_SIEM = "Crowdstrike NG-SIEM"
 
-app = FastAPI(title="QRadar Monitoring App")
+CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' https://unpkg.com 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Security-Policy"] = CSP_POLICY
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        return response
+
+
+app = FastAPI(title="QRadar Monitoring App", docs_url=None, redoc_url=None, openapi_url=None)
 logger = logging.getLogger(__name__)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(status_code=422, content={"error": "Requisição inválida."})
 session_secret = CONFIG.get("session_secret", "qradar-app-secret")
 runtime_secret = f"{session_secret}:{secrets.token_hex(16)}"
-SESSION_MAX_AGE_SECONDS = 12 * 60 * 60
+SESSION_MAX_AGE_SECONDS = 4 * 60 * 60
 WALLBOARD_TOKEN = CONFIG.get("wallboard_token")
 WALLBOARD_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 CACHE_TTL_SECONDS = 180
@@ -101,9 +101,25 @@ app.add_middleware(
     same_site="lax",
     max_age=SESSION_MAX_AGE_SECONDS,
 )
+app.add_middleware(SecurityHeadersMiddleware)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(auth_router)
+
+
+@app.get("/openapi.json", include_in_schema=False)
+def protected_openapi(user: str = Depends(verify_user_required_page)):
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False)
+def protected_swagger_ui(user: str = Depends(verify_user_required_page)):
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - Swagger UI")
+
+
+@app.get("/redoc", include_in_schema=False)
+def protected_redoc(user: str = Depends(verify_user_required_page)):
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - ReDoc")
 
 
 class _DataCache:
@@ -160,7 +176,6 @@ class _DataCache:
 _monitoring_cache = _DataCache(CACHE_TTL_SECONDS)
 _crowdstrike_monitoring_cache = _DataCache(CACHE_TTL_SECONDS)
 _health_cache = _DataCache(CACHE_TTL_SECONDS)
-_threat_hunting_cache = _DataCache(CACHE_TTL_SECONDS)
 _jira_cache = _DataCache(CACHE_TTL_SECONDS)
 
 
@@ -168,7 +183,6 @@ def _invalidate_environment_caches() -> None:
     _monitoring_cache.clear()
     _crowdstrike_monitoring_cache.clear()
     _health_cache.clear()
-    _threat_hunting_cache.clear()
 
 
 def _refresh_monitoring_cache() -> Dict[str, Any]:
@@ -193,95 +207,6 @@ def _refresh_health_cache() -> Dict[str, Any]:
             _config_with_envs(siem_filter=DEFAULT_QRADAR_SIEM), logger=logger
         )
     )
-
-
-def _collect_threat_hunting_counts() -> Dict[str, Any]:
-    config_with_envs = _config_with_envs(siem_filter=DEFAULT_QRADAR_SIEM)
-    try:
-        (
-            environment_counts,
-            _unused_monthly_counts,
-            summary_errors,
-        ) = qradar_rules.collect_rule_statistics(config_with_envs, logger=logger)
-    except Exception:
-        logger.exception("Falha ao consultar totais de regras do QRadar")
-        environment_counts = []
-        monthly_counts = {}
-        summary_errors = [
-            "Não foi possível consultar o endpoint /analytics/rules do QRadar no momento."
-        ]
-    try:
-        (
-            log_source_types,
-            log_source_errors,
-        ) = qradar_rules.collect_log_source_types(config_with_envs, logger=logger)
-    except Exception:
-        logger.exception(
-            "Falha ao consultar tecnologias de log source do QRadar"
-        )
-        log_source_types = {}
-        log_source_errors = {}
-    monthly_counts: Dict[str, Dict[str, int]] = {}
-    con: Optional[sqlite3.Connection] = None
-    try:
-        con = _con()
-        threat_hunting.ensure_schema(con)
-        now = datetime.utcnow()
-        month_key = f"{now.year:04d}-{now.month:02d}"
-        snapshot_required = threat_hunting.should_record_monthly_snapshot(now)
-        if not snapshot_required:
-            try:
-                snapshot_required = not threat_hunting.month_snapshot_exists(
-                    con, month_key
-                )
-            except Exception:
-                logger.exception(
-                    "Falha ao verificar existência de totais mensais para %s",
-                    month_key,
-                )
-                snapshot_required = True
-        if environment_counts:
-            totals_map: Dict[str, int] = {}
-            for item in environment_counts:
-                env_name = item.get("environment")
-                if not env_name:
-                    continue
-                try:
-                    total_value = int(item.get("total"))
-                except Exception:
-                    continue
-                totals_map[str(env_name)] = total_value
-            if totals_map and snapshot_required:
-                try:
-                    threat_hunting.record_monthly_totals(
-                        con,
-                        month_key,
-                        totals_map,
-                        collected_at=now,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Falha ao registrar totais mensais de casos de uso no banco local"
-                    )
-        monthly_counts = threat_hunting.list_monthly_totals(con)
-    except Exception:
-        logger.exception(
-            "Falha ao carregar totais mensais de casos de uso para o Threat Hunting"
-        )
-    finally:
-        if con is not None:
-            con.close()
-    return {
-        "environment_counts": environment_counts,
-        "monthly_counts": monthly_counts,
-        "summary_errors": summary_errors,
-        "log_source_types": log_source_types,
-        "log_source_errors": log_source_errors,
-    }
-
-
-def _refresh_threat_hunting_cache() -> Dict[str, Any]:
-    return _threat_hunting_cache.refresh(_collect_threat_hunting_counts)
 
 
 def _collect_jira_monitoring() -> Dict[str, Any]:
@@ -464,17 +389,6 @@ def _get_health_payload() -> Dict[str, Any]:
     return payload
 
 
-def _get_threat_hunting_payload() -> Dict[str, Any]:
-    payload = _threat_hunting_cache.get_cached()
-    if payload is None:
-        logger.info("Cache de Threat Hunting vazio. Coletando dados iniciais.")
-        return _refresh_threat_hunting_cache()
-    if _threat_hunting_cache.is_expired():
-        logger.warning("Cache de Threat Hunting expirado. Atualizando dados sob demanda.")
-        return _refresh_threat_hunting_cache()
-    return payload
-
-
 def _get_jira_payload() -> Dict[str, Any]:
     payload = _jira_cache.get_cached()
     if payload is None:
@@ -499,10 +413,6 @@ def _refresh_all_caches() -> None:
         _refresh_health_cache()
     except Exception:
         logger.exception("Falha ao atualizar o cache de health-check")
-    try:
-        _refresh_threat_hunting_cache()
-    except Exception:
-        logger.exception("Falha ao atualizar o cache de Threat Hunting")
     try:
         _refresh_jira_cache()
     except Exception:
@@ -644,12 +554,6 @@ def _config_with_envs(*, siem_filter: Optional[str] = None) -> Dict[str, Any]:
     return config
 
 
-def _qradar_api_conf_for_env(env: Dict[str, Any]) -> Dict[str, Any]:
-    env_siem = env.get("siem") or DEFAULT_QRADAR_SIEM
-    config = _config_with_envs(siem_filter=env_siem)
-    return config.get("qradar_api") or {}
-
-
 _cache_refresh_task: Optional[asyncio.Task] = None
 _cache_refresh_stop: Optional[asyncio.Event] = None
 
@@ -669,7 +573,9 @@ async def _start_cache_refresh() -> None:
 
     stop_event = asyncio.Event()
     _cache_refresh_stop = stop_event
-    await asyncio.to_thread(_refresh_all_caches)
+    # A primeira coleta roda dentro do próprio _cache_refresh_loop, em background.
+    # Não aguardamos aqui para não travar o startup do Uvicorn até todos os
+    # ambientes serem coletados (isso chegava a levar minutos com muitos ambientes).
     _cache_refresh_task = asyncio.create_task(_cache_refresh_loop(stop_event))
 
 
@@ -705,11 +611,6 @@ async def _prepare_user_tables():
     await asyncio.to_thread(ensure_user_schema)
 
 
-@app.on_event("startup")
-async def _prepare_threat_hunting_tables():
-    await asyncio.to_thread(_prepare_threat_hunting_schema)
-
-
 @app.on_event("shutdown")
 async def _stop_alert_manager():
     await alert_manager.stop()
@@ -738,208 +639,6 @@ async def restrict_wallboard_token_scope(request: Request, call_next):
             return response
     response = await call_next(request)
     return response
-
-
-def _prepare_threat_hunting_schema() -> None:
-    con = _con()
-    try:
-        threat_hunting.ensure_schema(con)
-    finally:
-        con.close()
-
-
-def _environment_name_map() -> Dict[str, str]:
-    envs = _load_environments_from_db()
-    mapping: Dict[str, str] = {}
-    for env in envs:
-        raw_name = env.get("name")
-        if not raw_name:
-            continue
-        name = str(raw_name).strip()
-        if not name:
-            continue
-        lowered_name = name.lower()
-        mapping[lowered_name] = name
-        for key in ("codigo", "code"):
-            alias = env.get(key)
-            if not alias:
-                continue
-            alias_text = str(alias).strip()
-            if not alias_text:
-                continue
-            mapping[alias_text.lower()] = name
-    return mapping
-
-
-def _normalize_environment_value(
-    value: Optional[str],
-    mapping: Optional[Dict[str, str]] = None,
-) -> str:
-    text = (value or "").strip()
-    if not text:
-        return ""
-    lookup = (mapping or _environment_name_map()).get(text.lower())
-    if lookup:
-        return lookup
-    return text
-
-
-def _prepare_multi_select_values(
-    values: Sequence[str],
-    *,
-    normalizer: Optional[Callable[[str], str]] = None,
-) -> List[str]:
-    prepared: List[str] = []
-    seen = set()
-    for value in values:
-        text = str(value or "").strip()
-        if not text:
-            continue
-        normalized = normalizer(text) if normalizer else text
-        normalized = normalized.strip()
-        if not normalized:
-            continue
-        lowered = normalized.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        prepared.append(normalized)
-    return prepared
-
-
-def _apply_multi_value_metadata(
-    record: Dict[str, Any], env_map: Dict[str, str]
-) -> None:
-    raw_env_values = record.get("environment_values") or []
-    normalized_envs = [
-        _normalize_environment_value(value, env_map)
-        for value in raw_env_values
-        if value
-    ]
-    record["environment_values"] = normalized_envs
-    record["environment"] = ", ".join(normalized_envs)
-    siem_values = [value for value in (record.get("siem_values") or []) if value]
-    record["siem_values"] = siem_values
-    record["siem"] = ", ".join(siem_values)
-
-
-def _environment_suggestions() -> list[str]:
-    mapping = _environment_name_map()
-    names = {value for value in mapping.values() if value}
-    return sorted(names, key=str.lower)
-
-
-def _format_use_case_timestamp(value: Optional[str]) -> Optional[str]:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        parsed = None
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                parsed = datetime.strptime(str(value), fmt)
-                break
-            except ValueError:
-                continue
-        if parsed is None:
-            return str(value)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    try:
-        return parsed.astimezone().strftime("%d/%m/%Y %H:%M")
-    except Exception:
-        return parsed.strftime("%d/%m/%Y %H:%M")
-
-
-def _format_use_case_comments(
-    entries: Iterable[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
-    formatted: List[Dict[str, Any]] = []
-    for entry in entries:
-        mapped = dict(entry)
-        mapped["display_created_at"] = _format_use_case_timestamp(
-            entry.get("created_at")
-        )
-        mapped.setdefault("created_by", entry.get("created_by") or "—")
-        formatted.append(mapped)
-    return formatted
-
-
-_MONTH_NAMES_PT = [
-    "Jan",
-    "Fev",
-    "Mar",
-    "Abr",
-    "Mai",
-    "Jun",
-    "Jul",
-    "Ago",
-    "Set",
-    "Out",
-    "Nov",
-    "Dez",
-]
-
-
-def _format_month_label_pt(year: int, month: int) -> str:
-    if 1 <= month <= 12:
-        return f"{_MONTH_NAMES_PT[month - 1]}/{year}"
-    return f"{month:02d}/{year}"
-
-
-def _parse_month_key(value: str) -> Optional[Tuple[int, int]]:
-    parts = str(value or "").split("-", 1)
-    if len(parts) != 2:
-        return None
-    try:
-        year = int(parts[0])
-        month = int(parts[1])
-    except ValueError:
-        return None
-    if month < 1 or month > 12:
-        return None
-    return year, month
-
-
-def _iterate_month_range(
-    start_year: int, start_month: int, end_year: int, end_month: int
-) -> Iterable[Tuple[int, int]]:
-    year, month = start_year, start_month
-    while (year, month) <= (end_year, end_month):
-        yield year, month
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
-
-
-def _build_environment_config_lookup(
-    env_name_map: Dict[str, str]
-) -> Dict[str, Dict[str, Any]]:
-    lookup: Dict[str, Dict[str, Any]] = {}
-    for env in _load_environments_from_db() or []:
-        if not isinstance(env, dict):
-            continue
-        keys: set[str] = set()
-        raw_name = env.get("name")
-        normalized_name = _normalize_environment_value(raw_name, env_name_map)
-        if normalized_name:
-            keys.add(normalized_name.lower())
-        for alias_key in ("codigo", "code"):
-            alias_value = env.get(alias_key)
-            if not alias_value:
-                continue
-            alias_text = str(alias_value).strip()
-            if not alias_text:
-                continue
-            keys.add(alias_text.lower())
-            normalized_alias = _normalize_environment_value(alias_text, env_name_map)
-            if normalized_alias:
-                keys.add(normalized_alias.lower())
-        for key in keys:
-            lookup.setdefault(key, env)
-    return lookup
 
 
 def _parse_json_array(raw: Any) -> list:
@@ -1004,127 +703,6 @@ def _normalize_environment_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _build_monthly_series(
-    month_counts: Optional[Dict[str, int]], current_year: int, current_month: int
-) -> List[Dict[str, Any]]:
-    if not month_counts:
-        return []
-    parsed = [_parse_month_key(key) for key in month_counts.keys()]
-    valid = [item for item in parsed if item]
-    if not valid:
-        return []
-    start_year, start_month = min(valid)
-    end_year, end_month = max(valid)
-    if (end_year, end_month) < (current_year, current_month):
-        end_year, end_month = current_year, current_month
-    series: List[Dict[str, Any]] = []
-    for year, month in _iterate_month_range(start_year, start_month, end_year, end_month):
-        key = f"{year:04d}-{month:02d}"
-        count = int(month_counts.get(key, 0))
-        series.append(
-            {
-                "month": key,
-                "label": _format_month_label_pt(year, month),
-                "count": count,
-            }
-        )
-    return series
-
-
-def _build_environment_summary(
-    environment_counts: List[Dict[str, Any]],
-    monthly_counts: Dict[str, Dict[str, int]],
-    env_name_map: Dict[str, str],
-    log_source_lookup: Dict[str, List[str]],
-    log_source_errors: Dict[str, str],
-) -> Dict[str, Any]:
-    config_lookup = _build_environment_config_lookup(env_name_map)
-    now = datetime.now()
-    current_year, current_month = now.year, now.month
-    summary: Dict[str, Any] = {}
-    for item in environment_counts:
-        env_name = _normalize_environment_value(item.get("environment"), env_name_map)
-        if not env_name:
-            continue
-        key = env_name.lower()
-        config = config_lookup.get(key)
-        code_value = None
-        if isinstance(config, dict):
-            code_value = config.get("codigo") or config.get("code")
-        log_types = log_source_lookup.get(key, [])
-        month_data = monthly_counts.get(env_name)
-        series = _build_monthly_series(month_data, current_year, current_month)
-        api_total_raw = item.get("total")
-        api_total = None
-        if isinstance(api_total_raw, (int, float)):
-            api_total = int(api_total_raw)
-        notes: List[str] = []
-        source_value = str(item.get("source") or "api").lower()
-        source_label = (
-            "Fonte: Cadastro local" if source_value == "local" else "Fonte: API do QRadar"
-        )
-        notes.append(source_label)
-        if item.get("error"):
-            notes.append(str(item["error"]))
-        if api_total is None:
-            notes.append("Total de casos ativos indisponível na API do QRadar.")
-        log_error = log_source_errors.get(key)
-        if log_error:
-            notes.append(f"Tecnologias: {log_error}")
-        summary[env_name] = {
-            "name": env_name,
-            "code": code_value,
-            "active_use_cases_api": api_total,
-            "log_source_types": log_types,
-            "use_case_monthly_series": series,
-            "notes": notes,
-            "source": source_value,
-        }
-    return summary
-
-
-def _threat_hunting_allowed(username: Optional[str]) -> bool:
-    if not username:
-        return False
-    if username == "__wallboard__":
-        return False
-    return is_admin(username) or has_threat_hunting_access(username)
-
-
-def _reports_allowed(username: Optional[str]) -> bool:
-    if not username:
-        return False
-    if username == "__wallboard__":
-        return False
-    return is_admin(username) or has_reports_access(username)
-
-
-def _require_threat_hunting_page_access(
-    user: str = Depends(verify_user_required_page),
-) -> str:
-    if not _threat_hunting_allowed(user):
-        raise AuthenticationError(
-            "Você não tem permissão para acessar o módulo de Threat Hunting."
-        )
-    return user
-
-
-def _require_reports_page_access(
-    user: str = Depends(verify_user_required_page),
-) -> str:
-    if not _reports_allowed(user):
-        raise AuthenticationError("Você não tem permissão para acessar os reports.")
-    return user
-
-
-def _require_reports_api_access(
-    user: str = Depends(verify_user_required_api),
-) -> str:
-    if not _reports_allowed(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acesso aos reports não autorizado.")
-    return user
-
-
 def _wallboard_token_supplied_via_link(request: Request) -> bool:
     if not WALLBOARD_TOKEN:
         return False
@@ -1142,23 +720,8 @@ def home(request: Request, user: str = Depends(verify_user_required_page)):
         "user": user,
         "title": "Monitoramento",
         "is_admin": is_admin(user) if user != "__wallboard__" else False,
-        "can_access_threat_hunting": _threat_hunting_allowed(user),
-        "can_access_reports": _reports_allowed(user),
     }
     return templates.TemplateResponse("index.html", context)
-
-
-@app.get("/reports", response_class=HTMLResponse)
-def reports_page(request: Request, user: str = Depends(_require_reports_page_access)):
-    context = {
-        "request": request,
-        "user": user,
-        "title": "Reports",
-        "is_admin": is_admin(user),
-        "can_access_threat_hunting": _threat_hunting_allowed(user),
-        "can_access_reports": _reports_allowed(user),
-    }
-    return templates.TemplateResponse("reports.html", context)
 
 
 @app.get("/painel", response_class=HTMLResponse)
@@ -1201,54 +764,6 @@ def get_monitoring(
     selected_siem = request.query_params.get("siem") if hasattr(request, "query_params") else None
     payload = _get_monitoring_payload(selected_siem)
     return JSONResponse(payload)
-
-
-@app.get("/api/reports/options")
-def get_report_options(user: str = Depends(_require_reports_api_access)):
-    envs = _load_environments_from_db()
-    options = [
-        {
-            "id": env.get("id"),
-            "name": env.get("name"),
-            "code": env.get("codigo") or env.get("code"),
-            "siem": _resolved_env_siem(env),
-        }
-        for env in envs
-    ]
-    return JSONResponse({"environments": options})
-
-
-@app.post("/api/reports")
-async def post_reports(request: Request, user: str = Depends(_require_reports_api_access)):
-    data = await _extract_request_json(request)
-    env_id = data.get("environment_id")
-    start_date = data.get("start_date")
-    end_date = data.get("end_date")
-
-    if env_id is None:
-        raise HTTPException(status_code=400, detail="environment_id é obrigatório.")
-
-    try:
-        env_id_int = int(env_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="environment_id inválido.")
-
-    env = _get_environment_from_db(env_id_int)
-    if not env:
-        raise HTTPException(status_code=404, detail="Ambiente não encontrado.")
-
-    try:
-        start_dt, end_dt = reports.parse_date_range(start_date, end_date)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    try:
-        payload = reports.build_environment_report(env, start_dt, end_dt, _qradar_api_conf_for_env(env), logger=logger)
-    except Exception as exc:
-        logger.exception("Erro ao gerar relatório do ambiente %s", env.get("name"))
-        raise HTTPException(status_code=502, detail=f"Falha ao gerar relatório: {exc}")
-
-    return JSONResponse({"report": payload})
 
 
 @app.get("/api/health")
@@ -1374,6 +889,148 @@ async def api_update_environment(
     return {"id": env_id}
 
 
+_LUCENE_CLEANUP_ALLOWED_DAYS = (5, 10, 15)
+_lucene_cleanup_jobs: Dict[int, Dict[str, Any]] = {}
+_lucene_cleanup_lock = Lock()
+
+
+def _patch_monitoring_cache_storage(env_id: int, storage_pct: float) -> None:
+    """Atualiza o storage de um ambiente já coletado no cache de monitoramento,
+    sem esperar o próximo ciclo de coleta completo (que consulta todas as
+    consoles via SSH/Zabbix e é caro demais para rodar só por causa de 1 valor)."""
+    payload = _monitoring_cache.get_cached()
+    if not payload:
+        return
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return
+    changed = False
+    for row in rows:
+        if isinstance(row, dict) and row.get("id") == env_id:
+            row["storage"] = f"{storage_pct:.1f}%"
+            changed = True
+    if changed:
+        _monitoring_cache.store(payload)
+
+
+def _run_lucene_cleanup_job(env_id: int, env: Dict[str, Any], days: int, job: Dict[str, Any]) -> None:
+    ssh = SSHClient()
+    exit_code = None
+    error_message = None
+    try:
+        result = ssh.run_cleanup_lucene(env, days)
+        exit_code = result.get("exit_code")
+        job["exit_code"] = exit_code
+        job["stdout"] = (result.get("stdout") or "")[-4000:]
+        job["stderr"] = (result.get("stderr") or "")[-4000:]
+        if exit_code != 0:
+            error_message = f"Script retornou código de saída {exit_code}."
+    except Exception as exc:
+        logger.exception(
+            "Falha ao executar cleanup_lucene.sh ambiente_id=%s dias=%s", env_id, days
+        )
+        error_message = str(exc)
+
+    # Reconsulta o storage e atualiza o cache de monitoramento ANTES de marcar
+    # o job como concluído. Assim, quando o front detectar o status terminal
+    # (e parar de dar polling) e recarregar o /api/monitor, o valor novo já
+    # está disponível — sem essa ordem haveria uma corrida em que o front
+    # buscaria o storage antigo por ainda não ter sido atualizado.
+    try:
+        fresh_pct = ssh.read_storage_percent(env)
+    except Exception:
+        fresh_pct = None
+        logger.exception(
+            "Falha ao reconsultar storage pós-limpeza ambiente_id=%s", env_id
+        )
+    if fresh_pct is not None:
+        job["storage_after"] = fresh_pct
+        _patch_monitoring_cache_storage(env_id, fresh_pct)
+
+    job["status"] = "error" if error_message else "success"
+    job["error"] = error_message
+    job["finished_at"] = datetime.now(timezone.utc).isoformat()
+    logger.info(
+        "Limpeza de índices Lucene finalizada ambiente_id=%s dias=%s exit_code=%s storage_pos=%s",
+        env_id,
+        days,
+        exit_code,
+        job.get("storage_after"),
+    )
+
+
+@app.post("/api/admin/environments/{env_id}/cleanup-lucene")
+async def api_run_cleanup_lucene(
+    env_id: int, request: Request, user: str = Depends(verify_user_required_api)
+):
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin required")
+
+    payload = await _extract_request_json(request)
+    try:
+        days = int(payload.get("days"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Parâmetro 'days' inválido")
+    if days not in _LUCENE_CLEANUP_ALLOWED_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Valor de dias não permitido. Use um destes: {_LUCENE_CLEANUP_ALLOWED_DAYS}",
+        )
+
+    con = _con()
+    try:
+        environment_store.ensure_schema(con)
+        env = environment_store.get_environment(con, env_id)
+    finally:
+        con.close()
+    if not env:
+        raise HTTPException(status_code=404, detail="Ambiente não encontrado")
+    if (env.get("siem") or "QRadar").strip().lower() != "qradar":
+        raise HTTPException(
+            status_code=400, detail="Ação disponível apenas para ambientes QRadar"
+        )
+
+    with _lucene_cleanup_lock:
+        existing = _lucene_cleanup_jobs.get(env_id)
+        if existing and existing.get("status") == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="Já existe uma limpeza de índices Lucene em execução para este ambiente",
+            )
+        job: Dict[str, Any] = {
+            "status": "running",
+            "days": days,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "exit_code": None,
+            "error": None,
+            "triggered_by": user,
+        }
+        _lucene_cleanup_jobs[env_id] = job
+
+    logger.info(
+        "Limpeza de índices Lucene iniciada ambiente_id=%s ambiente=%s dias=%s usuario=%s",
+        env_id,
+        env.get("name"),
+        days,
+        user,
+    )
+    Thread(target=_run_lucene_cleanup_job, args=(env_id, env, days, job), daemon=True).start()
+    return job
+
+
+@app.get("/api/admin/environments/{env_id}/cleanup-lucene")
+def api_get_cleanup_lucene_status(
+    env_id: int, user: str = Depends(verify_user_required_api)
+):
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Admin required")
+    job = _lucene_cleanup_jobs.get(env_id)
+    if not job:
+        return {"status": "idle"}
+    return job
+
+
 def _redirect_admin_users(success: Optional[str] = None, error: Optional[str] = None) -> RedirectResponse:
     params = {}
     if success:
@@ -1382,25 +1039,6 @@ def _redirect_admin_users(success: Optional[str] = None, error: Optional[str] = 
         params["error"] = error
     query = urlencode(params)
     url = "/admin/users"
-    if query:
-        url = f"{url}?{query}"
-    return RedirectResponse(url=url, status_code=303)
-
-
-def _redirect_threat_hunting(
-    success: Optional[str] = None,
-    error: Optional[str] = None,
-    extra_params: Optional[Dict[str, str]] = None,
-) -> RedirectResponse:
-    params: Dict[str, str] = {}
-    if success:
-        params["success"] = success
-    if error:
-        params["error"] = error
-    if extra_params:
-        params.update({k: v for k, v in extra_params.items() if v is not None})
-    query = urlencode(params)
-    url = "/threat-hunting"
     if query:
         url = f"{url}?{query}"
     return RedirectResponse(url=url, status_code=303)
@@ -1444,17 +1082,13 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
         )
     ensure_user_schema()
     available_permissions = list_permissions()
-    permission_name_map = {
-        perm["code"]: perm["name"] for perm in available_permissions
-    }
     permission_select_size = max(1, min(len(available_permissions), 4))
 
     con = _con()
     cur = con.cursor()
     cur.execute(
         """
-        SELECT id, username, is_active, COALESCE(is_admin,0) as is_admin,
-               COALESCE(can_access_threat_hunting,0) as can_access_threat_hunting
+        SELECT id, username, is_active, COALESCE(is_admin,0) as is_admin
         FROM users
         ORDER BY username
         """
@@ -1478,21 +1112,6 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
     mapped = []
     for u in users:
         assigned = list(permission_map.get(u["id"], []))
-        assigned_codes = {item["code"] for item in assigned}
-        has_threat = (
-            THREAT_HUNTING_PERMISSION_CODE in assigned_codes
-            or int(u["can_access_threat_hunting"]) == 1
-        )
-        if has_threat and THREAT_HUNTING_PERMISSION_CODE not in assigned_codes:
-            assigned.append(
-                {
-                    "code": THREAT_HUNTING_PERMISSION_CODE,
-                    "name": permission_name_map.get(
-                        THREAT_HUNTING_PERMISSION_CODE,
-                        "Threat Hunting",
-                    ),
-                }
-            )
         assigned_sorted = sorted(
             assigned,
             key=lambda item: item["name"].lower(),
@@ -1503,7 +1122,6 @@ def admin_users_page(request: Request, user: str = Depends(verify_user_required_
                 "username": u["username"],
                 "is_active": int(u["is_active"]) == 1,
                 "is_admin": int(u["is_admin"]) == 1,
-                "can_access_threat_hunting": has_threat,
                 "permission_codes": [item["code"] for item in assigned_sorted],
                 "permission_labels": [item["name"] for item in assigned_sorted],
             }
@@ -1531,600 +1149,12 @@ def legacy_admin_users_page(request: Request, user: str = Depends(verify_user_re
     return admin_users_page(request, user)
 
 
-@app.get("/threat-hunting", response_class=HTMLResponse)
-def threat_hunting_page(
-    request: Request,
-    user: str = Depends(_require_threat_hunting_page_access),
-):
-    params = request.query_params
-    filters = {
-        "q": (params.get("q") or "").strip(),
-        "technology": (params.get("technology") or "").strip(),
-        "siem": (params.get("siem") or "").strip(),
-        "environment": (params.get("environment") or "").strip(),
-        "status": (params.get("status") or "").strip(),
-        "mitre_tactic": (params.get("mitre_tactic") or "").strip(),
-        "mitre_technique": (params.get("mitre_technique") or "").strip(),
-        "criticality": (params.get("criticality") or "").strip(),
-    }
-    filters["criticality"] = threat_hunting.normalize_criticality(
-        filters["criticality"], strict=False
-    )
-    success_message = params.get("success")
-    error_message = params.get("error")
-    edit_param = params.get("edit")
-    view_param = params.get("view")
-
-    edit_use_case: Optional[Dict[str, Any]] = None
-    view_use_case: Optional[Dict[str, Any]] = None
-    edit_comments: List[Dict[str, Any]] = []
-    view_comments: List[Dict[str, Any]] = []
-    use_cases: List[Dict[str, Any]] = []
-    technology_options: List[str] = []
-    siem_options: List[str] = []
-    environment_options: List[str] = []
-    mitre_tactic_options: List[str] = []
-    mitre_technique_options: List[str] = []
-    criticality_options: List[str] = list(threat_hunting.CRITICALITY_LEVELS)
-
-    threat_cache_payload = _get_threat_hunting_payload()
-    environment_counts = threat_cache_payload.get("environment_counts") or []
-    summary_errors = threat_cache_payload.get("summary_errors") or []
-
-    monthly_use_case_counts: Dict[str, Dict[str, int]] = {}
-    env_name_map = _environment_name_map()
-
-    con = _con()
-    try:
-        threat_hunting.ensure_schema(con)
-        normalized_filter_env = (
-            _normalize_environment_value(filters["environment"], env_name_map)
-            if filters["environment"]
-            else ""
-        )
-        use_cases = threat_hunting.list_use_cases(
-            con,
-            search=filters["q"] or None,
-            technology=filters["technology"] or None,
-            siem=filters["siem"] or None,
-            status=filters["status"] or None,
-            mitre_tactic=filters["mitre_tactic"] or None,
-            mitre_technique=filters["mitre_technique"] or None,
-            criticality=filters["criticality"] or None,
-        )
-        canonical_use_cases: List[Dict[str, Any]] = []
-        for uc in use_cases:
-            _apply_multi_value_metadata(uc, env_name_map)
-            uc["display_created_at"] = _format_use_case_timestamp(
-                uc.get("created_at")
-            )
-            uc["display_updated_at"] = _format_use_case_timestamp(
-                uc.get("updated_at")
-            )
-            canonical_use_cases.append(uc)
-
-        if normalized_filter_env:
-            canonical_use_cases = [
-                uc
-                for uc in canonical_use_cases
-                if any(
-                    value.lower() == normalized_filter_env.lower()
-                    for value in uc.get("environment_values") or []
-                )
-            ]
-
-        use_cases = canonical_use_cases
-
-        tech_values = set(THREAT_HUNTING_TECHNOLOGY_SUGGESTIONS)
-        tech_values.update(threat_hunting.distinct_values(con, "technology"))
-        siem_values = set(THREAT_HUNTING_SIEM_SUGGESTIONS)
-        siem_values.update(threat_hunting.distinct_values(con, "siem"))
-        mitre_tactic_values = set(threat_hunting.distinct_values(con, "mitre_tactic"))
-        mitre_technique_values = set(
-            threat_hunting.distinct_values(con, "mitre_technique")
-        )
-        env_suggestions = set(_environment_suggestions())
-        env_suggestions.update(threat_hunting.distinct_values(con, "environment"))
-        env_suggestions.update(
-            _normalize_environment_value(item.get("environment"), env_name_map)
-            for item in environment_counts
-            if item.get("environment")
-        )
-        env_suggestions = {
-            _normalize_environment_value(value, env_name_map)
-            for value in env_suggestions
-            if value
-        }
-
-        technology_options = sorted(filter(None, tech_values), key=str.lower)
-        siem_options = sorted(filter(None, siem_values), key=str.lower)
-        environment_options = sorted(filter(None, env_suggestions), key=str.lower)
-        mitre_tactic_options = sorted(
-            filter(None, mitre_tactic_values), key=str.lower
-        )
-        mitre_technique_options = sorted(
-            filter(None, mitre_technique_values), key=str.lower
-        )
-        if edit_param:
-            try:
-                edit_id = int(edit_param)
-                edit_use_case = threat_hunting.get_use_case(con, edit_id)
-                if not edit_use_case and not error_message:
-                    error_message = "Caso de uso não encontrado."
-                if edit_use_case:
-                    edit_use_case["display_created_at"] = _format_use_case_timestamp(
-                        edit_use_case.get("created_at")
-                    )
-                    edit_use_case["display_updated_at"] = _format_use_case_timestamp(
-                        edit_use_case.get("updated_at")
-                    )
-                    _apply_multi_value_metadata(edit_use_case, env_name_map)
-                    edit_comments = _format_use_case_comments(
-                        threat_hunting.list_comments(con, edit_id)
-                    )
-            except ValueError:
-                if not error_message:
-                    error_message = "Identificador de caso de uso inválido."
-        if view_param:
-            try:
-                view_id = int(view_param)
-                view_use_case = threat_hunting.get_use_case(con, view_id)
-                if not view_use_case and not error_message:
-                    error_message = "Caso de uso não encontrado."
-                if view_use_case:
-                    view_use_case["display_created_at"] = _format_use_case_timestamp(
-                        view_use_case.get("created_at")
-                    )
-                    view_use_case["display_updated_at"] = _format_use_case_timestamp(
-                        view_use_case.get("updated_at")
-                    )
-                    _apply_multi_value_metadata(view_use_case, env_name_map)
-                    view_comments = _format_use_case_comments(
-                        threat_hunting.list_comments(con, view_id)
-                    )
-            except ValueError:
-                if not error_message:
-                    error_message = "Identificador de caso de uso inválido."
-    finally:
-        con.close()
-
-    api_monthly_counts_raw = threat_cache_payload.get("monthly_counts") or {}
-    api_monthly_counts: Dict[str, Dict[str, int]] = {}
-    if isinstance(api_monthly_counts_raw, dict):
-        for raw_env, month_map in api_monthly_counts_raw.items():
-            normalized_env = _normalize_environment_value(raw_env, env_name_map)
-            env_key = normalized_env or (str(raw_env).strip() if raw_env else "")
-            if not env_key or not isinstance(month_map, dict):
-                continue
-            target_map = api_monthly_counts.setdefault(env_key, {})
-            for month_key, value in month_map.items():
-                parsed = _parse_month_key(month_key)
-                if not parsed:
-                    parsed = _parse_month_key(str(month_key))
-                if not parsed:
-                    continue
-                year, month = parsed
-                normalized_key = f"{year:04d}-{month:02d}"
-                try:
-                    count_value = int(value)
-                except Exception:
-                    try:
-                        count_value = int(float(value))
-                    except Exception:
-                        continue
-                target_map[normalized_key] = target_map.get(normalized_key, 0) + max(0, count_value)
-
-    monthly_use_case_counts = api_monthly_counts
-
-    def _normalise_env_key(raw_env: Any) -> Optional[str]:
-        normalized_env = _normalize_environment_value(raw_env, env_name_map)
-        if normalized_env:
-            return normalized_env.lower()
-        if isinstance(raw_env, str):
-            stripped = raw_env.strip()
-            if stripped:
-                return stripped.lower()
-        return None
-
-    raw_log_source_types = threat_cache_payload.get("log_source_types") or {}
-    log_source_type_lookup: Dict[str, List[str]] = {}
-    if isinstance(raw_log_source_types, dict):
-        for raw_env, values in raw_log_source_types.items():
-            key = _normalise_env_key(raw_env)
-            if not key:
-                continue
-            collected: List[str] = []
-            if isinstance(values, (list, tuple, set)):
-                for value in values:
-                    try:
-                        text = str(value).strip()
-                    except Exception:
-                        continue
-                    if text and text not in collected:
-                        collected.append(text)
-            elif isinstance(values, str):
-                text = values.strip()
-                if text:
-                    collected.append(text)
-            if collected:
-                log_source_type_lookup[key] = sorted(
-                    collected, key=lambda item: item.lower()
-                )
-
-    raw_log_source_errors = threat_cache_payload.get("log_source_errors") or {}
-    log_source_error_lookup: Dict[str, str] = {}
-    if isinstance(raw_log_source_errors, dict):
-        for raw_env, value in raw_log_source_errors.items():
-            key = _normalise_env_key(raw_env)
-            if not key:
-                continue
-            try:
-                text = str(value).strip()
-            except Exception:
-                continue
-            if text:
-                log_source_error_lookup[key] = text
-
-    if filters.get("environment"):
-        filters["environment"] = _normalize_environment_value(
-            filters["environment"], env_name_map
-        )
-    else:
-        filters["environment"] = ""
-
-    if environment_counts:
-        for item in environment_counts:
-            normalized_env = _normalize_environment_value(
-                item.get("environment"), env_name_map
-            )
-            if normalized_env:
-                item["environment"] = normalized_env
-            source_value = str(item.get("source") or "api").lower()
-            if source_value != "api":
-                source_value = "api"
-            item["source"] = source_value
-
-    environment_summary_data = _build_environment_summary(
-        environment_counts,
-        monthly_use_case_counts,
-        env_name_map,
-        log_source_type_lookup,
-        log_source_error_lookup,
-    )
-    environment_summary_json = json.dumps(environment_summary_data, ensure_ascii=False)
-
-    context = {
-        "request": request,
-        "user": user,
-        "title": "Threat Hunting",
-        "success": success_message,
-        "error": error_message,
-        "filters": filters,
-        "use_cases": use_cases,
-        "environment_counts": environment_counts,
-        "summary_errors": summary_errors,
-        "technology_options": technology_options,
-        "siem_options": siem_options,
-        "environment_options": environment_options,
-        "mitre_tactic_options": mitre_tactic_options,
-        "mitre_technique_options": mitre_technique_options,
-        "criticality_options": criticality_options,
-        "edit_use_case": edit_use_case,
-        "edit_comments": edit_comments,
-        "view_use_case": view_use_case,
-        "view_comments": view_comments,
-        "is_admin": is_admin(user),
-        "environment_summary_json": environment_summary_json,
-    }
-    return templates.TemplateResponse("threat_hunting.html", context)
-
-
-def _build_use_case_payload(
-    name: str,
-    description: str,
-    technology: str,
-    siem_values: Sequence[str],
-    environment_values: Sequence[str],
-    mitre_tactic: str,
-    mitre_technique: str,
-    criticality: str,
-    logic: str,
-    is_active_value: str,
-    created_by: str,
-) -> Dict[str, str]:
-    normalized_active = (
-        str(is_active_value).strip().lower() in ("1", "true", "on", "yes")
-    )
-    env_mapping = _environment_name_map()
-    normalized_envs = _prepare_multi_select_values(
-        environment_values,
-        normalizer=lambda value: _normalize_environment_value(value, env_mapping),
-    )
-    normalized_siems = _prepare_multi_select_values(siem_values)
-    if not normalized_envs:
-        raise ValueError("Selecione pelo menos um ambiente válido.")
-    if not normalized_siems:
-        raise ValueError("Selecione pelo menos um SIEM válido.")
-    return {
-        "name": name.strip(),
-        "description": description.strip(),
-        "technology": technology.strip(),
-        "siem": threat_hunting.serialize_multi_values(normalized_siems),
-        "environment": threat_hunting.serialize_multi_values(normalized_envs),
-        "mitre_tactic": mitre_tactic.strip(),
-        "mitre_technique": mitre_technique.strip(),
-        "criticality": criticality.strip(),
-        "logic": logic.strip(),
-        "is_active": "1" if normalized_active else "0",
-        "created_by": created_by,
-    }
-
-
-@app.post("/threat-hunting/use-cases")
-def create_threat_hunting_use_case(
-    request: Request,
-    name: str = Form(...),
-    description: str = Form(...),
-    technology: str = Form(...),
-    siem: List[str] = Form([]),
-    environment: List[str] = Form([]),
-    mitre_tactic: str = Form(""),
-    mitre_technique: str = Form(""),
-    criticality: str = Form(""),
-    logic: str = Form(""),
-    comment: str = Form(""),
-    is_active: str = Form("on"),
-    user: str = Depends(_require_threat_hunting_page_access),
-):
-    payload = _build_use_case_payload(
-        name,
-        description,
-        technology,
-        siem,
-        environment,
-        mitre_tactic,
-        mitre_technique,
-        criticality,
-        logic,
-        is_active,
-        user,
-    )
-    comment_text = (comment or "").strip()
-    try:
-        con = _con()
-        try:
-            new_id = threat_hunting.create_use_case(con, payload)
-            logger.info(
-                "Use Case '%s' (ID %s) criado por %s",
-                payload["name"],
-                new_id,
-                user,
-            )
-            if comment_text:
-                threat_hunting.add_comment(con, new_id, comment_text, user)
-                logger.info(
-                    "Comentário registrado no Use Case '%s' (ID %s) por %s",
-                    payload["name"],
-                    new_id,
-                    user,
-                )
-        finally:
-            con.close()
-    except ValueError as exc:
-        return _redirect_threat_hunting(error=str(exc))
-    return _redirect_threat_hunting(
-        success=f"Use Case '{payload['name']}' criado com sucesso."
-    )
-
-
-@app.post("/threat-hunting/use-cases/{use_case_id}")
-def update_threat_hunting_use_case(
-    request: Request,
-    use_case_id: int,
-    name: str = Form(...),
-    description: str = Form(...),
-    technology: str = Form(...),
-    siem: List[str] = Form([]),
-    environment: List[str] = Form([]),
-    mitre_tactic: str = Form(""),
-    mitre_technique: str = Form(""),
-    criticality: str = Form(""),
-    logic: str = Form(""),
-    comment: str = Form(""),
-    is_active: str = Form("off"),
-    user: str = Depends(_require_threat_hunting_page_access),
-):
-    payload = _build_use_case_payload(
-        name,
-        description,
-        technology,
-        siem,
-        environment,
-        mitre_tactic,
-        mitre_technique,
-        criticality,
-        logic,
-        is_active,
-        user,
-    )
-    comment_text = (comment or "").strip()
-    try:
-        con = _con()
-        try:
-            updated = threat_hunting.update_use_case(con, use_case_id, payload)
-            if updated:
-                logger.info(
-                    "Use Case '%s' (ID %s) atualizado por %s",
-                    payload["name"],
-                    use_case_id,
-                    user,
-                )
-                if comment_text:
-                    threat_hunting.add_comment(con, use_case_id, comment_text, user)
-                    logger.info(
-                        "Comentário registrado no Use Case '%s' (ID %s) por %s",
-                        payload["name"],
-                        use_case_id,
-                        user,
-                    )
-        finally:
-            con.close()
-    except ValueError as exc:
-        return _redirect_threat_hunting(
-            error=str(exc),
-            extra_params={"edit": str(use_case_id)},
-        )
-    if not updated:
-        return _redirect_threat_hunting(
-            error="Caso de uso não encontrado.",
-            extra_params={"edit": str(use_case_id)},
-        )
-    return _redirect_threat_hunting(
-        success=f"Use Case '{payload['name']}' atualizado com sucesso."
-    )
-
-
-@app.post("/threat-hunting/use-cases/{use_case_id}/comments")
-def add_use_case_comment(
-    use_case_id: int,
-    comment: str = Form(...),
-    user: str = Depends(_require_threat_hunting_page_access),
-):
-    text = (comment or "").strip()
-    if not text:
-        return _redirect_threat_hunting(
-            error="O comentário não pode estar vazio.",
-            extra_params={"view": str(use_case_id)},
-        )
-    try:
-        con = _con()
-        try:
-            use_case = threat_hunting.get_use_case(con, use_case_id)
-            if not use_case:
-                raise ValueError("Caso de uso não encontrado.")
-            threat_hunting.add_comment(con, use_case_id, text, user)
-            logger.info(
-                "Comentário registrado no Use Case '%s' (ID %s) por %s",
-                use_case.get("name") or use_case_id,
-                use_case_id,
-                user,
-            )
-        finally:
-            con.close()
-    except ValueError as exc:
-        return _redirect_threat_hunting(
-            error=str(exc),
-            extra_params={"view": str(use_case_id)},
-        )
-    return _redirect_threat_hunting(
-        success="Comentário registrado com sucesso.",
-        extra_params={"view": str(use_case_id)},
-    )
-
-
-@app.post("/threat-hunting/use-cases/{use_case_id}/delete")
-def delete_threat_hunting_use_case(
-    use_case_id: int,
-    _user: str = Depends(_require_threat_hunting_page_access),
-):
-    con = _con()
-    existing_name: Optional[str] = None
-    try:
-        threat_hunting.ensure_schema(con)
-        existing = threat_hunting.get_use_case(con, use_case_id)
-        if not existing:
-            return _redirect_threat_hunting(
-                error="Caso de uso não encontrado para exclusão."
-            )
-        existing_name = existing.get("name") or str(use_case_id)
-        deleted = threat_hunting.delete_use_case(con, use_case_id)
-    except Exception as exc:
-        logger.exception("Falha ao excluir Use Case", exc_info=exc)
-        return _redirect_threat_hunting(
-            error="Erro ao excluir o Use Case. Tente novamente em instantes."
-        )
-    finally:
-        con.close()
-    if not deleted:
-        return _redirect_threat_hunting(
-            error="Não foi possível remover o Use Case informado."
-        )
-    return _redirect_threat_hunting(
-        success=f"Use Case '{existing_name}' removido com sucesso."
-    )
-
-
-@app.get("/threat-hunting/export")
-def export_threat_hunting_use_cases(
-    user: str = Depends(_require_threat_hunting_page_access),
-):
-    con = _con()
-    try:
-        records = threat_hunting.list_active_use_cases(con)
-    finally:
-        con.close()
-
-    env_name_map = _environment_name_map()
-    for row in records:
-        _apply_multi_value_metadata(row, env_name_map)
-
-    output = io.StringIO()
-    writer = csv.writer(output, delimiter=";", lineterminator="\n")
-    writer.writerow(
-        [
-            "ID",
-            "Nome",
-            "Descrição",
-            "Lógica",
-            "Tecnologia",
-            "SIEM",
-            "Ambiente",
-            "Tática MITRE",
-            "Técnica MITRE",
-            "Criticidade",
-            "Criado por",
-            "Criado em",
-            "Atualizado em",
-        ]
-    )
-    for row in records:
-        writer.writerow(
-            [
-                row["id"],
-                row["name"],
-                row["description"],
-                row.get("logic") or "",
-                row["technology"],
-                row["siem"],
-                row["environment"],
-                row.get("mitre_tactic") or "",
-                row.get("mitre_technique") or "",
-                row.get("criticality") or "",
-                row.get("created_by") or "",
-                row.get("created_at") or "",
-                row.get("updated_at") or "",
-            ]
-        )
-
-    csv_content = output.getvalue()
-    output.close()
-
-    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    filename = f"use-cases-ativos-{timestamp}.csv"
-    headers = {
-        "Content-Disposition": f'attachment; filename="{filename}"',
-        "Cache-Control": "no-store",
-    }
-    return Response(content=csv_content, media_type="text/csv", headers=headers)
-
-
 @app.post("/admin/users/create")
 def admin_create_user(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
     is_admin_flag: str = Form(None),
-    can_access_threat_hunting_flag: str = Form(None),
     permissions: List[str] = Form([]),
     user: str = Depends(verify_user_required_page),
 ):
@@ -2135,13 +1165,9 @@ def admin_create_user(
             status_code=403,
         )
     is_admin_val = 1 if (is_admin_flag in ("on", "true", "1", "yes")) else 0
-    permission_codes = list(permissions)
-    if can_access_threat_hunting_flag in ("on", "true", "1", "yes"):
-        permission_codes.append(THREAT_HUNTING_PERMISSION_CODE)
     permission_codes = sorted(
-        {code.strip() for code in permission_codes if str(code).strip()}
+        {code.strip() for code in permissions if str(code).strip()}
     )
-    threat_val = 1 if THREAT_HUNTING_PERMISSION_CODE in permission_codes else 0
     ensure_user_schema()
     con = _con()
     cur = con.cursor()
@@ -2149,10 +1175,10 @@ def admin_create_user(
     try:
         cur.execute(
             """
-            INSERT INTO users (username, password_hash, is_active, is_admin, can_access_threat_hunting)
-            VALUES (?,?,1,?,?)
+            INSERT INTO users (username, password_hash, is_active, is_admin)
+            VALUES (?,?,1,?)
             """,
-            (username, hash_password(password), is_admin_val, threat_val),
+            (username, hash_password(password), is_admin_val),
         )
         con.commit()
         new_user_id = int(cur.lastrowid)
@@ -2173,7 +1199,6 @@ def legacy_admin_create_user(
     username: str = Form(...),
     password: str = Form(...),
     is_admin_flag: str = Form(None),
-    can_access_threat_hunting_flag: str = Form(None),
     permissions: List[str] = Form([]),
     user: str = Depends(verify_user_required_page),
 ):
@@ -2182,7 +1207,6 @@ def legacy_admin_create_user(
         username,
         password,
         is_admin_flag,
-        can_access_threat_hunting_flag,
         permissions,
         user,
     )
@@ -2199,20 +1223,17 @@ def admin_toggle_user(request: Request, user_id: int = Form(...), field: str = F
     allowed_fields = {
         "is_active": "Status de atividade atualizado para {username}.",
         "is_admin": "Permissão de administrador atualizada para {username}.",
-        "can_access_threat_hunting": "Permissões de Threat Hunting atualizadas para {username}.",
     }
     if field not in allowed_fields:
         return _redirect_admin_users(error="Ação inválida para o usuário selecionado.")
     con = _con()
     cur = con.cursor()
-    new_permission_codes: Optional[Iterable[str]] = None
     target_username: Optional[str] = None
     try:
         cur.execute(
             """
             SELECT username, is_active,
-                   COALESCE(is_admin,0) as is_admin,
-                   COALESCE(can_access_threat_hunting,0) as can_access_threat_hunting
+                   COALESCE(is_admin,0) as is_admin
             FROM users
             WHERE id=?
             """,
@@ -2227,30 +1248,13 @@ def admin_toggle_user(request: Request, user_id: int = Form(...), field: str = F
                 return _redirect_admin_users(error="Você não pode desativar o seu próprio usuário.")
             if field == "is_admin" and int(row["is_admin"]) == 1:
                 return _redirect_admin_users(error="Você não pode remover suas próprias permissões de administrador.")
-        if field == "can_access_threat_hunting":
-            current_codes = set(get_user_permission_codes(user_id))
-            has_permission = (
-                THREAT_HUNTING_PERMISSION_CODE in current_codes
-                or int(row["can_access_threat_hunting"]) == 1
-            )
-            if has_permission:
-                current_codes.discard(THREAT_HUNTING_PERMISSION_CODE)
-            else:
-                current_codes.add(THREAT_HUNTING_PERMISSION_CODE)
-            new_permission_codes = current_codes
-        else:
-            cur.execute(
-                f"UPDATE users SET {field}=CASE {field} WHEN 1 THEN 0 ELSE 1 END WHERE id=?",
-                (user_id,),
-            )
-            con.commit()
+        cur.execute(
+            f"UPDATE users SET {field}=CASE {field} WHEN 1 THEN 0 ELSE 1 END WHERE id=?",
+            (user_id,),
+        )
+        con.commit()
     finally:
         con.close()
-    if field == "can_access_threat_hunting":
-        try:
-            set_user_permissions(user_id, new_permission_codes or [])
-        except ValueError as exc:
-            return _redirect_admin_users(error=str(exc))
     message_template = allowed_fields[field]
     return _redirect_admin_users(success=message_template.format(username=target_username or ""))
 
@@ -2362,8 +1366,7 @@ def api_admin_list(user: str = Depends(verify_user_required_api)):
         """
         SELECT username,
                COALESCE(is_admin,0) as is_admin,
-               is_active,
-               COALESCE(can_access_threat_hunting,0) as can_access_threat_hunting
+               is_active
         FROM users
         ORDER BY username
         """
@@ -2373,7 +1376,6 @@ def api_admin_list(user: str = Depends(verify_user_required_api)):
             "username": r[0],
             "is_admin": int(r[1]) == 1,
             "is_active": int(r[2]) == 1,
-            "can_access_threat_hunting": int(r[3]) == 1,
         }
         for r in cur.fetchall()
     ]

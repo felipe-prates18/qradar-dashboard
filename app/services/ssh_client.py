@@ -55,6 +55,44 @@ class SSHClient:
         )
         return code, out, err
 
+    CLEANUP_LUCENE_SCRIPT = "/opt/qradar/scripts/cleanup_lucene.sh"
+
+    def run_cleanup_lucene(self, env, days, timeout=1800):
+        host = env.get("host")
+        user = env.get("ssh_user")
+        key_path = env.get("ssh_key")
+
+        if not host or not user or not key_path:
+            raise ValueError("Configuração SSH incompleta para o ambiente")
+
+        try:
+            days_int = int(days)
+        except Exception:
+            raise ValueError("Parâmetro de dias inválido")
+        if days_int <= 0:
+            raise ValueError("Parâmetro de dias inválido")
+
+        cmd = f"{self.CLEANUP_LUCENE_SCRIPT} {days_int}"
+
+        c = self._connect(host, user, key_path)
+        try:
+            stdin, stdout, stderr = c.exec_command(
+                f"bash -lc {shlex.quote(cmd)}", get_pty=True, timeout=timeout
+            )
+            out = stdout.read().decode(errors="replace").strip()
+            err = stderr.read().decode(errors="replace").strip()
+            code = stdout.channel.recv_exit_status()
+        finally:
+            c.close()
+
+        logger.info(
+            "Execução de cleanup_lucene.sh host=%s dias=%s exit=%s",
+            host,
+            days_int,
+            code,
+        )
+        return {"exit_code": code, "stdout": out, "stderr": err}
+
     def connect_env(self, env):
         host = env.get("host")
         user = env.get("ssh_user")
@@ -200,6 +238,235 @@ class SSHClient:
                 "license_expiration_list": [],
                 "license_breakdown": [],
             }
+
+    def read_storage_percent(self, env, mount_path="/store"):
+        host = env.get("host")
+        user = env.get("ssh_user")
+        key_path = env.get("ssh_key")
+
+        cmd = f"df -P {shlex.quote(mount_path)} 2>/dev/null"
+
+        try:
+            c = self._connect(host, user, key_path)
+            code, out, err = self._exec(c, f"bash -lc {shlex.quote(cmd)}")
+            c.close()
+
+            lines = [line for line in (out or "").splitlines() if line.strip()]
+            if code != 0 or len(lines) < 2:
+                logger.warning(
+                    "Falha ao ler uso de disco host=%s mount=%s code=%s err=%s",
+                    host,
+                    mount_path,
+                    code,
+                    err,
+                )
+                return None
+
+            # Formato -P (POSIX) garante uma única linha por filesystem, evitando
+            # que nomes de device longos quebrem a saída em duas linhas como no -h.
+            fields = lines[-1].split()
+            if len(fields) < 5:
+                return None
+
+            pct_raw = fields[-2].rstrip("%")
+            pct = float(pct_raw)
+            logger.info("Uso de disco coletado via SSH host=%s mount=%s pct=%s", host, mount_path, pct)
+            return pct
+        except Exception as e:
+            logger.error(f"Falha na coleta de uso de disco em {host} ({mount_path}): {e}")
+            return None
+
+    _CPU_SAMPLE_SCRIPT = (
+        "read -r _ u1 n1 s1 i1 io1 irq1 sirq1 st1 _ < /proc/stat; "
+        "sleep 1; "
+        "read -r _ u2 n2 s2 i2 io2 irq2 sirq2 st2 _ < /proc/stat; "
+        "idle1=$((i1+io1)); idle2=$((i2+io2)); "
+        "total1=$((u1+n1+s1+i1+io1+irq1+sirq1+st1)); "
+        "total2=$((u2+n2+s2+i2+io2+irq2+sirq2+st2)); "
+        "dt=$((total2-total1)); di=$((idle2-idle1)); "
+        "if [ \"$dt\" -gt 0 ]; then "
+        "awk -v dt=\"$dt\" -v di=\"$di\" 'BEGIN{printf \"%.1f\\n\", 100*(1-di/dt)}'; "
+        "fi"
+    )
+
+    # RAM+swap combinados, igual à semântica do item SNMP legado que o Zabbix já
+    # usava (memAvailReal+memAvailSwap sobre memTotalReal+memTotalSwap) — mantém o
+    # número na mesma faixa que os limiares de alerta já calibrados esperam.
+    _MEM_SAMPLE_SCRIPT = (
+        "awk '/MemTotal:/{mt=$2} /MemAvailable:/{ma=$2} "
+        "/SwapTotal:/{st=$2} /SwapFree:/{sf=$2} "
+        "END{t=mt+st; a=ma+sf; if(t>0) printf \"%.1f\\n\", 100*(1-a/t)}' /proc/meminfo"
+    )
+
+    def read_cpu_percent(self, env):
+        host = env.get("host")
+        user = env.get("ssh_user")
+        key_path = env.get("ssh_key")
+
+        try:
+            c = self._connect(host, user, key_path)
+            code, out, err = self._exec(c, f"bash -lc {shlex.quote(self._CPU_SAMPLE_SCRIPT)}")
+            c.close()
+
+            lines = [line for line in (out or "").splitlines() if line.strip()]
+            if code != 0 or not lines:
+                logger.warning("Falha ao ler CPU host=%s code=%s err=%s", host, code, err)
+                return None
+
+            pct = float(lines[-1].strip())
+            logger.info("CPU coletada via SSH host=%s pct=%s", host, pct)
+            return pct
+        except Exception as e:
+            logger.error(f"Falha na coleta de CPU em {host}: {e}")
+            return None
+
+    def read_memory_percent(self, env):
+        host = env.get("host")
+        user = env.get("ssh_user")
+        key_path = env.get("ssh_key")
+
+        try:
+            c = self._connect(host, user, key_path)
+            code, out, err = self._exec(c, f"bash -lc {shlex.quote(self._MEM_SAMPLE_SCRIPT)}")
+            c.close()
+
+            lines = [line for line in (out or "").splitlines() if line.strip()]
+            if code != 0 or not lines:
+                logger.warning("Falha ao ler memória host=%s code=%s err=%s", host, code, err)
+                return None
+
+            pct = float(lines[-1].strip())
+            logger.info("Memória coletada via SSH host=%s pct=%s", host, pct)
+            return pct
+        except Exception as e:
+            logger.error(f"Falha na coleta de memória em {host}: {e}")
+            return None
+
+    def resolve_appliance_ssh_target(self, env, appliance_entry):
+        name = (appliance_entry or {}).get("name")
+        if not name:
+            return None
+        for target in env.get("connectivity_targets") or []:
+            if isinstance(target, dict) and target.get("name") == name:
+                return target.get("target")
+        return None
+
+    def _exec_via_jump(self, client, target_ip, remote_cmd, timeout=40):
+        """Executa remote_cmd em target_ip via SSH aninhado a partir de um client
+        já conectado ao console. Retorna (status, out, err) onde status é:
+          "ok"          - comando executado e retornou dados
+          "jump_failed" - a conexão SSH console->appliance falhou (sem trust,
+                           appliance fora do ar, IP incorreto etc.)
+          "cmd_failed"  - a conexão deu certo mas o comando remoto retornou
+                           código de saída != 0
+        """
+        if not target_ip:
+            return "jump_failed", "", "IP de destino não informado"
+
+        inner = f"bash -lc {shlex.quote(remote_cmd)}"
+        jump_cmd = (
+            "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 "
+            f"{shlex.quote(target_ip)} {shlex.quote(inner)}"
+        )
+
+        try:
+            stdin, stdout, stderr = client.exec_command(jump_cmd, timeout=timeout)
+            out = stdout.read().decode(errors="ignore").strip()
+            err = stderr.read().decode(errors="ignore").strip()
+            code = stdout.channel.recv_exit_status()
+        except Exception as e:
+            return "jump_failed", "", str(e)
+
+        # Convenção do OpenSSH: o cliente ssh sai com 255 quando a própria conexão
+        # falha (sem trust, host fora do ar, porta fechada), diferente de um
+        # comando remoto que rodou e retornou erro.
+        if code == 255:
+            return "jump_failed", out, err
+        if code != 0:
+            return "cmd_failed", out, err
+        return "ok", out, err
+
+    def _appliance_lines(self, env, target_ip, remote_cmd, label):
+        host = env.get("host")
+        user = env.get("ssh_user")
+        key_path = env.get("ssh_key")
+
+        if not target_ip:
+            logger.warning("Sem IP resolvido para salto SSH host=%s label=%s", host, label)
+            return None
+
+        try:
+            client = self._connect(host, user, key_path)
+        except Exception as e:
+            logger.error(f"Falha ao conectar no console para salto SSH host={host} label={label}: {e}")
+            return None
+
+        try:
+            status, out, err = self._exec_via_jump(client, target_ip, remote_cmd)
+        except Exception as e:
+            logger.error(f"Falha inesperada no salto SSH host={host} target={target_ip} label={label}: {e}")
+            return None
+        finally:
+            client.close()
+
+        if status == "jump_failed":
+            logger.warning(
+                "Salto SSH console->appliance falhou host=%s target=%s label=%s err=%s",
+                host, target_ip, label, err,
+            )
+            return None
+        if status == "cmd_failed":
+            logger.warning(
+                "Comando remoto falhou no appliance host=%s target=%s label=%s err=%s",
+                host, target_ip, label, err,
+            )
+            return None
+
+        lines = [line for line in (out or "").splitlines() if line.strip()]
+        return lines or None
+
+    def read_appliance_storage_percent(self, env, target_ip, mount_path="/store"):
+        host = env.get("host")
+        cmd = f"df -P {shlex.quote(mount_path)} 2>/dev/null"
+        lines = self._appliance_lines(env, target_ip, cmd, label=f"storage({mount_path})")
+        if not lines or len(lines) < 2:
+            return None
+        fields = lines[-1].split()
+        if len(fields) < 5:
+            return None
+        try:
+            pct = float(fields[-2].rstrip("%"))
+        except Exception:
+            return None
+        logger.info(
+            "Uso de disco de appliance coletado via SSH host=%s target=%s mount=%s pct=%s",
+            host, target_ip, mount_path, pct,
+        )
+        return pct
+
+    def read_appliance_cpu_percent(self, env, target_ip):
+        host = env.get("host")
+        lines = self._appliance_lines(env, target_ip, self._CPU_SAMPLE_SCRIPT, label="cpu")
+        if not lines:
+            return None
+        try:
+            pct = float(lines[-1].strip())
+        except Exception:
+            return None
+        logger.info("CPU de appliance coletada via SSH host=%s target=%s pct=%s", host, target_ip, pct)
+        return pct
+
+    def read_appliance_memory_percent(self, env, target_ip):
+        host = env.get("host")
+        lines = self._appliance_lines(env, target_ip, self._MEM_SAMPLE_SCRIPT, label="memory")
+        if not lines:
+            return None
+        try:
+            pct = float(lines[-1].strip())
+        except Exception:
+            return None
+        logger.info("Memória de appliance coletada via SSH host=%s target=%s pct=%s", host, target_ip, pct)
+        return pct
 
     def _jmx_parse_cmd(self, bean, port):
         return (
@@ -452,31 +719,39 @@ class SSHClient:
                     )
                     continue
 
-                ping_cmd = f"ping -c 4 -w 8 {shlex.quote(target)}"
-                code, out, err = self._exec(client, f"bash -lc {shlex.quote(ping_cmd)}")
+                # ICMP costuma ser bloqueado por política do cliente em alguns ambientes,
+                # gerando falso-positivo. A comunicação entre appliances QRadar é
+                # obrigatoriamente via SSH, então validamos a porta 22 (TCP connect via
+                # /dev/tcp do bash) em vez de depender de ping.
+                ssh_check_cmd = (
+                    "start_ms=$(date +%s%3N); "
+                    "timeout 5 bash -c 'exec 3<>\"/dev/tcp/$0/22\"' "
+                    f"{shlex.quote(target)} 2>/dev/null; "
+                    "rc=$?; "
+                    "end_ms=$(date +%s%3N); "
+                    'printf "RC=%s ELAPSED=%s\\n" "$rc" "$((end_ms-start_ms))"'
+                )
+                code, out, err = self._exec(client, f"bash -lc {shlex.quote(ssh_check_cmd)}")
 
-                reachable = code == 0
+                reachable = False
                 latency_ms = None
                 packet_loss = None
 
-                try:
-                    loss_match = re.search(r"([0-9.]+)% packet loss", out)
-                    if loss_match:
-                        packet_loss = float(loss_match.group(1))
-                except Exception:
-                    packet_loss = None
+                rc_match = re.search(r"RC=(\d+)", out)
+                if rc_match:
+                    reachable = rc_match.group(1) == "0"
 
                 try:
-                    rtt_match = re.search(r"=\s*([0-9.]+)/([0-9.]+)/([0-9.]+)/([0-9.]+)", out)
-                    if rtt_match:
-                        latency_ms = float(rtt_match.group(2))
+                    elapsed_match = re.search(r"ELAPSED=(\d+)", out)
+                    if elapsed_match and reachable:
+                        latency_ms = float(elapsed_match.group(1))
                 except Exception:
                     latency_ms = None
 
                 status = "online" if reachable else "offline"
                 error_msg = None
                 if not reachable:
-                    error_msg = err or "Não foi possível alcançar o destino."
+                    error_msg = err or "Porta SSH (22) inacessível no destino."
                 results.append(
                     {
                         "name": name,

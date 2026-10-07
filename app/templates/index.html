@@ -28,14 +28,8 @@
         <span class="user-label small">Logado como {{user}}</span>
         <div class="header-buttons">
           <a class="btn secondary" href="/me/password">Minha conta</a>
-          {% if can_access_threat_hunting %}
-          <a class="btn secondary" href="/threat-hunting">Hunting Wiki</a>
-          {% endif %}
           {% if is_admin %}
           <a class="btn secondary" href="/admin/users">Admin</a>
-          {% endif %}
-          {% if can_access_reports %}
-          <a class="btn secondary" href="/reports">Reports</a>
           {% endif %}
           <a class="btn secondary" href="/logout">Sair</a>
         </div>
@@ -43,7 +37,7 @@
     </header>
 
     <section class="card">
-      <div id="monitor-app-root"></div>
+      <div id="monitor-app-root" data-is-admin="{{ 'true' if is_admin else 'false' }}"></div>
     </section>
   </div>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -53,7 +47,13 @@
     {% raw %}
     const { useState, useEffect, useCallback, useRef } = React;
 
+    const IS_ADMIN = (document.getElementById('monitor-app-root') || {}).dataset
+      ? document.getElementById('monitor-app-root').dataset.isAdmin === 'true'
+      : false;
+
     const DAY_MS = 24 * 60 * 60 * 1000;
+    const LUCENE_CLEANUP_STORAGE_THRESHOLD = 80;
+    const LUCENE_CLEANUP_DAY_OPTIONS = [5, 10, 15];
     const STATUS_ICON = {
       normal: '🟢',
       warning: '🟡',
@@ -633,7 +633,160 @@
       );
     }
 
-    function EnvironmentCard({ environment, isOpen, onToggle }) {
+    function LuceneCleanupAction({ environment, onRefresh }) {
+      const envId = environment && environment.id;
+      const storagePercent = parseNumberValue(environment.storage);
+      const [isModalOpen, setModalOpen] = useState(false);
+      const [selectedDays, setSelectedDays] = useState(15);
+      const [job, setJob] = useState(null);
+      const pollRef = useRef(null);
+
+      const stopPolling = useCallback(() => {
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      }, []);
+
+      useEffect(() => stopPolling, [stopPolling]);
+
+      const pollStatus = useCallback(() => {
+        if (!envId) return;
+        fetch(`/api/admin/environments/${envId}/cleanup-lucene`)
+          .then(res => (res.ok ? res.json() : null))
+          .then(data => {
+            if (!data) return;
+            setJob(data);
+            if (data.status !== 'running') {
+              stopPolling();
+              // O backend já reconsultou o storage e atualizou o cache antes de
+              // marcar o job como concluído, então recarregar agora já traz o
+              // valor pós-limpeza para o card (badge, barra, status geral).
+              if (typeof onRefresh === 'function') {
+                onRefresh();
+              }
+            }
+          })
+          .catch(() => {});
+      }, [envId, stopPolling, onRefresh]);
+
+      const startCleanup = useCallback(async () => {
+        if (!envId) return;
+        setModalOpen(false);
+        setJob({ status: 'running', days: selectedDays });
+        try {
+          const response = await fetch(`/api/admin/environments/${envId}/cleanup-lucene`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ days: selectedDays })
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            setJob({
+              status: 'error',
+              days: selectedDays,
+              error: data.detail || 'Falha ao iniciar a limpeza.'
+            });
+            return;
+          }
+          setJob(data);
+          stopPolling();
+          pollRef.current = setInterval(pollStatus, 4000);
+        } catch (err) {
+          setJob({ status: 'error', days: selectedDays, error: 'Falha ao iniciar a limpeza.' });
+        }
+      }, [envId, selectedDays, pollStatus, stopPolling]);
+
+      const hasVisibleJob = job && (job.status === 'running' || job.status === 'success' || job.status === 'error');
+
+      if (!IS_ADMIN || !envId) {
+        return null;
+      }
+      if (!hasVisibleJob && (storagePercent === null || storagePercent < LUCENE_CLEANUP_STORAGE_THRESHOLD)) {
+        return null;
+      }
+
+      const isRunning = job && job.status === 'running';
+      const severityClass = storagePercent !== null && storagePercent >= 90 ? 'is-critical' : 'is-warning';
+
+      return (
+        <div className={`lucene-cleanup-box ${severityClass}`}>
+          <div className="lucene-cleanup-info">
+            <p><strong>Storage em {storagePercent !== null ? `${storagePercent.toFixed(1)}%` : '—'}</strong></p>
+            <p className="lucene-cleanup-description">
+              É possível liberar espaço removendo índices Lucene (busca) antigos, sem afetar eventos ou flows.
+            </p>
+            {job && job.status === 'success' ? (
+              <p className="lucene-cleanup-result is-success">
+                Limpeza concluída ({job.days} dias){job.finished_at ? ` às ${new Date(job.finished_at).toLocaleString('pt-BR')}` : ''}
+                {typeof job.storage_after === 'number' ? ` — storage atual: ${job.storage_after.toFixed(1)}%` : ''}.
+              </p>
+            ) : job && job.status === 'error' ? (
+              <p className="lucene-cleanup-result is-error">Falha: {job.error || 'erro desconhecido'}.</p>
+            ) : isRunning ? (
+              <p className="lucene-cleanup-result is-running">Executando limpeza ({job.days} dias)…</p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn danger small"
+            onClick={() => setModalOpen(true)}
+            disabled={isRunning}
+          >
+            {isRunning ? 'Executando…' : 'Limpar índices Lucene'}
+          </button>
+          {isModalOpen
+            ? ReactDOM.createPortal(
+                <div className="modal is-visible" role="dialog" aria-modal="true">
+                  <div className="modal-overlay" onClick={() => setModalOpen(false)} />
+                  <div className="modal-content">
+                    <div className="modal-header">
+                      <h3>Limpar índices Lucene — {environment.name}</h3>
+                      <button
+                        type="button"
+                        className="modal-close"
+                        onClick={() => setModalOpen(false)}
+                        aria-label="Fechar"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <p className="modal-meta">
+                      Executa o <code>cleanup_lucene.sh</code> como root neste console, removendo
+                      índices Lucene (busca) mais antigos que o número de dias selecionado. Eventos e
+                      flows brutos não são removidos.
+                    </p>
+                    <div className="lucene-cleanup-days">
+                      {LUCENE_CLEANUP_DAY_OPTIONS.map(days => (
+                        <button
+                          key={days}
+                          type="button"
+                          className={`btn small ${selectedDays === days ? '' : 'secondary'}`}
+                          onClick={() => setSelectedDays(days)}
+                          aria-pressed={selectedDays === days}
+                        >
+                          {days} dias
+                        </button>
+                      ))}
+                    </div>
+                    <div className="modal-actions">
+                      <button type="button" className="btn secondary" onClick={() => setModalOpen(false)}>
+                        Cancelar
+                      </button>
+                      <button type="button" className="btn danger" onClick={startCleanup}>
+                        Executar limpeza ({selectedDays} dias)
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )
+            : null}
+        </div>
+      );
+    }
+
+    function EnvironmentCard({ environment, isOpen, onToggle, onRefresh }) {
       const licenseExpRawList = Array.isArray(environment.license_exp_list)
         ? environment.license_exp_list.filter(Boolean)
         : [];
@@ -820,6 +973,7 @@
             aria-hidden={!isOpen}
           >
             <div ref={detailsRef} className="env-details-inner">
+                <LuceneCleanupAction environment={environment} onRefresh={onRefresh} />
                 {licenseBreakdown.length ? (
                   <div className="license-breakdown">
                     {licenseBreakdown.map((item, idx) => {
@@ -1672,6 +1826,7 @@
                   environment={environment}
                   isOpen={openItems.has(key)}
                   onToggle={() => toggleItem(key)}
+                  onRefresh={loadData}
                 />
               );
             })}
@@ -1775,7 +1930,7 @@
           </div>
           <div className="monitor-tags">
             <span className="badge">Serviços via systemctl</span>
-            <span className="badge warn">Latência via ping</span>
+            <span className="badge warn">Conectividade via SSH (porta 22)</span>
           </div>
           {error ? <div className="error-message">{error}</div> : null}
           {rows.length === 0 && !loading ? (

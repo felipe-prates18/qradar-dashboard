@@ -16,6 +16,10 @@
         <p class="login-subtitle">Engineered for Digital Protection.</p>
       </header>
 
+      {% if error %}
+      <div class="alert error">{{ error }}</div>
+      {% endif %}
+
       <form method="post" action="/login" class="login-form" id="loginForm">
         <div class="field">
           <label class="field-label" for="username">Usuário</label>
@@ -61,8 +65,6 @@
           <span class="btn-spinner" aria-hidden="true"></span>
         </button>
       </form>
-
-      <p class="login-note">ℹ️ Usuário e senha iniciais definidos em <code>config.json</code></p>
     </div>
   </div>
 

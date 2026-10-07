@@ -1,0 +1,57 @@
+# QRadar Dashboard
+
+Painel de monitoramento e alertas para os ambientes QRadar (health check, conectividade, EPS, licenças, ofensas e ingestão de log sources), com notificações via Teams.
+
+## Deploy
+
+```bash
+./deploy.sh
+```
+
+O script reconstrói a imagem Docker e recria o container `qradar-dashboard` via `docker compose`.
+
+## Notas de atualização
+
+### 2026-08-12
+
+- **Duas vulnerabilidades do pentest black-box da Asper (`Asper - QRadar - Black Box Web - 12-08-2026.pdf`) corrigidas e já em produção: headers HTTP de segurança ausentes (Média, CVSS 4.3) e divulgação de stack tecnológico (Baixa, CVSS 3.7).**
+  Backup completo pré-alteração gerado antes de qualquer mudança (`/opt/backups/qradar-dashboard-backup-20260812-145355.tar.gz`).
+  Novo `SecurityHeadersMiddleware` em `app/main.py` injeta `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy`, `Referrer-Policy` e `Permissions-Policy` em toda resposta. A CSP não é a genérica sugerida no relatório — foi calibrada pros recursos reais do app: `script-src` libera `https://unpkg.com` (React/Babel standalone carregados via CDN em `index.html`/`tv.html`) e usa `unsafe-inline`/`unsafe-eval` porque o app compila JSX no navegador em runtime, sem build step; `connect-src`/`img-src`/`style-src` ficam restritos a `'self'` pois todo o resto (fetch de API, CSS, favicon) é same-origin. Confirmado por grep em todos os templates que `unpkg.com` é o único domínio externo referenciado.
+  Pra divulgação de stack, a correção do próprio relatório (`response.headers.pop("server")` num middleware) foi testada e **não funciona**: o Uvicorn reinsere `Server: uvicorn` automaticamente sempre que esse header não vem setado pelo app (`config.py` do Uvicorn só pula a injeção se `b"server"` já estiver presente nos headers da resposta). A correção real foi a flag `--no-server-header` no comando de start do Uvicorn (`Dockerfile`). Além disso, um exception handler pra `RequestValidationError` em `app/main.py` substitui o erro 422 padrão do Pydantic (que expunha `loc`/`msg`/`type`, identificando FastAPI) por `{"error": "Requisição inválida."}`.
+  Validado antes do deploy: app rodando localmente numa venv isolada, headers conferidos via `curl`, resposta 422 conferida, e páginas/estáticos carregando com status 200 sob a nova CSP. Sem browser disponível na sessão pra validação visual (console JS), mas a análise estática dos templates não encontrou nenhuma referência a domínio fora de `unpkg.com` que a CSP pudesse quebrar. Deploy em produção feito via `./deploy.sh`, headers e formato do erro 422 reconfirmados via `curl` direto em `172.31.1.253:9000` após o container subir.
+  **Pendente:** o achado de maior severidade do relatório — comunicação em texto plano, HTTP sem TLS (Média, CVSS 4.8) — não foi endereçado; login e demais dados operacionais ainda trafegam sem criptografia.
+
+### 2026-08-11
+
+- **Sessão de login passou a expirar em 4 horas (antes, 12 horas).**
+  `SESSION_DURATION` em `app/auth.py` e `SESSION_MAX_AGE_SECONDS` em `app/main.py` reduzidos de 12h pra 4h. A validação é dupla: o cookie de sessão (`SessionMiddleware`) expira no navegador em 4h, e o backend (`verify_user`) também confere no servidor o tempo decorrido desde `login_at`, então a sessão cai mesmo que o cookie ainda esteja presente.
+- **Bloqueio temporário de conta após 5 tentativas de login com senha incorreta.**
+  Novas colunas `failed_attempts` e `locked_until` na tabela `users` (migração automática, mesmo mecanismo já usado pra `is_admin`). Cada senha errada incrementa o contador (`_register_failed_login` em `app/auth.py`); ao atingir `MAX_LOGIN_ATTEMPTS` tentativas, a conta fica bloqueada por 15 minutos (`locked_until`), inclusive pra tentativas com a senha correta durante a janela de bloqueio. `POST /login` retorna HTTP 429 com a mensagem de bloqueio e o tempo restante; login bem-sucedido zera o contador (`_reset_login_attempts`). Só rastreia tentativas pra usuários existentes, sem gerar escrita no banco pra usuários inexistentes.
+  Limite inicial era 3, mas foi elevado pra 5 (2026-08-11, mesmo dia) depois que um teste real mostrou o quanto é fácil bater no limite sem perceber — um F5/reenvio de formulário na página de erro conta como nova tentativa.
+- **Mensagem "Usuário e senha iniciais definidos em config.json" removida da tela de login.**
+  Texto informativo (`app/templates/login.html`) que expunha detalhe de implementação sem necessidade pro usuário final.
+- **Erro de login (senha inválida / conta bloqueada) agora é exibido na tela.**
+  O template `login.html` nunca renderizava a variável `error` retornada pelo backend — nem a mensagem de "usuário ou senha inválidos" nem a de bloqueio apareciam. Adicionado bloco `{% if error %}` reaproveitando a classe `.alert.error` já existente em `style.css`.
+
+### 2026-08-07
+
+- **Script `cleanup_lucene.sh` atualizado em todas as 12 consoles QRadar cadastradas, agora aceitando os dias de retenção como parâmetro.**
+  A versão anterior do script (fixa em 15 dias) foi substituída pela versão em `scripts/cleanup_lucene.sh` deste repositório em `/opt/qradar/scripts/cleanup_lucene.sh` de cada console, via SSH, com backup do script antigo (`cleanup_lucene.sh.bak.<timestamp>`) antes da sobrescrita e permissões `root:root 755` preservadas. A console PERNAMBUCANAS não tinha o script nem o diretório instalado — foram criados do zero, incluindo a entrada no crontab do root (`30 2 1 * *`, mesmo comentário e agendamento mensal das demais consoles).
+- **Novo botão "Limpar índices Lucene" no card de cada ambiente do Monitoramento, pra rodar o expurgo direto pela dashboard.**
+  Visível só para usuários admin, e só quando o storage do console está em 80% ou mais (`app/templates/index.html::LuceneCleanupAction`). Ao clicar, abre um modal pra escolher a retenção (5, 10 ou 15 dias) e dispara `POST /api/admin/environments/{id}/cleanup-lucene` (`app/main.py`), que roda o script via SSH em background thread (`app/services/ssh_client.py::run_cleanup_lucene`) sem travar a requisição; o front faz polling de `GET /api/admin/environments/{id}/cleanup-lucene` a cada 4s pra acompanhar o status (`running`/`success`/`error`). Disparo duplicado no mesmo ambiente retorna 409 enquanto uma execução já está em andamento. Antes de marcar o job como concluído, o backend reconsulta o storage real via SSH e atualiza o cache de monitoramento daquele ambiente (`_patch_monitoring_cache_storage`), e o front dispara um refresh automático do dashboard assim que o job sai de `running` — o card já aparece com o storage pós-limpeza, sem esperar o próximo ciclo de coleta (180s). Toda execução é registrada no log da aplicação (usuário, ambiente, dias, exit code). Validado em produção contra a console BANESE (84% de storage): execução com 15 dias e depois com 5 dias, ambas com `exit_code=0` confirmado tanto no log da app quanto via SSH direto na console (lockfile, log do script, `df -P /store`).
+
+### 2026-08-06
+
+- **Alerta de "Falha de conectividade" agora valida SSH (porta 22) em vez de ICMP.**
+  Em ambientes onde o tráfego ICMP é bloqueado por política do cliente, o `ping` gerava falso-positivo. Como a comunicação entre appliances QRadar é obrigatoriamente via SSH, a checagem de conectividade (`app/services/ssh_client.py`) passou a testar a abertura da porta 22 (TCP connect via `/dev/tcp` do bash) em vez de enviar pacotes ICMP.
+- **Startup da aplicação deixou de bloquear em até 7-9 minutos.**
+  O evento de startup aguardava a primeira coleta completa de todos os ambientes (monitoramento, Crowdstrike, health/SSH, threat hunting, Jira) antes de liberar o Uvicorn. Essa espera foi removida (`app/main.py`, `_start_cache_refresh`): a primeira coleta agora roda em background, dentro do próprio loop periódico de atualização de cache, e a aplicação fica disponível em segundos após o deploy.
+- **CPU, memória e storage passaram a ser coletados via SSH, com o Zabbix como fallback.**
+  O item SNMP de `/store` do Zabbix (`vfs.fs.pused`, OID legada `dskPercent`) tem um bug conhecido de overflow em filesystems acima de ~2TB: o console PETRONECT aparecia com 93% de uso enquanto o `df -h` real mostrava 35%. `app/services/ssh_client.py` ganhou `read_cpu_percent`, `read_memory_percent` e `read_storage_percent`, que leem `/proc/stat`, `/proc/meminfo` e `df -P /store` direto no console; `app/collectors.py` sobrescreve o valor do Zabbix quando o SSH responde, e mantém o Zabbix como rede de segurança se o SSH falhar. Validado ao vivo contra os 12 consoles antes do deploy.
+- **A mesma coleta foi estendida pra appliances (Event Collector, Data Node, App Host, Event Processor) via salto SSH console→appliance.**
+  Generalizamos o mecanismo de SSH aninhado que já existia só pra JMX/EPS (`ssh_client.py::read_eps`) num helper reutilizável (`_exec_via_jump`), com `resolve_appliance_ssh_target` resolvendo o IP do appliance a partir de `connectivity_targets_json`. Isso resolve o problema de appliances que não reportavam pro Zabbix — em alguns casos porque o host nem está cadastrado no inventário do Zabbix (confirmado via API pra Event Collector do BANESE e do PERNAMBUCANAS), em outros porque o item nunca foi populado (Event Collector do ECAD). Corrigido também um mismatch de nome entre `appliances_json` e `connectivity_targets_json` no ambiente CNA que impedia a resolução do IP.
+  Ao rodar, a memória via SSH (RAM sem swap) inicialmente destoou do que o Zabbix reportava (RAM+swap), o suficiente pra cruzar o limiar de 90% de um alerta de "consumo crítico prolongado" (caso real: BANESE foi de ~67% pra 92%). Ajustamos `_MEM_SAMPLE_SCRIPT` pra somar RAM+swap, igual à semântica que o Zabbix já usava, mantendo os limiares de alerta existentes válidos.
+- **Validação completa do motor de alertas (`app/alerts.py`) após as mudanças acima.**
+  Confirmado, com um dry-run isolado (estado próprio, sem disparar Teams de verdade) contra dados reais de produção: os alertas de consumo/armazenamento leem a mesma fonte que a coleta agora usa (SSH-primário); EPS, licença, ingestão Crowdstrike, postfix, ofensas, conectividade, URLs monitoradas e Jira não foram afetados (fontes de dado independentes). Nenhuma regressão encontrada.
+- **Páginas "Reports" e "Hunting Wiki" removidas por completo, junto com tudo que existia só pra alimentá-las.**
+  Backup completo do projeto gerado antes de qualquer alteração (`/opt/backups/`). Removidos os arquivos `app/services/reports.py`, `app/templates/reports.html`, `app/threat_hunting.py`, `app/templates/threat_hunting.html` e `app/services/qradar_rules.py` (usado só pelos totais mensais do Hunting Wiki); as rotas `/reports*` e `/threat-hunting*`; os caches, helpers e constantes exclusivos dessas páginas em `app/main.py`; as permissões `reports`/`threat_hunting` e a coluna legada `users.can_access_threat_hunting` em `app/auth.py`; os links de navegação em `index.html`; e 83 classes CSS exclusivas em `style.css` (validadas por diff contra os templates originais do backup, pra garantir que nada compartilhado fosse removido). No banco, foram dropadas as tabelas `use_cases`, `use_case_comments` e `use_case_monthly_totals`, e removidas as linhas de permissão órfãs. Rotas e tabelas compartilhadas com outras funcionalidades (ex.: `ingestion_store`, `environment_store`, a UI genérica de permissões em `admin_users.html`) foram preservadas intactas — só as partes exclusivas dessas duas páginas foram tocadas. Validado com smoke test cobrindo login, dashboard principal, admin de usuários e as APIs antes do deploy.

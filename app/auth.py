@@ -17,12 +17,10 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 auth_router = APIRouter()
 LEGACY_SHA256_REGEX = re.compile(r"^[0-9a-f]{64}$")
 BCRYPT_COST = 12
-SESSION_DURATION = timedelta(hours=12)
+SESSION_DURATION = timedelta(hours=4)
 WALLBOARD_COOKIE_NAME = "wallboard_token"
-THREAT_HUNTING_PERMISSION_CODE = "threat_hunting"
-THREAT_HUNTING_PERMISSION_NAME = "Threat Hunting"
-REPORTS_PERMISSION_CODE = "reports"
-REPORTS_PERMISSION_NAME = "Reports"
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_DURATION = timedelta(minutes=15)
 
 with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
@@ -49,10 +47,11 @@ def _ensure_user_columns(cur) -> bool:
     if "is_admin" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
         changed = True
-    if "can_access_threat_hunting" not in cols:
-        cur.execute(
-            "ALTER TABLE users ADD COLUMN can_access_threat_hunting INTEGER DEFAULT 0"
-        )
+    if "failed_attempts" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN failed_attempts INTEGER DEFAULT 0")
+        changed = True
+    if "locked_until" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN locked_until TEXT")
         changed = True
     return changed
 
@@ -91,43 +90,7 @@ def _ensure_permission_tables(cur) -> bool:
         ON user_permissions(permission_id)
         """
     )
-    default_permissions = (
-        (THREAT_HUNTING_PERMISSION_CODE, THREAT_HUNTING_PERMISSION_NAME),
-        (REPORTS_PERMISSION_CODE, REPORTS_PERMISSION_NAME),
-    )
-    for code, name in default_permissions:
-        cur.execute(
-            "SELECT id FROM permissions WHERE code=? LIMIT 1",
-            (code,),
-        )
-        if cur.fetchone() is None:
-            cur.execute(
-                "INSERT INTO permissions (code, name) VALUES (?, ?)",
-                (code, name),
-            )
-            changed = True
     return changed
-
-
-def _migrate_legacy_permission_flags(cur) -> bool:
-    cur.execute(
-        "SELECT id FROM permissions WHERE code=? LIMIT 1",
-        (THREAT_HUNTING_PERMISSION_CODE,),
-    )
-    row = cur.fetchone()
-    if not row:
-        return False
-    permission_id = row[0]
-    cur.execute(
-        """
-        INSERT OR IGNORE INTO user_permissions (user_id, permission_id)
-        SELECT id, ?
-        FROM users
-        WHERE COALESCE(can_access_threat_hunting, 0) = 1
-        """,
-        (permission_id,),
-    )
-    return cur.rowcount > 0
 
 
 def ensure_user_schema() -> None:
@@ -138,8 +101,6 @@ def ensure_user_schema() -> None:
         if _ensure_user_columns(cur):
             changed = True
         if _ensure_permission_tables(cur):
-            changed = True
-        if _migrate_legacy_permission_flags(cur):
             changed = True
         if changed:
             con.commit()
@@ -222,12 +183,6 @@ def set_user_permissions(user_id: int, permission_codes: Iterable[str]) -> None:
                 "INSERT INTO user_permissions (user_id, permission_id) VALUES (?, ?)",
                 [(user_id, perm_id) for perm_id in code_to_id.values()],
             )
-
-        has_threat_hunting = THREAT_HUNTING_PERMISSION_CODE in code_to_id
-        cur.execute(
-            "UPDATE users SET can_access_threat_hunting=? WHERE id=?",
-            (1 if has_threat_hunting else 0, user_id),
-        )
         con.commit()
     finally:
         con.close()
@@ -240,7 +195,7 @@ def has_permission(username: str, permission_code: str) -> bool:
         cur = con.cursor()
         cur.execute(
             """
-            SELECT id, is_active, COALESCE(can_access_threat_hunting, 0) AS can_access_threat_hunting
+            SELECT id, is_active
             FROM users
             WHERE username=?
             LIMIT 1
@@ -261,14 +216,7 @@ def has_permission(username: str, permission_code: str) -> bool:
             """,
             (user_id, permission_code),
         )
-        if cur.fetchone() is not None:
-            return True
-        if (
-            permission_code == THREAT_HUNTING_PERMISSION_CODE
-            and int(row["can_access_threat_hunting"]) == 1
-        ):
-            return True
-        return False
+        return cur.fetchone() is not None
     finally:
         con.close()
 
@@ -332,7 +280,8 @@ def get_user(username: str):
             password_hash,
             is_active,
             COALESCE(is_admin,0) as is_admin,
-            COALESCE(can_access_threat_hunting,0) as can_access_threat_hunting
+            COALESCE(failed_attempts,0) as failed_attempts,
+            locked_until
         FROM users
         WHERE username=?
         LIMIT 1
@@ -350,6 +299,49 @@ def _update_password_hash(user_id: int, new_hash: str) -> None:
     cur.execute("UPDATE users SET password_hash=? WHERE id=?", (new_hash, user_id))
     con.commit()
     con.close()
+
+def _lock_remaining_seconds(locked_until: Optional[str]) -> int:
+    if not locked_until:
+        return 0
+    try:
+        locked_dt = datetime.fromisoformat(locked_until)
+        if locked_dt.tzinfo is None:
+            locked_dt = locked_dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return 0
+    remaining = (locked_dt - datetime.now(timezone.utc)).total_seconds()
+    return int(remaining) if remaining > 0 else 0
+
+
+def _register_failed_login(user_id: int, current_attempts: int) -> None:
+    attempts = current_attempts + 1
+    con = _connect()
+    cur = con.cursor()
+    if attempts >= MAX_LOGIN_ATTEMPTS:
+        locked_until = (datetime.now(timezone.utc) + LOCKOUT_DURATION).isoformat()
+        cur.execute(
+            "UPDATE users SET failed_attempts=0, locked_until=? WHERE id=?",
+            (locked_until, user_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE users SET failed_attempts=? WHERE id=?",
+            (attempts, user_id),
+        )
+    con.commit()
+    con.close()
+
+
+def _reset_login_attempts(user_id: int) -> None:
+    con = _connect()
+    cur = con.cursor()
+    cur.execute(
+        "UPDATE users SET failed_attempts=0, locked_until=NULL WHERE id=?",
+        (user_id,),
+    )
+    con.commit()
+    con.close()
+
 
 def verify_credentials(username: str, password: str):
     row = get_user(username)
@@ -441,22 +433,30 @@ def is_admin(username: str) -> bool:
     return bool(row and int(row["is_admin"]) == 1 and int(row["is_active"]) == 1)
 
 
-def has_threat_hunting_access(username: str) -> bool:
-    return has_permission(username, THREAT_HUNTING_PERMISSION_CODE)
-
-
-def has_reports_access(username: str) -> bool:
-    return has_permission(username, REPORTS_PERMISSION_CODE)
-
 @auth_router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
 @auth_router.post("/login")
 def login_submit(request: Request, username: str = Form(...), password: str = Form(...), remember_me: bool = Form(False)):
+    existing = get_user(username)
+    if existing:
+        remaining = _lock_remaining_seconds(existing["locked_until"])
+        if remaining > 0:
+            minutes = max(1, (remaining + 59) // 60)
+            return templates.TemplateResponse(
+                "login.html",
+                {"request": request, "error": f"Conta bloqueada temporariamente por excesso de tentativas. Tente novamente em {minutes} minuto(s)."},
+                status_code=429,
+            )
+
     row = verify_credentials(username, password)
     if not row:
+        if existing:
+            _register_failed_login(existing["id"], int(existing["failed_attempts"] or 0))
         return templates.TemplateResponse("login.html", {"request": request, "error": "Usuário ou senha inválidos"}, status_code=401)
+
+    _reset_login_attempts(row["id"])
     request.session["user"] = row["username"]
     request.session["login_at"] = datetime.now(timezone.utc).isoformat()
     return RedirectResponse(url="/", status_code=302)
@@ -476,18 +476,13 @@ def api_admin_create_user(
     username: str = Form(...),
     password: str = Form(...),
     is_admin: str = Form("false"),
-    can_access_threat_hunting: str = Form("false"),
     permissions: List[str] = Form([]),
     user: str = Depends(verify_user_required_api),
 ):
     if not is_admin_user(user):
         raise HTTPException(status_code=403, detail="Admin required")
     admin_val = 1 if is_admin.lower() in ("1", "true", "on", "yes") else 0
-    permission_codes = list(permissions)
-    if can_access_threat_hunting.lower() in ("1", "true", "on", "yes"):
-        permission_codes.append(THREAT_HUNTING_PERMISSION_CODE)
-    permission_codes = sorted(set(permission_codes))
-    th_val = 1 if THREAT_HUNTING_PERMISSION_CODE in permission_codes else 0
+    permission_codes = sorted(set(permissions))
     con = _connect()
     cur = con.cursor()
     new_user_id: Optional[int] = None
@@ -497,10 +492,10 @@ def api_admin_create_user(
             con.commit()
         cur.execute(
             """
-            INSERT INTO users (username, password_hash, is_active, is_admin, can_access_threat_hunting)
-            VALUES (?,?,1,?,?)
+            INSERT INTO users (username, password_hash, is_active, is_admin)
+            VALUES (?,?,1,?)
             """,
-            (username, hash_password(password), admin_val, th_val),
+            (username, hash_password(password), admin_val),
         )
         con.commit()
         new_user_id = int(cur.lastrowid)
